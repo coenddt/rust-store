@@ -1,0 +1,390 @@
+[
+  {
+    "kind": "plan",
+    "name": "federation-single-source-default",
+    "parity_with_query": true,
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title}",
+    "params": {},
+    "context": null
+  },
+  {
+    "kind": "plan",
+    "name": "federation-same-source-relation",
+    "parity_with_query": true,
+    "schemas": [
+      {
+        "name": "Order", "collection": "orders", "timestamps": false, "datasource": "mysql_main",
+        "fields": { "code": { "type": "string" }, "amount": { "type": "float" } },
+        "relations": {
+          "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
+        }
+      },
+      {
+        "name": "OrderItem", "collection": "order_items", "timestamps": false, "datasource": "mysql_main",
+        "fields": { "orderId": { "type": "string" }, "sku": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Order($condition:@c0){code, items{sku}}",
+    "params": { "c0": {} },
+    "context": null
+  },
+  {
+    "kind": "plan",
+    "name": "federation-cross-source-many",
+    "parity_with_query": true,
+    "schemas": [
+      {
+        "name": "User", "collection": "users", "timestamps": false, "datasource": "mongodb_main",
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "userId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false, "datasource": "mysql_main",
+        "fields": { "userId": { "type": "string" }, "code": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "User($condition:@c0){name, orders{code}}",
+    "params": { "c0": {} },
+    "context": null
+  },
+  {
+    "kind": "plan",
+    "name": "federation-cross-source-one-default-child",
+    "parity_with_query": true,
+    "schemas": [
+      {
+        "name": "Comment", "collection": "comments", "timestamps": false, "datasource": "mysql_main",
+        "fields": { "postId": { "type": "string" }, "body": { "type": "string" } },
+        "relations": {
+          "post": { "model": "Post", "type": "one", "localField": "postId", "foreignField": "_id" }
+        }
+      },
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Comment($condition:@c0){body, post{title}}",
+    "params": { "c0": {} },
+    "context": null
+  },
+  {
+    "kind": "plan",
+    "name": "federation-cross-source-one-pg",
+    "parity_with_query": true,
+    "schemas": [
+      {
+        "name": "User", "collection": "users", "timestamps": false, "datasource": "mongodb_main",
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "profile": { "model": "Profile", "type": "one", "localField": "_id", "foreignField": "userId" }
+        }
+      },
+      {
+        "name": "Profile", "collection": "profiles", "timestamps": false, "datasource": "pg_main",
+        "fields": { "userId": { "type": "string" }, "bio": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "User($condition:@c0){name, profile{bio}}",
+    "params": { "c0": {} },
+    "context": null
+  },
+  {
+    "kind": "plan",
+    "name": "federation-nested-cross-source",
+    "parity_with_query": true,
+    "schemas": [
+      {
+        "name": "Team", "collection": "teams", "timestamps": false, "datasource": "mongodb_main",
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "teamId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false, "datasource": "mysql_main",
+        "fields": { "teamId": { "type": "string" }, "code": { "type": "string" } },
+        "relations": {
+          "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
+        }
+      },
+      {
+        "name": "OrderItem", "collection": "order_items", "timestamps": false, "datasource": "pg_main",
+        "fields": { "orderId": { "type": "string" }, "sku": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Team($condition:@c0){name, orders{code, items{sku}}}",
+    "params": { "c0": {} },
+    "context": null
+  },
+  {
+    "kind": "plan",
+    "name": "federation-child-paging-degraded",
+    "parity_with_query": true,
+    "schemas": [
+      {
+        "name": "User", "collection": "users", "timestamps": false, "datasource": "mongodb_main",
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "userId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false, "datasource": "mysql_main",
+        "fields": { "userId": { "type": "string" }, "code": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "User($condition:@c0){name, orders($limit:@l0)}",
+    "params": { "c0": {}, "l0": 3 },
+    "context": null
+  },
+  {
+    "kind": "plan",
+    "name": "federation-child-sort-degraded",
+    "parity_with_query": true,
+    "schemas": [
+      {
+        "name": "User", "collection": "users", "timestamps": false, "datasource": "mongodb_main",
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "userId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false, "datasource": "mysql_main",
+        "fields": { "userId": { "type": "string" }, "code": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "User($condition:@c0){name, orders($sort:@s1)}",
+    "params": { "c0": {}, "s1": { "code": 1 } },
+    "context": null
+  },
+  {
+    "kind": "plan",
+    "name": "federation-cross-source-sort-degraded",
+    "parity_with_query": true,
+    "schemas": [
+      {
+        "name": "User", "collection": "users", "timestamps": false, "datasource": "mongodb_main",
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "userId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false, "datasource": "mysql_main",
+        "fields": { "userId": { "type": "string" }, "code": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "User($condition:@c0,$sort:@s0){name, orders{code}}",
+    "params": { "c0": {}, "s0": { "orders.code": -1 } },
+    "context": null
+  },
+  {
+    "kind": "plan",
+    "name": "federation-invalid-cardinality",
+    "expect_error": true,
+    "schemas": [
+      {
+        "name": "Ticket", "collection": "tickets", "timestamps": false, "datasource": "mongodb_main",
+        "fields": { "ownerId": { "type": "string" } },
+        "relations": {
+          "owner": { "model": "Order", "type": "belongsTo", "localField": "ownerId", "foreignField": "userId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false, "datasource": "mysql_main",
+        "fields": { "userId": { "type": "string" }, "code": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Ticket{owner{code}}",
+    "params": {},
+    "context": null
+  },
+  {
+    "kind": "plan",
+    "name": "federation-pipeline-cross-source",
+    "expect_error": true,
+    "schemas": [
+      {
+        "name": "User", "collection": "users", "timestamps": false, "datasource": "mongodb_main",
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "userId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false, "datasource": "mysql_main",
+        "fields": { "userId": { "type": "string" }, "code": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "User($pipeline:@p0){name, orders{code}}",
+    "params": { "p0": [{ "$match": {} }] },
+    "context": null
+  },
+  {
+    "kind": "plan",
+    "name": "federation-pipeline-single-source",
+    "parity_with_query": true,
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post($pipeline:@p0){title}",
+    "params": { "p0": [{ "$match": { "title": "x" } }] },
+    "context": null
+  },
+  {
+    "kind": "plan",
+    "name": "federation-permission-denied",
+    "expect_error": true,
+    "schemas": [
+      {
+        "name": "Secret", "collection": "secrets", "timestamps": false, "read": ["admin"],
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Secret{title}",
+    "params": {},
+    "context": { "userId": "u1", "roles": ["user"] }
+  },
+  {
+    "kind": "merge",
+    "name": "merge-many-hash-join",
+    "plan": {
+      "v": 1, "kind": "federated", "root": "User",
+      "sources": [
+        { "key": "0", "source": "mongodb_main", "model": "User" },
+        { "key": "1", "source": "mysql_main", "model": "Order" }
+      ],
+      "join": {
+        "type": "hash",
+        "edges": [
+          { "parent": "User", "rel": "orders", "local": "_id", "foreign": "userId", "cardinality": "many", "path": [], "key": "1" }
+        ]
+      }
+    },
+    "results": [
+      [{ "_id": "u1", "name": "A" }, { "_id": "u2", "name": "B" }],
+      [
+        { "_id": "o1", "userId": "u1", "code": "c1" },
+        { "_id": "o2", "userId": "u1", "code": "c2" },
+        { "_id": "o3", "userId": "u2", "code": "c3" }
+      ]
+    ]
+  },
+  {
+    "kind": "merge",
+    "name": "merge-one-null-when-missing",
+    "plan": {
+      "v": 1, "kind": "federated", "root": "User",
+      "sources": [
+        { "key": "0", "source": "mongodb_main", "model": "User" },
+        { "key": "1", "source": "pg_main", "model": "Profile" }
+      ],
+      "join": {
+        "type": "hash",
+        "edges": [
+          { "parent": "User", "rel": "profile", "local": "_id", "foreign": "userId", "cardinality": "one", "path": [], "key": "1" }
+        ]
+      }
+    },
+    "results": [
+      [{ "_id": "u1" }, { "_id": "u2" }],
+      [{ "_id": "p1", "userId": "u1", "bio": "b1" }]
+    ]
+  },
+  {
+    "kind": "merge",
+    "name": "merge-nested-path",
+    "plan": {
+      "v": 1, "kind": "federated", "root": "Team",
+      "sources": [
+        { "key": "0", "source": "mongodb_main", "model": "Team" },
+        { "key": "2", "source": "mysql_main", "model": "Order" },
+        { "key": "1", "source": "pg_main", "model": "OrderItem" }
+      ],
+      "join": {
+        "type": "hash",
+        "edges": [
+          { "parent": "Team", "rel": "orders", "local": "_id", "foreign": "teamId", "cardinality": "many", "path": [], "key": "2" },
+          { "parent": "Order", "rel": "items", "local": "_id", "foreign": "orderId", "cardinality": "many", "path": ["orders"], "key": "1" }
+        ]
+      }
+    },
+    "results": [
+      [{ "_id": "t1" }],
+      [{ "_id": "o1", "teamId": "t1" }],
+      [
+        { "_id": "i1", "orderId": "o1", "sku": "s1" },
+        { "_id": "i2", "orderId": "o1", "sku": "s2" }
+      ]
+    ]
+  },
+  {
+    "kind": "merge",
+    "name": "merge-results-length-mismatch",
+    "expect_error": true,
+    "plan": {
+      "v": 1, "kind": "federated", "root": "User",
+      "sources": [
+        { "key": "0", "source": "mongodb_main", "model": "User" },
+        { "key": "1", "source": "mysql_main", "model": "Order" }
+      ],
+      "join": {
+        "type": "hash",
+        "edges": [
+          { "parent": "User", "rel": "orders", "local": "_id", "foreign": "userId", "cardinality": "many", "path": [], "key": "1" }
+        ]
+      }
+    },
+    "results": [
+      [{ "_id": "u1" }]
+    ]
+  },
+  {
+    "kind": "merge",
+    "name": "merge-invalid-edge-missing-cardinality",
+    "expect_error": true,
+    "plan": {
+      "v": 1, "kind": "federated", "root": "User",
+      "sources": [
+        { "key": "0", "source": "mongodb_main", "model": "User" },
+        { "key": "1", "source": "mysql_main", "model": "Order" }
+      ],
+      "join": {
+        "type": "hash",
+        "edges": [
+          { "parent": "User", "rel": "orders", "local": "_id", "foreign": "userId", "path": [], "key": "1" }
+        ]
+      }
+    },
+    "results": [
+      [{ "_id": "u1" }],
+      [{ "_id": "o1", "userId": "u1" }]
+    ]
+  }
+]

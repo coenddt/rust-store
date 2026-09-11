@@ -12,19 +12,27 @@ use super::Backend;
 ///
 /// 返回：
 /// ```json
-/// { "backend": "...", "stmts": [ SqlStmt.to_value() ], "warnings": [ ... ] }
+/// {
+///   "backend": "...",
+///   "stmts": [ SqlStmt.to_value() ],
+///   "warnings": [ ... ],
+///   "unsupported": [ { "code": "childLimit", "as": "...", "reason": "..." } ]
+/// }
 /// ```
+/// `unsupported` 非空表示存在无法安全下推的组合（如 `$lookup` 子 `$limit` 每父 top-N）；
+/// 此时 `stmts` 不含该段，Host 必须兜底（拒绝或降级重查），**绝不返回错误结果**。
 pub fn translate(
     backend: Backend,
     cmd: &Value,
     registry: &Registry,
 ) -> Result<Value, String> {
     let mut warnings: Vec<String> = Vec::new();
+    let mut unsupported: Vec<Value> = Vec::new();
     let kind = cmd.get("kind").and_then(|v| v.as_str()).unwrap_or("");
 
     let stmts = match kind {
         "find" | "findOne" | "countDocuments" | "aggregate" => {
-            translate_select(backend, cmd, registry, &mut warnings)?
+            translate_select(backend, cmd, registry, &mut warnings, &mut unsupported)?
         }
         "insertOne" | "insertMany" | "deleteMany" | "updateMany" | "findOneAndUpdate" => {
             translate_write(backend, cmd, registry, &mut warnings)?
@@ -36,5 +44,6 @@ pub fn translate(
         "backend": backend.as_str(),
         "stmts": stmts.iter().map(|s| s.to_value()).collect::<Vec<_>>(),
         "warnings": warnings,
+        "unsupported": unsupported,
     }))
 }

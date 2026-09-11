@@ -54,6 +54,8 @@ pub struct Schema {
     pub write: Option<Vec<String>>,
     /// 原始索引定义（`[{keys: {...}, options: {...}}]`），upsert 条件构建依赖 unique 索引
     pub indexes: Vec<Value>,
+    /// 绑定的数据源名（可选；缺省 = `default`，回落单源 Mongo）。见 [`crate::datasource`]
+    pub datasource: Option<String>,
 }
 
 impl Schema {
@@ -188,6 +190,11 @@ impl Registry {
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default(),
+            datasource: obj
+                .get("datasource")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from),
         };
 
         let is_archive = obj.get("_isArchive").map(is_truthy).unwrap_or(false);
@@ -202,7 +209,7 @@ impl Registry {
                 .cloned()
                 .unwrap_or_default();
             arch_fields.insert("deletedAt".to_string(), json!({ "type": "number" }));
-            let arch = json!({
+            let mut arch = json!({
                 "name": format!("{}Deleted", name),
                 "collection": format!("{}_deleted", collection),
                 "idPrefix": "",
@@ -210,6 +217,10 @@ impl Registry {
                 "fields": Value::Object(arch_fields),
                 "indexes": obj.get("indexes").cloned().unwrap_or_else(|| json!([])),
             });
+            // 归档表与原表同库
+            if let Some(ds) = obj.get("datasource") {
+                arch["datasource"] = ds.clone();
+            }
             self.register(&arch)?;
         }
 
@@ -237,6 +248,25 @@ impl Registry {
 
     pub fn list(&self) -> Vec<String> {
         self.order.clone()
+    }
+
+    /// schema 声明的数据源名（未声明 → `None`，语义为 `default`）
+    pub fn schema_datasource(&self, name: &str) -> Result<Option<String>, String> {
+        Ok(self.get(name)?.datasource.clone())
+    }
+
+    /// 解析 schema 绑定的数据源（`config` 为 `{ "sources": { name: kind } }`）
+    ///
+    /// 纯逻辑：不持有连接（连接句柄留在 Host）。`null` / 空配置下等价单源 Mongo，
+    /// 保证既有调用方与 parity fixture 零变更。见 [`crate::datasource`]。
+    pub fn resolve_datasource(
+        &self,
+        schema_name: &str,
+        config: &Value,
+    ) -> Result<crate::datasource::DataSource, String> {
+        let declared = self.get(schema_name)?.datasource.as_deref();
+        let cfg = crate::datasource::DataSourceConfig::from_json(config)?;
+        cfg.resolve(declared)
     }
 }
 

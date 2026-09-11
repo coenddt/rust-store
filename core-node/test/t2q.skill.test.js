@@ -82,5 +82,4 @@ function execute(db, reg, out) {
   if (byCode.D.items.length !== 0) throw new Error('D 无明细应为空数组');
   if (ordered[0].code !== 'C') throw new Error('按 amount 降序首条应为 C');
   console.log('\n✅ text-to-query 产出在 SQLite 端到端跑通：filter+sort+limit + $lookup(many) → 嵌套文档还原');
-  process.exit(0);
 })();

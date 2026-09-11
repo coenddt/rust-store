@@ -5,6 +5,11 @@ core-node/target/
 core-py/target/
 Cargo.lock.orig
 
+# 绑定产物（开发期本地构建；发布期由 CI 的 napi/maturin 产出，不入库）
+core-node/dist/
+core-py/dist/
+core-node/*.node
+
 # Python 缓存
 __pycache__/
 *.pyc

@@ -1,0 +1,53 @@
+{
+  "_doc": "Host 同构契约 fixture —— mutation 预生成 ID 池的数据树遍历（JS crud.js _newIdPool / Py crud/id.py _new_id_pool）",
+  "_semantics": "按 schema.relations 递归数据树；节点无有效 _id 且 schema 有 idPrefix 时入池；null 子节点跳过。断言池长度与各 id 前缀（id = idPrefix + 时间戳36进制 + 随机4位，非确定性部分不比较）",
+  "schemas": [
+    {
+      "name": "HC_Parent", "collection": "hc_parent", "idPrefix": "HP", "timestamps": false,
+      "fields": { "name": { "type": "string" } },
+      "relations": {
+        "children": { "model": "HC_Child", "type": "many", "localField": "_id", "foreignField": "parentId" }
+      }
+    },
+    {
+      "name": "HC_Child", "collection": "hc_child", "idPrefix": "HC", "timestamps": false,
+      "fields": { "n": { "type": "int" } },
+      "relations": {}
+    },
+    {
+      "name": "HC_NoPrefix", "collection": "hc_no_prefix", "timestamps": false,
+      "fields": { "a": { "type": "int" } },
+      "relations": {}
+    }
+  ],
+  "cases": [
+    {
+      "name": "walk-parent-and-children",
+      "model": "HC_Parent",
+      "data": { "name": "p", "children": [{ "n": 1 }, { "n": 2 }] },
+      "expectCount": 3,
+      "expectPrefixes": ["HP", "HC", "HC"]
+    },
+    {
+      "name": "skip-existing-ids",
+      "model": "HC_Parent",
+      "data": { "_id": "keep", "children": [{ "_id": "c1" }, { "n": 3 }] },
+      "expectCount": 1,
+      "expectPrefixes": ["HC"]
+    },
+    {
+      "name": "null-child-skipped",
+      "model": "HC_Parent",
+      "data": { "children": [null, { "n": 1 }] },
+      "expectCount": 2,
+      "expectPrefixes": ["HP", "HC"]
+    },
+    {
+      "name": "no-prefix-model-untouched",
+      "model": "HC_NoPrefix",
+      "data": { "a": 1 },
+      "expectCount": 0,
+      "expectPrefixes": []
+    }
+  ]
+}

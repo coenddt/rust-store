@@ -1,7 +1,7 @@
 //! Phase 3（fnRef 回调桥）parity 对拍测试
 //!
 //! 读 `fixtures/fnfns/cases.json`（输入）与 `fixtures/fnfns/expected.json`
-//! （JS 黄金基准，由 `node tools/gen-fnfns-fixtures.js` 生成），用 Rust core 按
+//! （JS 黄金基准**冻结快照**，原 JS 实现已退役、快照无源可再生），用 Rust core 按
 //! `kind` 分派跑同一批输入，逐条深比较：
 //!   - process_node : `computes::process_node`（同步 fn 计算列内联执行）
 //!   - async_fns    : `computes::run_async_fns`（批量异步 + 权限过滤）

@@ -1,0 +1,92 @@
+{
+  "_doc": "Host 同构契约 fixture —— 占位符替换（JS crud.js resolvePlaceholders / Py crud/exec.py resolve_placeholders）",
+  "_semantics": "{{phase1.ids}} 整值替换为两阶段查询第一步取回的 id 数组；{{step.<N>._id}} 替换为 mutation 第 N 步 _id；未命中保留原样",
+  "cases": [
+    {
+      "name": "step-scalar-and-nested",
+      "command": {
+        "kind": "findOneAndUpdate",
+        "collection": "ledger",
+        "filter": { "_id": "{{step.0._id}}" },
+        "update": { "$set": { "parentId": "{{step.1._id}}" } }
+      },
+      "steps": ["P0", "P1"],
+      "expected": {
+        "kind": "findOneAndUpdate",
+        "collection": "ledger",
+        "filter": { "_id": "P0" },
+        "update": { "$set": { "parentId": "P1" } }
+      }
+    },
+    {
+      "name": "phase1-ids-array",
+      "command": {
+        "kind": "find",
+        "collection": "ledger",
+        "filter": { "_id": { "$in": "{{phase1.ids}}" } }
+      },
+      "ids": ["i1", "i2"],
+      "expected": {
+        "kind": "find",
+        "collection": "ledger",
+        "filter": { "_id": { "$in": ["i1", "i2"] } }
+      }
+    },
+    {
+      "name": "phase1-ids-empty",
+      "command": {
+        "kind": "find",
+        "collection": "ledger",
+        "filter": { "_id": { "$in": "{{phase1.ids}}" } }
+      },
+      "ids": [],
+      "expected": {
+        "kind": "find",
+        "collection": "ledger",
+        "filter": { "_id": { "$in": [] } }
+      }
+    },
+    {
+      "name": "unresolved-step-kept",
+      "command": {
+        "kind": "find",
+        "collection": "ledger",
+        "filter": { "$or": [{ "a": "{{step.0._id}}" }, { "b": "{{step.7._id}}" }] }
+      },
+      "steps": ["A"],
+      "expected": {
+        "kind": "find",
+        "collection": "ledger",
+        "filter": { "$or": [{ "a": "A" }, { "b": "{{step.7._id}}" }] }
+      }
+    },
+    {
+      "name": "non-placeholder-untouched",
+      "command": {
+        "kind": "find",
+        "collection": "ledger",
+        "filter": { "name": "{{nope}}" }
+      },
+      "steps": ["A"],
+      "ids": ["x"],
+      "expected": {
+        "kind": "find",
+        "collection": "ledger",
+        "filter": { "name": "{{nope}}" }
+      }
+    },
+    {
+      "name": "phase1-untouched-when-null",
+      "command": {
+        "kind": "find",
+        "collection": "ledger",
+        "filter": { "x": "{{phase1.ids}}" }
+      },
+      "expected": {
+        "kind": "find",
+        "collection": "ledger",
+        "filter": { "x": "{{phase1.ids}}" }
+      }
+    }
+  ]
+}

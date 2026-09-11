@@ -2,7 +2,8 @@
 //!
 //! 读 `fixtures/pipeline/cases.json`（输入）与 `fixtures/expected/cases.json`（JS 黄金基准），
 //! 用 Rust core 跑同一批输入，逐条深比较 `tokens` / `ast` / `pipeline` / `projection`。
-//! 黄金基准由 `node tools/gen-fixtures.js` 从现有 JS 实现生成。
+//! 黄金基准为**冻结快照**（原单体 JS 参考实现已随重构退役，快照无源可再生）。
+//! 复算校验：`node tools/verify-fixtures.js`。
 
 use std::fs;
 use std::path::PathBuf;

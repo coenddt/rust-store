@@ -1,0 +1,39 @@
+{
+  "_doc": "Host 同构契约 fixture —— 回调桥（JS schema.js register→core.setFn / Py schema.py register→core.set_fn + asyncFn Host 映射）",
+  "_semantics": "schema.register 把 fn 回调交给 core（同步桥）、asyncFn 留在 Host 映射；桩函数按 fnRef 名注入。经 Host 公共 crud.query（mock 驱动）取回结果，两侧深比较",
+  "stubs": {
+    "hc_sum_ab": "sum(a, b)",
+    "hc_tag_skus": "join(items[].sku, '|')"
+  },
+  "schemas": [
+    {
+      "name": "HC_Post", "collection": "hc_posts", "timestamps": false,
+      "fields": { "title": { "type": "string" }, "a": { "type": "int" }, "b": { "type": "int" } },
+      "relations": {
+        "items": { "model": "HC_Item", "type": "many", "localField": "_id", "foreignField": "postId" }
+      },
+      "computes": {
+        "total": { "type": "int", "depends": ["a", "b"], "fn": true, "fnRef": "hc_sum_ab" },
+        "skuTag": { "type": "string", "depends": ["items{sku}"], "asyncFn": true, "fnRef": "hc_tag_skus" }
+      }
+    },
+    {
+      "name": "HC_Item", "collection": "hc_items", "timestamps": false,
+      "fields": { "postId": { "type": "string" }, "sku": { "type": "string" } },
+      "relations": {}
+    }
+  ],
+  "cases": [
+    {
+      "name": "fn-and-asyncfn-bridge",
+      "gql": "HC_Post{title, total, skuTag}",
+      "docs": [
+        {
+          "_id": "1", "title": "a", "a": 2, "b": 3,
+          "items": [{ "postId": "1", "sku": "s1" }, { "postId": "1", "sku": "s2" }]
+        }
+      ],
+      "expected": [{ "_id": "1", "title": "a", "total": 5, "skuTag": "s1|s2" }]
+    }
+  ]
+}

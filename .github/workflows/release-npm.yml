@@ -1,0 +1,92 @@
+name: release-npm
+
+# 发布 rust-store-node（core-node 的 napi-rs 绑定）到 npm。
+#
+# 触发：推 v* tag，或手动 dispatch。
+# 凭证：NPM_TOKEN secret（actions/setup-node 注入 NODE_AUTH_TOKEN）。
+#       任何 token 都不得写入仓库/文档，只能经 CI secrets 注入。
+#
+# PyPI（rust-store-py）见 release-pypi.yml，两文件互不重叠。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ── 构建：平台 × 架构 ────────────────────────────────────────────────
+  build-npm:
+    name: npm binding (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write # npm provenance（OIDC）
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    defaults:
+      run:
+        working-directory: core-node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+      - name: Build binding
+        run: npx napi build --platform --release --target ${{ matrix.target }}
+      - name: Upload prebuild
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.target }}
+          path: core-node/*.node
+
+  # ── 发布：平台子包 + 主包 ────────────────────────────────────────────
+  publish-npm:
+    name: npm publish
+    needs: build-npm
+    if: startsWith(github.ref, 'refs/tags/') # 手动 dispatch 只构建，不发布
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: core-node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          path: core-node/artifacts
+      - name: Stage platform binaries
+        run: npx napi artifacts
+      - name: Pack & inspect (must not contain target/ node_modules/ logs)
+        run: npm pack --dry-run
+      - name: Publish (platform sub-packages + main)
+        run: npx napi prepublish -t npm --skip-gh-release && npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

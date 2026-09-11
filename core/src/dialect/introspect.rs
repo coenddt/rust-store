@@ -27,7 +27,8 @@ pub fn schema_def_from_rows(rows: &Value) -> Result<Value, String> {
     let tables = rows.get("tables").and_then(|t| t.as_array()).cloned().unwrap_or_default();
     let columns = rows.get("columns").and_then(|c| c.as_array()).cloned().unwrap_or_default();
     let fks = rows.get("fks").and_then(|c| c.as_array()).cloned().unwrap_or_default();
-    let indexes = rows.get("indexes").and_then(|c| c.as_array()).cloned().unwrap_or_default();
+    // 索引仅作元数据（铁律 6：绝不写 DDL 回库），此解析结果暂不参与 schema 生成
+    let _indexes = rows.get("indexes").and_then(|c| c.as_array()).cloned().unwrap_or_default();
 
     let mut defs: Vec<Value> = Vec::new();
     for t in &tables {

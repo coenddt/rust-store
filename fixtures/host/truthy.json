@@ -1,0 +1,18 @@
+{
+  "_doc": "Host 同构契约 fixture —— id 供给真相判定（JS crud.js _truthy / Py crud/id.py _truthy）",
+  "_semantics": "对齐 core is_truthy：null/false/0/空串为假；字符串不 trim（'0' / '  ' 为真）；数组/对象为真",
+  "cases": [
+    { "name": "null", "value": null, "expected": false },
+    { "name": "false", "value": false, "expected": false },
+    { "name": "zero-int", "value": 0, "expected": false },
+    { "name": "zero-float", "value": 0.0, "expected": false },
+    { "name": "empty-string", "value": "", "expected": false },
+    { "name": "string-zero", "value": "0", "expected": true },
+    { "name": "spaces", "value": "  ", "expected": true },
+    { "name": "one", "value": 1, "expected": true },
+    { "name": "negative", "value": -1, "expected": true },
+    { "name": "empty-array", "value": [], "expected": true },
+    { "name": "empty-object", "value": {}, "expected": true },
+    { "name": "string", "value": "x", "expected": true }
+  ]
+}

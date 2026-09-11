@@ -3,8 +3,8 @@
 /**
  * core-node 绑定 parity 对拍
  *
- * 回放 4 套 fixtures（pipeline / commands / computes / fnfns）与其 JS 黄金基准，
- * 逐条深比较 Rust 绑定层的输出——语义与 core/tests/parity*.rs 完全一致：
+ * 回放 5 套 fixtures（pipeline / commands / computes / fnfns / federation）
+ * 与其黄金基准，逐条深比较 Rust 绑定层的输出——语义与 core/tests/parity*.rs 完全一致：
  *   - pipeline   : `buildPipeline` 的 tokens / ast / pipeline / projection
  *   - commands   : `planQuery` / `planQueryWithCount` / `resolvePage` /
  *                  `restoreSortOrder` / `planInsert` / `planExists` / `planCount` /
@@ -417,6 +417,86 @@ test('core-node parity: fnfns', () => {
   assert.equal(failures.length, 0, `fnfns 对拍失败 ${failures.length} 项:\n${failures.join('\n')}`);
 });
 
+// ─── federation（跨库联邦） ─────────────────────────────────
+
+/** 把联邦计划投影成「结构性摘要」（对齐 Rust 侧 project_plan） */
+function projectPlan(plan) {
+  const sources = (plan.sources || []).map((s) => ({
+    key: s.key ?? null,
+    source: s.source ?? null,
+    model: s.model ?? null,
+    mode: s.mode ?? null,
+  }));
+  const edges = (plan.join && plan.join.edges) || [];
+  const degraded = (plan.degraded || []).map((d) => d.code).filter((c) => c !== undefined);
+  return {
+    v: plan.v ?? null,
+    kind: plan.kind ?? null,
+    root: plan.root ?? null,
+    sources,
+    edges,
+    degraded,
+    hasPostprocess: plan.postprocess != null,
+  };
+}
+
+function runFederationPlan(reg, fx) {
+  const plan = reg.planFederated(fx.gql || '', fx.params || {}, fx.context ?? null);
+
+  // 契约：postprocess 必须与单库 planQuery 同形状
+  if (fx.parity_with_query) {
+    const single = reg.planQuery(fx.gql || '', fx.params || {}, fx.context ?? null);
+    const want = single.postprocess ?? null;
+    const got = plan.postprocess ?? null;
+    if (!isDeepStrictEqual(want, got)) {
+      throw new Error(
+        `postprocess 与单库 planQuery 不一致\n    want: ${fmt(want)}\n    got : ${fmt(got)}`,
+      );
+    }
+  }
+
+  return projectPlan(plan);
+}
+
+test('core-node parity: federation', () => {
+  const cases = load(path.join(FIXTURES, 'federation', 'cases.json'));
+  const goldens = load(path.join(FIXTURES, 'federation', 'expected.json'));
+  assert.equal(cases.length, goldens.length, '输入与黄金基准用例数不一致');
+
+  const failures = [];
+
+  cases.forEach((fx, i) => {
+    const g = goldens[i];
+    assert.equal(fx.name, g.name, '用例顺序不一致');
+
+    let actual = null;
+    let err = null;
+    try {
+      const reg = makeRegistry(fx);
+      actual =
+        fx.kind === 'plan'
+          ? runFederationPlan(reg, fx)
+          : reg.mergeFederated(fx.plan ?? null, fx.results || []);
+    } catch (e) {
+      err = e;
+    }
+
+    if (fx.expect_error) {
+      if (!err) failures.push(`[${fx.name}] 期望报错，但绑定未报错: ${fmt(actual)}`);
+      return;
+    }
+    if (err) {
+      failures.push(`[${fx.name}] 绑定报错: ${err.message}`);
+      return;
+    }
+
+    const want = g.error === true ? { error: true } : has(g, 'result') ? g.result : null;
+    expectDeepEqual(failures, `${fx.name}`, actual, want);
+  });
+
+  assert.equal(failures.length, 0, `federation 对拍失败 ${failures.length} 项:\n${failures.join('\n')}`);
+});
+
 // ─── 同步回调桥的缺失实现 → JS 异常 ────────────────────────
 
 test('core-node: 未注册的 fn 回调报错', () => {
@@ -432,5 +512,19 @@ test('core-node: 未注册的 fn 回调报错', () => {
   assert.throws(
     () => reg.processNode('Post{total}', { _id: '1', a: 1 }, null),
     /missing_fn/,
+  );
+});
+
+// ─── 错误路径：非法 GQL / 未注册 model → 抛出异常（不得返回 {code} 对象） ─
+
+test('core-node: 非法 GQL / 未注册 model 以异常抛出', () => {
+  const reg = new Registry();
+  assert.throws(
+    () => reg.planQuery('Ghost{_id}', {}, null),
+    (e) => e instanceof Error && /未注册/.test(e.message),
+  );
+  assert.throws(
+    () => reg.buildPipeline('@@@', {}, null),
+    (e) => e instanceof Error && /位置 0/.test(e.message),
   );
 });

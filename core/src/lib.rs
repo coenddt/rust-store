@@ -10,7 +10,9 @@
 pub mod bson;
 pub mod command;
 pub mod computes;
+pub mod datasource;
 pub mod dialect;
+pub mod federation;
 pub mod permission;
 pub mod pipeline;
 pub mod schema;

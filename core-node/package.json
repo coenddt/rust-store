@@ -1,12 +1,65 @@
 {
-  "name": "rust-store-core-node",
+  "name": "rust-store-node",
   "version": "0.1.0",
-  "private": true,
-  "description": "rust-store Rust core Node binding + dialect smoke test harness",
-  "scripts": {
-    "test": "node --test test/"
+  "description": "rust-store 的 Node 绑定（napi-rs）：把 core 的 Command 契约暴露给 JS Host",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
   },
+  "napi": {
+    "name": "rust-store-node",
+    "triples": {
+      "defaults": false,
+      "additional": [
+        "x86_64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "artifacts": "napi artifacts",
+    "prepublishOnly": "napi prepublish -t npm --skip-gh-release",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "keywords": [
+    "rust-store",
+    "napi-rs",
+    "binding",
+    "gql",
+    "data-layer"
+  ],
+  "author": "leo <coen_ddt@qq.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coenddt/rust-store.git"
+  },
+  "bugs": {
+    "url": "https://github.com/coenddt/rust-store/issues"
+  },
+  "homepage": "https://github.com/coenddt/rust-store#readme",
   "devDependencies": {
+    "@napi-rs/cli": "^2.18.4",
     "sql.js": "^1.8.0"
+  },
+  "optionalDependencies": {
+    "rust-store-node-win32-x64-msvc": "0.1.0",
+    "rust-store-node-linux-x64-gnu": "0.1.0",
+    "rust-store-node-linux-arm64-gnu": "0.1.0",
+    "rust-store-node-darwin-x64": "0.1.0",
+    "rust-store-node-darwin-arm64": "0.1.0"
   }
 }

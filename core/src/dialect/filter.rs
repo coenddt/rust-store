@@ -99,8 +99,6 @@ fn cond_clause(
     column: &dyn Fn(&str) -> Option<String>,
     param_seq: &mut usize,
 ) -> WhereClause {
-    let ph = |seq: &mut usize| backend.placeholder(*seq);
-
     // 运算符对象
     if let Some(op) = cond.as_object() {
         let mut parts: Vec<WhereClause> = Vec::new();

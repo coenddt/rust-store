@@ -1,0 +1,41 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "rust-store-py"
+version = "0.1.0"
+description = "rust-store 的 Python 绑定（PyO3）：把 core 的 Command 契约暴露给 Python Host"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["rust-store", "pyo3", "binding", "gql", "data-layer"]
+authors = [
+    { name = "leo", email = "coen_ddt@qq.com" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/coenddt/rust-store"
+Repository = "https://github.com/coenddt/rust-store"
+Issues = "https://github.com/coenddt/rust-store/issues"
+
+[tool.maturin]
+# Python 模块名必须与 `#[pymodule] fn rust_store_py` 一致，否则 import 失败
+module-name = "rust_store_py"
+bindings = "pyo3"
+# PyO3 未开启 abi3：wheel 必须逐 Python 版本构建（见发布执行文档第八节）

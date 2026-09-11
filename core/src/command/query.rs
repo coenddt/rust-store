@@ -5,7 +5,9 @@ use serde_json::{json, Map, Value};
 use crate::bson::id_key;
 use crate::computes::{merge_depends_into_ast, InjectInfo};
 use crate::permission::{can_read_schema, merge_owner_condition, Context};
-use crate::pipeline::{build_pipeline, build_projection, is_nullish, param, parse_gql, Ast};
+use crate::pipeline::{
+    build_pipeline, build_projection, flatten_object_fields, is_nullish, param, parse_gql, Ast,
+};
 use crate::schema::Registry;
 use crate::types::is_truthy;
 
@@ -143,7 +145,21 @@ pub fn plan_query_mut(
     registry: &Registry,
     ctx: Option<&Context>,
 ) -> Result<QueryPlan, String> {
-    let mut ast = parse_gql(gql)?;
+    let ast = parse_gql(gql)?;
+    plan_query_ast_mut(ast, params, registry, ctx)
+}
+
+/// 由**已解析的 AST** 规划读路径（[`plan_query_mut`] 与联邦计划共用同一套语义）
+///
+/// 含：schema 读权限校验 → owner 条件注入 → asyncFn 依赖注入 → pipeline 构建 → 形态选择。
+/// 联邦计划（[`crate::federation`]）会先把跨源关系从 fetch AST 中剥离后再调用
+/// [`build_plan`]，因此这里把「取命令」与「取后处理」的 AST 分离开。
+pub fn plan_query_ast_mut(
+    mut ast: Ast,
+    params: &mut Map<String, Value>,
+    registry: &Registry,
+    ctx: Option<&Context>,
+) -> Result<QueryPlan, String> {
     let schema = registry.get(&ast.model)?;
 
     if ctx.is_some() && !can_read_schema(schema, ctx) {
@@ -177,17 +193,47 @@ pub fn plan_query_mut(
         merge_depends_into_ast(&mut ast.relations, schema)?
     };
 
-    let pipeline = build_pipeline(&mut ast, params, registry, ctx)?;
+    // `postprocess.ast` 取「展平后、含全部关系」的快照（build_pipeline 会原地展平 fetch ast）
+    let mut post_ast = ast.clone();
+    if !has_pipeline {
+        flatten_object_fields(&mut post_ast, schema);
+    }
+
+    build_plan(ast, &post_ast, &inject, params, registry, ctx)
+}
+
+/// 由 AST 构建 [`QueryPlan`]：pipeline 用 `fetch_ast`，后处理用 `post_ast`。
+///
+/// 单库路径下两者相同；联邦路径下 `fetch_ast` 已剥离跨源关系（该源下推不到），
+/// `post_ast` 仍保留全部关系，供 [`crate::command::finalize_query`] 收尾时
+/// 递归下钻 / 权限裁剪 / 计算列（对齐联邦契约「postprocess 与单库同形状」）。
+pub fn build_plan(
+    mut fetch_ast: Ast,
+    post_ast: &Ast,
+    inject: &InjectInfo,
+    params: &Map<String, Value>,
+    registry: &Registry,
+    ctx: Option<&Context>,
+) -> Result<QueryPlan, String> {
+    let schema = registry.get(&fetch_ast.model)?;
+
+    let pipeline_ref = fetch_ast.params.get("pipeline").cloned();
+    let has_pipeline = pipeline_ref
+        .as_ref()
+        .map(|r| !is_nullish(param(params, Some(r))))
+        .unwrap_or(false);
+
+    let pipeline = build_pipeline(&mut fetch_ast, params, registry, ctx)?;
     let stages: Vec<Value> = pipeline.as_array().cloned().unwrap_or_default();
 
     let projection = if has_pipeline {
         None
     } else {
-        build_projection(&ast, schema, ctx)
+        build_projection(&fetch_ast, schema, ctx)
     };
 
     let collection = schema.collection.clone();
-    let post = || Some(postprocess_value(&ast, &inject));
+    let post = || Some(postprocess_value(post_ast, inject));
 
     // ── 纯 $match 无关联 → find 快路径 ──
     if !has_pipeline && stages.len() == 1 {

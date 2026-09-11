@@ -31,3 +31,11 @@ path = "tests/parity_write.rs"
 [[test]]
 name = "parity_fnfns"
 path = "tests/parity_fnfns.rs"
+
+[[test]]
+name = "parity_dialect"
+path = "tests/parity_dialect.rs"
+
+[[test]]
+name = "parity_federation"
+path = "tests/parity_federation.rs"

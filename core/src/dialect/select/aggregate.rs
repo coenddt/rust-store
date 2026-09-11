@@ -1,126 +1,32 @@
-//! SELECT 翻译：find / countDocuments / aggregate（含 $lookup → JOIN）
+//! `aggregate` 命令翻译：$match / $lookup(→LEFT JOIN) / $sort / $skip / $limit / $project
 
 use serde_json::{json, Value};
 
 use crate::schema::{Registry, Schema};
 
-use super::filter::{build_filter, WhereClause};
-use super::ir::{RowCol, RowShape, SqlStmt};
-use super::Backend;
+use crate::dialect::filter::{build_filter, WhereClause};
+use crate::dialect::ir::{RowCol, RowShape, SqlStmt};
+use crate::dialect::Backend;
 
-/// 翻译 find / countDocuments / aggregate 命令
-pub fn translate_select(
-    backend: Backend,
-    cmd: &Value,
-    registry: &Registry,
-    warnings: &mut Vec<String>,
-) -> Result<Vec<SqlStmt>, String> {
-    let kind = cmd.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-    let collection = cmd.get("collection").and_then(|v| v.as_str()).unwrap_or("");
-    let schema = registry.get_by_collection(collection)?;
+use super::lookup_join::{resolve_join, Join};
+use super::{col_fn, projection_fields, q};
 
-    match kind {
-        "countDocuments" => {
-            let filter = cmd.get("filter").cloned().unwrap_or(json!({}));
-            let mut seq = 0usize;
-            let wh = build_filter(&filter, backend, "t", &col_fn(schema), &mut seq);
-            let where_sql = if wh.text.is_empty() { String::new() } else { format!(" WHERE {}", wh.text) };
-            let text = format!("SELECT COUNT(*) FROM {} t{}", q(backend, &schema.collection), where_sql);
-            Ok(vec![SqlStmt::select(text, wh.params, RowShape::empty())])
-        }
-        "find" => {
-            let filter = cmd.get("filter").cloned().unwrap_or(json!({}));
-            let projection = cmd.get("projection").cloned();
-            translate_find(backend, schema, &filter, projection.as_ref())
-        }
-        "aggregate" => {
-            let pipeline = cmd.get("pipeline").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-            translate_aggregate(backend, schema, &pipeline, registry, warnings)
-        }
-        _ => Err(format!("translate: 未知命令 kind = {}", kind)),
-    }
-}
-
-/// 字段 → 列名：标量字段在本表；object/array 附属表字段跳过（标量字段原样）
-fn col_fn(schema: &Schema) -> impl Fn(&str) -> Option<String> {
-    let field_types: Vec<(String, String)> = schema
-        .fields
+/// `$lookup` 子 pipeline 是否含每父 top-N（子 `$limit` / `$skip`）——
+/// 需窗口函数 / LATERAL 才能下推，本里程碑未实现，须标记 `_unsupported`。
+fn has_child_limit(pipeline: &[Value]) -> bool {
+    pipeline
         .iter()
-        .map(|(k, v)| (k.clone(), v.field_type.clone()))
-        .collect();
-    move |field: &str| {
-        if field.contains('.') {
-            let (head, _) = field.split_once('.')?;
-            // 点号字段：若 head 是 object 字段则跳过（附属表）；否则按整串处理
-            let head_type = field_types.iter().find(|(k, _)| k == head).map(|(_, t)| t.clone());
-            if matches!(head_type.as_deref(), Some("object") | Some("array")) {
-                return None;
-            }
-            return Some(field.to_string());
-        }
-        let t = field_types.iter().find(|(k, _)| k == field).map(|(_, t)| t.clone());
-        match t {
-            Some(t) if t == "object" || t == "array" => None,
-            _ => Some(field.to_string()),
-        }
-    }
-}
-
-// find：根表标量 + 可选 projection
-fn translate_find(
-    backend: Backend,
-    schema: &Schema,
-    filter: &Value,
-    projection: Option<&Value>,
-) -> Result<Vec<SqlStmt>, String> {
-    let mut seq = 0usize;
-    let wh = build_filter(filter, backend, "t", &col_fn(schema), &mut seq);
-    let selected = projection_fields(schema, projection);
-    let mut cols_sql = Vec::new();
-    let mut columns = Vec::new();
-    for f in &selected {
-        if let Some(c) = col_fn(schema)(f) {
-            cols_sql.push(format!("t.{}", q(backend, &c)));
-            columns.push(RowCol::scalar(&c, &[f.as_str()]));
-        }
-    }
-    let select_list = if cols_sql.is_empty() { q(backend, "_id") } else { cols_sql.join(", ") };
-    let from = q(backend, &schema.collection);
-    let where_sql = if wh.text.is_empty() { String::new() } else { format!(" WHERE {}", wh.text) };
-    Ok(vec![SqlStmt::select(
-        format!("SELECT {} FROM {} t{}", select_list, from, where_sql),
-        wh.params,
-        RowShape { columns },
-    )])
-}
-
-/// 投影字段：null / 全 1 → 所有标量字段；否则取值为「非 0」的字段
-fn projection_fields(schema: &Schema, projection: Option<&Value>) -> Vec<String> {
-    match projection {
-        None | Some(Value::Null) => schema.fields.keys().cloned().collect(),
-        Some(p) => p.as_object()
-            .map(|o| {
-                let on: Vec<String> = o
-                    .iter()
-                    .filter(|(_, v)| {
-                        v.as_i64().map(|n| n != 0).unwrap_or(false)
-                            || v.as_bool() == Some(true)
-                    })
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                if on.is_empty() { schema.fields.keys().cloned().collect() } else { on }
-            })
-            .unwrap_or_else(|| schema.fields.keys().cloned().collect()),
-    }
+        .any(|s| s.get("$limit").is_some() || s.get("$skip").is_some())
 }
 
 /// aggregate：$match / $lookup(→LEFT JOIN) / $sort / $skip / $limit / $project
-fn translate_aggregate(
+pub(super) fn translate_aggregate(
     backend: Backend,
     schema: &Schema,
     pipeline: &[Value],
     registry: &Registry,
     warnings: &mut Vec<String>,
+    unsupported: &mut Vec<Value>,
 ) -> Result<Vec<SqlStmt>, String> {
     let mut param_seq = 0usize;
     let mut root_wheres: Vec<WhereClause> = Vec::new();
@@ -139,6 +45,26 @@ fn translate_aggregate(
         } else if let Some(lo) = stage.get("$lookup") {
             let alias = lo.get("as").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let from = lo.get("from").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            // 每父 top-N（子 $sort/$skip/$limit）需窗口函数 / LATERAL 才能下推。
+            // 若只发 LEFT JOIN 会静默返回\"未截断\"的子集 —— 违反「绝不静默产生错误结果」，
+            // 故不下推该 JOIN，改为标记 `_unsupported:"childLimit"`，由 Host 决定兜底策略。
+            if lo
+                .get("pipeline")
+                .and_then(|v| v.as_array())
+                .map(|p| has_child_limit(p))
+                .unwrap_or(false)
+            {
+                warnings.push(format!(
+                    "$lookup 关系 {} 含子 limit/skip（每父 top-N），需窗口函数或 LATERAL，暂未下推（_unsupported:childLimit）",
+                    alias
+                ));
+                unsupported.push(json!({
+                    "code": "childLimit",
+                    "as": alias,
+                    "reason": "$lookup 子 pipeline 的 $limit/$skip 需窗口函数或 LATERAL，暂未下推",
+                }));
+                continue;
+            }
             match resolve_join(schema, registry, &alias, &from) {
                 Some(j) => joins.push(j),
                 None => warnings.push(format!("$lookup 关系 {} 无法匹配 schema，跳过 JOIN", alias)),
@@ -244,7 +170,6 @@ fn translate_aggregate(
                 limit_params.push(json!(lim));
                 if root_offset > 0 {
                     limit_sql.push_str(&format!(" OFFSET ${}", param_seq + 1));
-                    param_seq += 1;
                     limit_params.push(json!(root_offset));
                 }
             }
@@ -284,44 +209,4 @@ fn translate_aggregate(
         limit_sql,
     );
     Ok(vec![SqlStmt::select(text, all_params, RowShape { columns })])
-
-    // 忽略 LATERAL/窗口降级（milestone）：每父子 limit 输出警告交由调用方
-}
-
-#[derive(Debug, Clone)]
-struct Join {
-    rel_name: String,
-    alias: String,
-    from: String,
-    local_col: String,
-    foreign_col: String,
-}
-
-/// 从 schema.relations 解析 $lookup JOIN 键
-fn resolve_join(schema: &Schema, registry: &Registry, alias: &str, from: &str) -> Option<Join> {
-    let make = |name: &str, d: &crate::schema::RelationDef| Join {
-        rel_name: name.to_string(),
-        alias: alias.to_string(),
-        from: from.to_string(),
-        local_col: d.local_field.clone(),
-        foreign_col: d.foreign_field.clone(),
-    };
-    // 优先按关系名匹配
-    if let Some((name, d)) = schema.relations.iter().find(|(n, _)| n.as_str() == alias) {
-        return Some(make(name, d));
-    }
-    // 按 model/collection 匹配
-    schema.relations.iter().find_map(|(name, d)| {
-        let ok = d.model == from
-            || registry.get(&d.model).ok().map(|s| s.collection == from).unwrap_or(false);
-        if ok {
-            Some(make(name, d))
-        } else {
-            None
-        }
-    })
-}
-
-fn q(backend: Backend, ident: &str) -> String {
-    backend.quote_ident(ident)
 }

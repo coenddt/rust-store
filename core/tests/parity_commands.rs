@@ -12,7 +12,8 @@
 //!   - count              : `plan_count`
 //!   - aggregate          : `plan_aggregate`
 //!
-//! 黄金基准由 `node tools/gen-command-fixtures.js` 从现有 JS 实现生成。
+//! 黄金基准为**冻结快照**（原单体 JS 参考实现已随重构退役，快照无源可再生）。
+//! 复算校验：`node tools/verify-fixtures.js`。
 
 use std::fs;
 use std::path::PathBuf;

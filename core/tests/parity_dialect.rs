@@ -2,8 +2,8 @@
 //!
 //! 核心 parity 性质：同一命令在 MySQL / PostgreSQL / SQLite 三端，参数化 SQL 在归一化后
 //! 语义一致（只差标识符引号与占位符风格）；`restore_rows`/`introspect`/`overlay` 为纯逻辑，
-//! 四侧可复现。此测试把输入以 JSON 内联，作断言基准；之后可由 JS `gen-dialect-fixtures.js`
-//! 生成外部 golden 与之一致对比。
+//! 四侧可复现。此测试把输入以 JSON 内联，作断言基准（无外部 golden；原 JS 参考实现已退役，
+//! 其黄金基准为冻结快照，复算校验见 `node tools/verify-fixtures.js`）。
 
 use serde_json::{json, Value};
 
@@ -128,6 +128,70 @@ fn dialect_aggregate_lookup_sql_parity() {
             { "$sort": { "code": 1 } }
         ] }),
     );
+}
+
+/// 可下推的 aggregate（无每父 top-N）→ `unsupported` 必须为空
+#[test]
+fn dialect_translate_supported_aggregate_has_no_unsupported() {
+    let registry = registry_with(&schemas());
+    let out = translate(
+        Backend::Sqlite,
+        &json!({ "kind": "aggregate", "collection": "orders", "pipeline": [
+            { "$lookup": { "from": "order_items", "localField": "_id",
+                           "foreignField": "orderId", "as": "items" } }
+        ] }),
+        &registry,
+    )
+    .expect("translate");
+    assert_eq!(
+        out.get("unsupported").and_then(|v| v.as_array()).map(|a| a.len()),
+        Some(0),
+        "无子 limit 的 $lookup 不应产生 unsupported: {}",
+        out
+    );
+}
+
+/// `$lookup` 子 `$limit`（每父 top-N，需 LATERAL/窗口函数）→ 标记 `childLimit`，
+/// 且**不得**下推该 JOIN（否则会静默返回未截断的子集）。
+#[test]
+fn dialect_translate_child_limit_marked_unsupported() {
+    let registry = registry_with(&schemas());
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let out = translate(
+            backend,
+            &json!({ "kind": "aggregate", "collection": "orders", "pipeline": [
+                { "$lookup": { "from": "order_items", "as": "items",
+                               "let": { "rel__id": "$_id" },
+                               "pipeline": [
+                                   { "$match": { "$expr": { "$eq": ["$orderId", "$$rel__id"] } } },
+                                   { "$sort": { "qty": -1 } },
+                                   { "$limit": 3 }
+                               ] } }
+            ] }),
+            &registry,
+        )
+        .expect("translate");
+
+        let unsupported = out.get("unsupported").and_then(|v| v.as_array()).expect("unsupported 数组");
+        assert_eq!(unsupported.len(), 1, "[{:?}] 应恰一条 unsupported: {}", backend, out);
+        assert_eq!(
+            unsupported[0].get("code").and_then(|v| v.as_str()),
+            Some("childLimit"),
+            "[{:?}] code 应为 childLimit: {}",
+            backend,
+            out
+        );
+        // 不得包含对该子表的 JOIN（否则会返回未截断的子集）
+        let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+        assert!(!text.contains("JOIN"), "[{:?}] 不应下推子 limit 的 JOIN: {}", backend, text);
+        // 警告必须同时给出（Host 可读）
+        assert!(
+            !out.get("warnings").and_then(|v| v.as_array()).unwrap_or(&vec![]).is_empty(),
+            "[{:?}] 应同时给 warning: {}",
+            backend,
+            out
+        );
+    }
 }
 
 #[test]
