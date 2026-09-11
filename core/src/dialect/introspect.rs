@@ -148,7 +148,7 @@ pub fn schema_def_from_rows(rows: &Value) -> Result<Value, String> {
     Ok(Value::Array(out))
 }
 
-/// SQL 列类型 → mongo-store 字段类型
+/// SQL 列类型 → rust-store 字段类型
 fn db_field_type(col: &str, db_type: &str) -> &'static str {
     // 附属表识别（object/array 展平）：`<field>_object` / `<field>_list` 后缀由 Host 命名
     if col.ends_with("_object") || db_type.contains("JSON") || db_type.contains("OBJECT") {

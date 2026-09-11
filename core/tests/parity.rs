@@ -9,9 +9,9 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use mongo_store_core::permission::context_from_value;
-use mongo_store_core::pipeline::{build_pipeline, build_projection, parse, token_to_value, tokenize};
-use mongo_store_core::schema::Registry;
+use rust_store_core::permission::context_from_value;
+use rust_store_core::pipeline::{build_pipeline, build_projection, parse, token_to_value, tokenize};
+use rust_store_core::schema::Registry;
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

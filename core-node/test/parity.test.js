@@ -22,7 +22,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
 
-const { Registry } = require('../dist/mongo-store-node.node');
+const { Registry } = require('../dist/rust-store-node.node');
 const { fns, asyncFns } = require('../../tools/test-fns.js');
 
 const FIXTURES = path.join(__dirname, '..', '..', 'fixtures');

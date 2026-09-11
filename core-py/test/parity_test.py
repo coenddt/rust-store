@@ -17,10 +17,10 @@ import json
 import pathlib
 import sys
 
-# 直接指向 cargo 产物目录（`mongo_store_py.pyd`），免装 wheel
+# 直接指向 cargo 产物目录（`rust_store_py.pyd`），免装 wheel
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "dist"))
 
-from mongo_store_py import Registry  # noqa: E402
+from rust_store_py import Registry  # noqa: E402
 
 FIXTURES = pathlib.Path(__file__).resolve().parent.parent.parent / "fixtures"
 

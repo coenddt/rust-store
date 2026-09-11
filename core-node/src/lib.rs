@@ -1,4 +1,4 @@
-//! mongo-store 的 Node 绑定（napi-rs）
+//! rust-store 的 Node 绑定（napi-rs）
 //!
 //! 把 Rust core 的 Command 契约暴露给 JS Host：JSON in / JSON out，不执行任何 IO。
 //!
@@ -22,7 +22,7 @@ use napi::{Error, Result};
 use napi_derive::napi;
 use serde_json::{json, Map, Value};
 
-use mongo_store_core::command::{
+use rust_store_core::command::{
     plan_aggregate as core_plan_aggregate, plan_archive_docs as core_plan_archive_docs,
     plan_count as core_plan_count, plan_exists as core_plan_exists,
     plan_insert as core_plan_insert, plan_insert_many as core_plan_insert_many,
@@ -33,23 +33,23 @@ use mongo_store_core::command::{
     resolve_page as core_resolve_page, restore_sort_order as core_restore_sort_order,
     sorts_by_relation as core_sorts_by_relation, strip_query as core_strip_query, Probe,
 };
-use mongo_store_core::computes::{
+use rust_store_core::computes::{
     apply_defaults_and_computes as core_apply_defaults, collect_rel_deps, merge_depends_into_ast,
     process_node, select_async_fns, strip_dep_injected as core_strip_dep_injected, FnRegistry,
     InjectInfo,
 };
-use mongo_store_core::dialect::{
+use rust_store_core::dialect::{
     introspect_to_schema_json as core_introspect_to_schema_json,
     merge_schema as core_merge_schema, restore_rows_json as core_restore_rows_json,
     translate as core_dialect_translate, Backend,
 };
-use mongo_store_core::permission::{
+use rust_store_core::permission::{
     can_read_schema, can_write_schema, context_from_value, filter_writable_data,
     get_readable_fields, get_readable_relations, get_writable_fields, merge_owner_condition,
     should_inject_owner_condition, Context,
 };
-use mongo_store_core::pipeline::{build_pipeline, build_projection, parse_gql, token_to_value, tokenize};
-use mongo_store_core::schema::Registry as CoreRegistry;
+use rust_store_core::pipeline::{build_pipeline, build_projection, parse_gql, token_to_value, tokenize};
+use rust_store_core::schema::Registry as CoreRegistry;
 
 fn err(reason: String) -> Error {
     Error::from_reason(reason)

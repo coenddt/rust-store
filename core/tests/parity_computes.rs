@@ -13,16 +13,16 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
-use mongo_store_core::computes::{
+use rust_store_core::computes::{
     collect_rel_deps, merge_depends_into_ast, process_node, strip_dep_injected,
 };
-use mongo_store_core::permission::{
+use rust_store_core::permission::{
     can_read_schema, can_write_schema, context_from_value, filter_writable_data,
     get_readable_fields, get_readable_relations, get_writable_fields, merge_owner_condition,
     should_inject_owner_condition,
 };
-use mongo_store_core::pipeline::{parse, tokenize};
-use mongo_store_core::schema::Registry;
+use rust_store_core::pipeline::{parse, tokenize};
+use rust_store_core::schema::Registry;
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

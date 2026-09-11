@@ -5,8 +5,8 @@
 
 use serde_json::{json, Value};
 
-use mongo_store_core::computes::FnRegistry;
-use mongo_store_core::permission::Context;
+use rust_store_core::computes::FnRegistry;
+use rust_store_core::permission::Context;
 
 /// JS `(doc[key] || 0)` 的对齐：数字取值，其余（缺失/null/false/字符串）→ 0
 fn num_or0(doc: &Value, key: &str) -> f64 {

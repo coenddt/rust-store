@@ -9,7 +9,7 @@
  */
 const initSqlJs = require('sql.js');
 const path = require('node:path');
-const { Registry } = require('../dist/mongo-store-node.node');
+const { Registry } = require('../dist/rust-store-node.node');
 
 const SQLITE_WASM = path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
 

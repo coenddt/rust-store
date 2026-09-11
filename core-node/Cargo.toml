@@ -1,17 +1,17 @@
 [package]
-name = "mongo-store-node"
+name = "rust-store-node"
 version = "0.1.0"
 edition = "2021"
-description = "mongo-store 的 Node 绑定（napi-rs）：把 core 的 Command 契约暴露给 JS Host"
+description = "rust-store 的 Node 绑定（napi-rs）：把 core 的 Command 契约暴露给 JS Host"
 publish = false
 
 [lib]
-name = "mongo_store_node"
+name = "rust_store_node"
 crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
-mongo-store-core = { path = "../core" }
+rust-store-core = { path = "../core" }
 serde_json = "1"
 # napi4 提供 `threadsafe_function` 模块，其中含 `JsValuesTupleIntoVec` 的
 # 单值 blanket impl，`FunctionRef` 依赖它才能以 `serde_json::Value` 作实参。

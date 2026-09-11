@@ -19,11 +19,11 @@ use serde_json::{json, Value};
 
 use common::TestFnRegistry;
 
-use mongo_store_core::command::{finalize_query, plan_insert};
-use mongo_store_core::computes::{merge_depends_into_ast, process_node, run_async_fns};
-use mongo_store_core::permission::context_from_value;
-use mongo_store_core::pipeline::parse_gql;
-use mongo_store_core::schema::Registry;
+use rust_store_core::command::{finalize_query, plan_insert};
+use rust_store_core::computes::{merge_depends_into_ast, process_node, run_async_fns};
+use rust_store_core::permission::context_from_value;
+use rust_store_core::pipeline::parse_gql;
+use rust_store_core::schema::Registry;
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -48,7 +48,7 @@ fn build_registry(fx: &Value) -> Result<Registry, String> {
     Ok(registry)
 }
 
-fn ctx_of(fx: &Value) -> Option<mongo_store_core::permission::Context> {
+fn ctx_of(fx: &Value) -> Option<rust_store_core::permission::Context> {
     match fx.get("context") {
         None | Some(Value::Null) => None,
         Some(v) => context_from_value(v),

@@ -7,10 +7,10 @@
 
 use serde_json::{json, Value};
 
-use mongo_store_core::dialect::{
+use rust_store_core::dialect::{
     introspect_to_schema_json, merge_schema, restore_rows_json, translate, Backend,
 };
-use mongo_store_core::schema::Registry;
+use rust_store_core::schema::Registry;
 
 fn registry_with(schemas: &[Value]) -> Registry {
     let mut r = Registry::new();

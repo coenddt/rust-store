@@ -1,4 +1,4 @@
-//! mongo-store 语言无关核心（Phase 1）
+//! rust-store 语言无关核心（Phase 1）
 //!
 //! 本 crate 只承载**纯逻辑**：GQL 解析、Aggregate Pipeline 构建、Projection 计算。
 //! 不持有 MongoDB 驱动，不做任何 IO —— 对应方案 A 中「core 产出 Command，Host 执行」的切分。

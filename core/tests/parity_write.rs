@@ -19,13 +19,13 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
-use mongo_store_core::command::{
+use rust_store_core::command::{
     plan_archive_docs, plan_insert_many, plan_mutation, plan_remove, plan_update,
     plan_update_many, plan_upsert, Probe,
 };
-use mongo_store_core::computes::apply_defaults_and_computes;
-use mongo_store_core::permission::context_from_value;
-use mongo_store_core::schema::Registry;
+use rust_store_core::computes::apply_defaults_and_computes;
+use rust_store_core::permission::context_from_value;
+use rust_store_core::schema::Registry;
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -54,7 +54,7 @@ fn model_of(fx: &Value) -> &str {
     fx.get("model").and_then(|v| v.as_str()).unwrap_or("")
 }
 
-fn ctx_of(fx: &Value) -> Option<mongo_store_core::permission::Context> {
+fn ctx_of(fx: &Value) -> Option<rust_store_core::permission::Context> {
     match fx.get("context") {
         None | Some(Value::Null) => None,
         Some(v) => context_from_value(v),
