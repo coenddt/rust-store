@@ -1,0 +1,888 @@
+[
+  {
+    "kind": "query",
+    "name": "q-find-fastpath",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": {
+          "title": { "type": "string" },
+          "status": { "type": "string", "default": "draft" },
+          "views": { "type": "int" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post($condition:@c0){title, status}",
+    "params": { "c0": { "status": "draft" } },
+    "context": null
+  },
+  {
+    "kind": "query",
+    "name": "q-find-no-projection",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post($condition:@c0){_id}",
+    "params": { "c0": {} },
+    "context": null
+  },
+  {
+    "kind": "query",
+    "name": "q-find-no-condition",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title}",
+    "params": {},
+    "context": null
+  },
+  {
+    "kind": "query",
+    "name": "q-aggregate-relation",
+    "schemas": [
+      {
+        "name": "Order", "collection": "orders", "timestamps": true,
+        "fields": { "code": { "type": "string" }, "amount": { "type": "float" } },
+        "relations": {
+          "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
+        }
+      },
+      {
+        "name": "OrderItem", "collection": "order_items", "timestamps": true,
+        "fields": { "orderId": { "type": "string" }, "sku": { "type": "string" }, "qty": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Order($condition:@c0){code, items{sku}}",
+    "params": { "c0": { "amount": { "$gt": 0 } } },
+    "context": null
+  },
+  {
+    "kind": "query",
+    "name": "q-two-phase-limit",
+    "schemas": [
+      {
+        "name": "Order", "collection": "orders", "timestamps": true,
+        "fields": { "code": { "type": "string" }, "amount": { "type": "float" } },
+        "relations": {
+          "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
+        }
+      },
+      {
+        "name": "OrderItem", "collection": "order_items", "timestamps": true,
+        "fields": { "orderId": { "type": "string" }, "sku": { "type": "string" }, "qty": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Order($condition:@c0,$sort:@s0,$skip:@sk,$limit:@l){code, items{sku}}",
+    "params": { "c0": {}, "s0": { "createdAt": -1 }, "sk": 20, "l": 10 },
+    "context": null,
+    "docs": [
+      { "_id": "o2", "code": "c2", "createdAt": 2, "items": [] },
+      { "_id": "o1", "code": "c1", "createdAt": 1, "items": [] }
+    ]
+  },
+  {
+    "kind": "query",
+    "name": "q-two-phase-sort-by-relation",
+    "schemas": [
+      {
+        "name": "Order", "collection": "orders", "timestamps": true,
+        "fields": { "code": { "type": "string" } },
+        "relations": {
+          "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
+        }
+      },
+      {
+        "name": "OrderItem", "collection": "order_items", "timestamps": true,
+        "fields": { "orderId": { "type": "string" }, "qty": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Order($sort:@s0,$limit:@l){code, items{qty}}",
+    "params": { "s0": { "items.qty": -1 }, "l": 5 },
+    "context": null
+  },
+  {
+    "kind": "query",
+    "name": "q-custom-pipeline",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" }, "status": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post($pipeline:@p,$condition:@c0,$sort:@s0,$limit:@l){title}",
+    "params": {
+      "p": [{ "$match": { "status": "x" } }],
+      "c0": { "status": "y" },
+      "s0": { "title": 1 },
+      "l": 3
+    },
+    "context": null
+  },
+  {
+    "kind": "query",
+    "name": "q-owner-inject",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "read": ["creator"],
+        "fields": { "title": { "type": "string" }, "createdBy": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post($condition:@c0){title}",
+    "params": { "c0": { "status": "draft" } },
+    "context": { "userId": "u1", "roles": ["user"] }
+  },
+  {
+    "kind": "query",
+    "name": "q-permission-denied",
+    "schemas": [
+      {
+        "name": "Secret", "collection": "secrets", "timestamps": false,
+        "read": ["admin"],
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Secret{title}",
+    "params": {},
+    "context": { "userId": "u1", "roles": ["user"] },
+    "expect_error": true
+  },
+  {
+    "kind": "query_with_count",
+    "name": "qwc-skip-limit",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" }, "status": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post($condition:@c0,$sort:@s0,$skip:@sk,$limit:@l){title}",
+    "params": { "c0": { "status": "draft" }, "s0": { "title": 1 }, "sk": 0, "l": 10 },
+    "context": null,
+    "total": 25
+  },
+  {
+    "kind": "query_with_count",
+    "name": "qwc-page-pagesize-cap",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post($condition:@c0,$skip:@sk,$limit:@l){title}",
+    "params": { "c0": {}, "sk": 0, "l": 10, "page": 1, "pageSize": 6000 },
+    "context": null,
+    "total": 10
+  },
+  {
+    "kind": "query_with_count",
+    "name": "qwc-two-phase",
+    "schemas": [
+      {
+        "name": "Order", "collection": "orders", "timestamps": true,
+        "fields": { "code": { "type": "string" } },
+        "relations": {
+          "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
+        }
+      },
+      {
+        "name": "OrderItem", "collection": "order_items", "timestamps": true,
+        "fields": { "orderId": { "type": "string" }, "sku": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Order($condition:@c0,$sort:@s0,$skip:@sk,$limit:@l){code, items{sku}}",
+    "params": { "c0": {}, "s0": { "createdAt": 1 }, "sk": 10, "l": 5 },
+    "context": null,
+    "total": 12,
+    "docs": [
+      { "_id": "o1", "code": "c1", "createdAt": 1, "items": [] },
+      { "_id": "o2", "code": "c2", "createdAt": 2, "items": [] }
+    ]
+  },
+  {
+    "kind": "resolve_page",
+    "name": "page-from-skip-limit",
+    "gql": "Post($skip:@sk,$limit:@l){title}",
+    "params": { "sk": 20, "l": 10 }
+  },
+  {
+    "kind": "resolve_page",
+    "name": "page-from-skip-limit-uneven",
+    "gql": "Post($skip:@sk,$limit:@l){title}",
+    "params": { "sk": 25, "l": 10 }
+  },
+  {
+    "kind": "resolve_page",
+    "name": "page-explicit-cap",
+    "gql": "Post($skip:@sk,$limit:@l){title}",
+    "params": { "sk": 0, "l": 10, "page": 3, "pageSize": 8000 }
+  },
+  {
+    "kind": "resolve_page",
+    "name": "page-negative-and-string",
+    "gql": "Post($skip:@sk,$limit:@l){title}",
+    "params": { "sk": "0", "l": "10", "page": -3, "pageSize": "25" }
+  },
+  {
+    "kind": "resolve_page",
+    "name": "page-defaults",
+    "gql": "Post{title}",
+    "params": {}
+  },
+  {
+    "kind": "restore_sort_order",
+    "name": "restore-order-basic",
+    "items": [
+      { "_id": "3", "v": "c" },
+      { "_id": "1", "v": "a" },
+      { "_id": "2", "v": "b" }
+    ],
+    "ids": ["1", "2", "3"],
+    "sort": { "createdAt": -1 }
+  },
+  {
+    "kind": "restore_sort_order",
+    "name": "restore-order-missing-id-last",
+    "items": [
+      { "_id": "9", "v": "x" },
+      { "_id": "2", "v": "b" },
+      { "_id": "1", "v": "a" }
+    ],
+    "ids": ["1", "2"],
+    "sort": { "createdAt": 1 }
+  },
+  {
+    "kind": "restore_sort_order",
+    "name": "restore-order-no-sort",
+    "items": [
+      { "_id": "2", "v": "b" },
+      { "_id": "1", "v": "a" }
+    ],
+    "ids": ["1", "2"],
+    "sort": null
+  },
+  {
+    "kind": "insert",
+    "name": "ins-basic",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" }, "views": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "data": { "title": "hello" },
+    "context": null,
+    "now": 1700000000000,
+    "newId": "PLOYW3V28AAAA"
+  },
+  {
+    "kind": "insert",
+    "name": "ins-existing-id-and-null-stripped",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" }, "views": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "data": { "_id": "P-CUSTOM", "title": "x", "views": null },
+    "context": null,
+    "now": 1700000000000
+  },
+  {
+    "kind": "insert",
+    "name": "ins-creator-and-write-filter",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "read": ["creator"],
+        "fields": {
+          "title": { "type": "string" },
+          "createdBy": { "type": "string" },
+          "secret": { "type": "string", "write": ["admin"] }
+        },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "data": { "title": "t", "secret": "s" },
+    "context": { "userId": "u1", "roles": ["user"] },
+    "now": 1700000000000,
+    "newId": "PLOYW3V28AAAA"
+  },
+  {
+    "kind": "insert",
+    "name": "ins-no-write-permission",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": false,
+        "write": ["admin"],
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "data": { "title": "t" },
+    "context": { "userId": "u1", "roles": ["user"] },
+    "now": 1700000000000,
+    "expect_error": true
+  },
+  {
+    "kind": "exists",
+    "name": "exists-basic",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "title": "a" },
+    "foundDoc": { "_id": "1" }
+  },
+  {
+    "kind": "count",
+    "name": "count-null-filter",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "filter": null
+  },
+  {
+    "kind": "count",
+    "name": "count-with-filter",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "filter": { "status": "draft" }
+  },
+  {
+    "kind": "aggregate",
+    "name": "agg-raw-pipeline",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "pipeline": [
+      { "$match": { "status": "draft" } },
+      { "$group": { "_id": "$title", "n": { "$sum": 1 } } }
+    ]
+  },
+  {
+    "kind": "insert_many",
+    "name": "im-basic",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" }, "views": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "docs": [{ "title": "a" }, { "title": "b" }],
+    "context": null,
+    "now": 1700000000000,
+    "newIds": ["PLOYW3V28AAAA", "PLOYW3V28AAAA"]
+  },
+  {
+    "kind": "insert_many",
+    "name": "im-explicit-id-and-null",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" }, "views": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "docs": [{ "_id": "P1", "title": "a", "views": null }, { "title": "b" }],
+    "context": null,
+    "now": 1700000000000,
+    "newIds": ["PLOYW3V28AAAA"]
+  },
+  {
+    "kind": "insert_many",
+    "name": "im-empty",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "docs": [],
+    "context": null,
+    "now": 1700000000000
+  },
+  {
+    "kind": "insert_many",
+    "name": "im-denied",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "write": ["admin"],
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "docs": [{ "title": "a" }],
+    "context": { "userId": "u1", "roles": ["user"] },
+    "now": 1700000000000,
+    "expect_error": true
+  },
+  {
+    "kind": "update",
+    "name": "upd-set",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" }, "views": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "_id": "p1" },
+    "data": { "views": 5 },
+    "options": null,
+    "context": null,
+    "now": 1700000000000,
+    "updatedDoc": { "_id": "p1", "title": "a", "views": 5, "createdAt": 1, "updatedAt": 1700000000000 }
+  },
+  {
+    "kind": "update",
+    "name": "upd-raw-operators",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" }, "views": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "_id": "p1" },
+    "data": { "$inc": { "views": 1 } },
+    "options": null,
+    "context": null,
+    "now": 1700000000000,
+    "updatedDoc": { "_id": "p1", "title": "a", "views": 6, "createdAt": 1, "updatedAt": 1700000000000 }
+  },
+  {
+    "kind": "update",
+    "name": "upd-empty-set",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "_id": "p1" },
+    "data": {},
+    "options": null,
+    "context": null,
+    "now": 1700000000000,
+    "expect_error": true
+  },
+  {
+    "kind": "update",
+    "name": "upd-creator-schema-pass",
+    "schemas": [
+      {
+        "name": "PostW", "collection": "posts_w", "idPrefix": "P", "timestamps": false,
+        "write": ["creator"],
+        "fields": { "title": { "type": "string" }, "createdBy": { "type": "string" }, "views": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "PostW",
+    "condition": { "_id": "p1" },
+    "data": { "title": "new" },
+    "options": null,
+    "context": { "userId": "u1", "roles": ["user"] },
+    "now": 1700000000000,
+    "updatedDoc": { "_id": "p1", "title": "new", "createdBy": "u1" }
+  },
+  {
+    "kind": "update",
+    "name": "upd-guest",
+    "schemas": [
+      {
+        "name": "PostW", "collection": "posts_w", "idPrefix": "P", "timestamps": false,
+        "write": ["creator"],
+        "fields": { "title": { "type": "string" }, "createdBy": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "PostW",
+    "condition": { "_id": "p1" },
+    "data": { "title": "new" },
+    "options": null,
+    "context": { "userId": "u2", "roles": ["guest"] },
+    "now": 1700000000000,
+    "expect_error": true
+  },
+  {
+    "kind": "update",
+    "name": "upd-with-options",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "code": { "type": "string" }, "views": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "code": "c1" },
+    "data": { "views": 2 },
+    "options": { "upsert": true },
+    "context": null,
+    "now": 1700000000000,
+    "updatedDoc": null
+  },
+  {
+    "kind": "update_many",
+    "name": "updm-basic",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" }, "views": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "title": "a" },
+    "data": { "views": 1 },
+    "context": null,
+    "now": 1700000000000,
+    "modifiedCount": 3
+  },
+  {
+    "kind": "update_many",
+    "name": "updm-guest",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "title": "a" },
+    "data": { "views": 1 },
+    "context": { "userId": "u1", "roles": ["guest"] },
+    "now": 1700000000000,
+    "expect_error": true
+  },
+  {
+    "kind": "remove",
+    "name": "rm-archive",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      },
+      {
+        "name": "PostDeleted", "collection": "posts_deleted", "idPrefix": "PD", "timestamps": false,
+        "fields": { "title": { "type": "string" }, "deletedAt": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "_id": "p1" },
+    "context": null,
+    "now": 1700000000000,
+    "docs": [{ "_id": "p1", "title": "a", "createdAt": 5, "updatedAt": 5 }],
+    "deletedCount": 1
+  },
+  {
+    "kind": "remove",
+    "name": "rm-no-match",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "_id": "pX" },
+    "context": null,
+    "now": 1700000000000,
+    "docs": [],
+    "deletedCount": 0
+  },
+  {
+    "kind": "remove",
+    "name": "rm-creator-schema-pass",
+    "schemas": [
+      {
+        "name": "PostW", "collection": "posts_w", "idPrefix": "P", "timestamps": false,
+        "write": ["creator"],
+        "fields": { "title": { "type": "string" }, "createdBy": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "PostW",
+    "condition": { "_id": "p1" },
+    "context": { "userId": "u1", "roles": ["user"] },
+    "now": 1700000000000,
+    "deletedCount": 1
+  },
+  {
+    "kind": "remove",
+    "name": "rm-guest",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "_id": "p1" },
+    "context": { "userId": "u1", "roles": ["guest"] },
+    "now": 1700000000000,
+    "expect_error": true
+  },
+  {
+    "kind": "upsert",
+    "name": "ups-new-id",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "code": { "type": "string" }, "title": { "type": "string" }, "views": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "code": "c1" },
+    "data": { "code": "c1", "views": 1 },
+    "options": null,
+    "context": null,
+    "now": 1700000000000,
+    "newIds": ["PLOYW3V28AAAA"],
+    "updatedDoc": { "_id": "PLOYW3V28AAAA", "code": "c1", "views": 1, "createdAt": 1700000000000, "updatedAt": 1700000000000 }
+  },
+  {
+    "kind": "upsert",
+    "name": "ups-return-before",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "code": { "type": "string" }, "views": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "code": "c1" },
+    "data": { "views": 1 },
+    "options": { "returnNew": false },
+    "context": null,
+    "now": 1700000000000,
+    "newIds": ["PLOYW3V28AAAA"],
+    "updatedDoc": { "_id": "p1", "code": "c1", "views": 0, "createdAt": 1, "updatedAt": 1 }
+  },
+  {
+    "kind": "upsert",
+    "name": "ups-explicit-id",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "code": { "type": "string" }, "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "code": "c1" },
+    "data": { "_id": "P-EXIST", "code": "c1", "title": "x" },
+    "options": null,
+    "context": null,
+    "now": 1700000000000,
+    "updatedDoc": { "_id": "P-EXIST", "code": "c1", "title": "x", "createdAt": 1, "updatedAt": 1700000000000 }
+  },
+  {
+    "kind": "upsert",
+    "name": "ups-denied",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "write": ["admin"],
+        "fields": { "code": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "code": "c1" },
+    "data": { "views": 1 },
+    "options": null,
+    "context": { "userId": "u1", "roles": ["user"] },
+    "now": 1700000000000,
+    "expect_error": true
+  },
+  {
+    "kind": "mutation",
+    "name": "mut-insert",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "title": { "type": "string" }, "views": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "data": { "title": "x" },
+    "context": null,
+    "now": 1700000000000,
+    "newIds": ["PLOYW3V28AAAA"],
+    "updatedDoc": null
+  },
+  {
+    "kind": "mutation",
+    "name": "mut-upsert-unique",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "code": { "type": "string" }, "title": { "type": "string" }, "views": { "type": "int" } },
+        "indexes": [{ "keys": { "code": 1 }, "options": { "unique": true } }],
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "data": { "code": "c1", "title": "x" },
+    "context": null,
+    "now": 1700000000000,
+    "newIds": ["PLOYW3V28AAAA"],
+    "updatedDoc": { "_id": "p1", "code": "c1", "title": "x", "createdAt": 1, "updatedAt": 1 }
+  },
+  {
+    "kind": "mutation",
+    "name": "mut-with-children",
+    "schemas": [
+      {
+        "name": "Order", "collection": "orders", "idPrefix": "O", "timestamps": true,
+        "fields": { "code": { "type": "string" } },
+        "relations": {
+          "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
+        }
+      },
+      {
+        "name": "OrderItem", "collection": "order_items", "idPrefix": "OI", "timestamps": true,
+        "fields": { "orderId": { "type": "string" }, "sku": { "type": "string" }, "qty": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "model": "Order",
+    "data": { "code": "c1", "items": [{ "sku": "s1" }, { "sku": "s2" }] },
+    "context": null,
+    "now": 1700000000000,
+    "newIds": ["OLOYW3V28AAAA", "OILOYW3V28AAAA", "OILOYW3V28AAAA"],
+    "updatedDoc": null
+  },
+  {
+    "kind": "mutation",
+    "name": "mut-one-child",
+    "schemas": [
+      {
+        "name": "Order2", "collection": "orders2", "idPrefix": "O", "timestamps": true,
+        "fields": { "code": { "type": "string" } },
+        "relations": {
+          "receipt": { "model": "Receipt", "type": "one", "localField": "_id", "foreignField": "orderId" }
+        }
+      },
+      {
+        "name": "Receipt", "collection": "receipts", "idPrefix": "R", "timestamps": true,
+        "fields": { "orderId": { "type": "string" }, "amount": { "type": "float" } },
+        "relations": {}
+      }
+    ],
+    "model": "Order2",
+    "data": { "code": "c1", "receipt": { "amount": 9 } },
+    "context": null,
+    "now": 1700000000000,
+    "newIds": ["OLOYW3V28AAAA", "RLOYW3V28AAAA"],
+    "updatedDoc": { "_id": "r1", "orderId": "OLOYW3V28AAAA", "amount": 9 }
+  },
+  {
+    "kind": "mutation",
+    "name": "mut-many-child-upsert",
+    "schemas": [
+      {
+        "name": "Order3", "collection": "orders3", "idPrefix": "O", "timestamps": true,
+        "fields": { "code": { "type": "string" } },
+        "relations": {
+          "items": { "model": "OrderItemIdx", "type": "many", "localField": "_id", "foreignField": "orderId" }
+        }
+      },
+      {
+        "name": "OrderItemIdx", "collection": "order_items_idx", "idPrefix": "OI", "timestamps": true,
+        "fields": { "orderId": { "type": "string" }, "sku": { "type": "string" } },
+        "indexes": [{ "keys": { "sku": 1 }, "options": { "unique": true } }],
+        "relations": {}
+      }
+    ],
+    "model": "Order3",
+    "data": { "code": "c1", "items": [{ "sku": "s1" }] },
+    "context": null,
+    "now": 1700000000000,
+    "newIds": ["OLOYW3V28AAAA", "OILOYW3V28AAAA"],
+    "updatedDoc": { "_id": "oi1", "orderId": "OLOYW3V28AAAA", "sku": "s1" }
+  },
+  {
+    "kind": "mutation",
+    "name": "mut-denied",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "write": ["admin"],
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "data": { "title": "x" },
+    "context": { "userId": "u1", "roles": ["user"] },
+    "now": 1700000000000,
+    "expect_error": true
+  }
+]

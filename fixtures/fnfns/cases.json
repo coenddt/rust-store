@@ -1,0 +1,302 @@
+[
+  {
+    "kind": "process_node",
+    "name": "fn-basic",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "a": { "type": "int" }, "b": { "type": "int" } },
+        "computes": {
+          "total": { "type": "int", "depends": ["a", "b"], "fn": true, "fnRef": "sum_ab" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{total}",
+    "doc": { "_id": "1", "a": 2, "b": 3 },
+    "context": null
+  },
+  {
+    "kind": "process_node",
+    "name": "fn-default-when-null",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "a": { "type": "int" } },
+        "computes": {
+          "weird": { "type": "int", "fn": true, "fnRef": "null_fn" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{weird}",
+    "doc": { "_id": "2" },
+    "context": null
+  },
+  {
+    "kind": "process_node",
+    "name": "fn-not-requested",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "a": { "type": "int" }, "b": { "type": "int" } },
+        "computes": {
+          "total": { "type": "int", "depends": ["a", "b"], "fn": true, "fnRef": "sum_ab" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{a}",
+    "doc": { "_id": "1", "a": 2, "b": 3 },
+    "context": null
+  },
+  {
+    "kind": "process_node",
+    "name": "fn-unreadable",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "a": { "type": "int" } },
+        "computes": {
+          "total": { "type": "int", "fn": true, "fnRef": "sum_ab", "read": ["admin"] }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{total}",
+    "doc": { "_id": "1" },
+    "context": { "userId": "u1", "roles": ["user"] }
+  },
+  {
+    "kind": "process_node",
+    "name": "fn-depends-filled",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "a": { "type": "int", "default": 5 }, "b": { "type": "int" } },
+        "computes": {
+          "total": { "type": "int", "depends": ["a", "b"], "fn": true, "fnRef": "sum_ab" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{total}",
+    "doc": { "_id": "1", "b": 3 },
+    "context": null
+  },
+  {
+    "kind": "process_node",
+    "name": "fn-ref-default",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "a": { "type": "int" }, "b": { "type": "int" } },
+        "computes": {
+          "sum_ab": { "type": "int", "depends": ["a", "b"], "fn": true }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{sum_ab}",
+    "doc": { "_id": "1", "a": 10, "b": 1 },
+    "context": null
+  },
+  {
+    "kind": "process_node",
+    "name": "fn-in-relation",
+    "schemas": [
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": { "code": { "type": "string" } },
+        "relations": {
+          "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
+        }
+      },
+      {
+        "name": "OrderItem", "collection": "order_items", "timestamps": false,
+        "fields": { "orderId": { "type": "string" }, "qty": { "type": "int" }, "price": { "type": "int" } },
+        "computes": {
+          "subtotal": { "type": "int", "depends": ["qty", "price"], "fn": true, "fnRef": "mul_qp" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Order{code, items{subtotal}}",
+    "doc": {
+      "code": "c",
+      "items": [
+        { "qty": 2, "price": 3 },
+        { "qty": 1, "price": 5 }
+      ]
+    },
+    "context": null
+  },
+  {
+    "kind": "process_node",
+    "name": "fn-label-string",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "v": { "type": "int" }, "name": { "type": "string" } },
+        "computes": {
+          "label": { "type": "string", "depends": ["v"], "fn": true, "fnRef": "label" },
+          "greet": { "type": "string", "depends": ["name"], "fn": true, "fnRef": "greet" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{label, greet}",
+    "doc": { "_id": "1", "v": 42, "name": "tom" },
+    "context": null
+  },
+  {
+    "kind": "async_fns",
+    "name": "afn-basic",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "w": { "type": "int" }, "h": { "type": "int" } },
+        "computes": {
+          "area": { "type": "int", "asyncFn": true, "fnRef": "fill_area" }
+        },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "items": [
+      { "_id": "1", "w": 3, "h": 4 },
+      { "_id": "2", "w": 2, "h": 5 }
+    ],
+    "context": null
+  },
+  {
+    "kind": "async_fns",
+    "name": "afn-ctx",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": {},
+        "computes": {
+          "tag": { "type": "string", "asyncFn": true, "fnRef": "ctx_tag" }
+        },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "items": [{ "_id": "1" }],
+    "context": { "userId": "u1", "roles": ["user"] }
+  },
+  {
+    "kind": "async_fns",
+    "name": "afn-read-denied",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": {},
+        "computes": {
+          "tag": { "type": "string", "asyncFn": true, "fnRef": "ctx_tag", "read": ["admin"] }
+        },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "items": [{ "_id": "1" }],
+    "context": { "userId": "u1", "roles": ["user"] }
+  },
+  {
+    "kind": "async_fns",
+    "name": "afn-read-no-ctx",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": {},
+        "computes": {
+          "tag": { "type": "string", "asyncFn": true, "fnRef": "ctx_tag", "read": ["admin"] }
+        },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "items": [{ "_id": "1" }],
+    "context": null
+  },
+  {
+    "kind": "postprocess",
+    "name": "pp-async-strip",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "computes": {
+          "skuTag": { "type": "string", "asyncFn": true, "fnRef": "tag_skus", "depends": ["items{sku}"] }
+        },
+        "relations": {
+          "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
+        }
+      },
+      {
+        "name": "OrderItem", "collection": "order_items", "timestamps": false,
+        "fields": { "orderId": { "type": "string" }, "sku": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title}",
+    "docs": [
+      {
+        "_id": "1",
+        "title": "a",
+        "items": [
+          { "orderId": "1", "sku": "s1" },
+          { "orderId": "1", "sku": "s2" }
+        ]
+      }
+    ],
+    "context": null
+  },
+  {
+    "kind": "postprocess",
+    "name": "pp-sync-and-async",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "a": { "type": "int" }, "b": { "type": "int" }, "title": { "type": "string" } },
+        "computes": {
+          "total": { "type": "int", "depends": ["a", "b"], "fn": true, "fnRef": "sum_ab" },
+          "skuTag": { "type": "string", "asyncFn": true, "fnRef": "tag_skus", "depends": ["items{sku}"] }
+        },
+        "relations": {
+          "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
+        }
+      },
+      {
+        "name": "OrderItem", "collection": "order_items", "timestamps": false,
+        "fields": { "orderId": { "type": "string" }, "sku": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{total, items{sku}}",
+    "docs": [
+      { "_id": "1", "a": 2, "b": 3, "items": [{ "orderId": "1", "sku": "s1" }] }
+    ],
+    "context": null
+  },
+  {
+    "kind": "insert",
+    "name": "ins-fn",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "fields": { "a": { "type": "int" }, "b": { "type": "int" } },
+        "computes": {
+          "total": { "type": "int", "depends": ["a", "b"], "fn": true, "fnRef": "sum_ab" }
+        },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "data": { "a": 2, "b": 3 },
+    "context": null,
+    "now": 1700000000000,
+    "newId": "PLOYW3V28AAAA"
+  }
+]

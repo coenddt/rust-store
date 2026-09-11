@@ -1,0 +1,12 @@
+{
+  "name": "mongo-store-core-node",
+  "version": "0.1.0",
+  "private": true,
+  "description": "mongo-store Rust core Node binding + dialect smoke test harness",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "sql.js": "^1.8.0"
+  }
+}

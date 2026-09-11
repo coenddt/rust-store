@@ -1,0 +1,15 @@
+# Rust 构建产物
+target/
+core/target/
+core-node/target/
+core-py/target/
+Cargo.lock.orig
+
+# Python 缓存
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node
+node_modules/
+npm-debug.log*

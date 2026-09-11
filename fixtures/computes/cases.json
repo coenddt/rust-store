@@ -1,0 +1,685 @@
+[
+  {
+    "kind": "process_node",
+    "name": "pn-defaults-basic",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": {
+          "title": { "type": "string" },
+          "views": { "type": "int" },
+          "status": { "type": "string", "default": "draft" },
+          "active": { "type": "boolean" },
+          "tags": { "type": "array" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title, views, status, active, tags}",
+    "context": null,
+    "doc": { "_id": "1", "title": "a" },
+    "expect": { "_id": "1", "title": "a", "views": 0, "status": "draft", "active": false, "tags": [] }
+  },
+  {
+    "kind": "process_node",
+    "name": "pn-null-filled",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": {
+          "title": { "type": "string" },
+          "views": { "type": "int" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title, views}",
+    "context": null,
+    "doc": { "_id": "1", "title": null, "views": 5, "unused": "drop" },
+    "expect": { "_id": "1", "title": "", "views": 5 }
+  },
+  {
+    "kind": "process_node",
+    "name": "pn-nested-object-defaults",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": {
+          "title": { "type": "string" },
+          "profile": {
+            "type": "object",
+            "fields": {
+              "nick": { "type": "string" },
+              "zip": { "type": "string", "default": "000000" }
+            }
+          }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{profile{nick, zip}}",
+    "context": null,
+    "doc": { "_id": "1" },
+    "expect": { "_id": "1", "profile": { "nick": "", "zip": "000000" } }
+  },
+  {
+    "kind": "process_node",
+    "name": "pn-dot-prune",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": {
+          "profile": {
+            "type": "object",
+            "fields": {
+              "nick": { "type": "string" },
+              "age": { "type": "int" },
+              "city": { "type": "string" }
+            }
+          }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{profile{nick}}",
+    "context": null,
+    "doc": { "_id": "1", "profile": { "nick": "n", "age": 9, "city": "c" } },
+    "expect": { "_id": "1", "profile": { "nick": "n" } }
+  },
+  {
+    "kind": "process_node",
+    "name": "pn-relation-many",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {
+          "comments": { "model": "Comment", "type": "many", "localField": "_id", "foreignField": "postId" }
+        }
+      },
+      {
+        "name": "Comment", "collection": "comments", "timestamps": false,
+        "fields": { "text": { "type": "string" }, "stars": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title, comments{text}}",
+    "context": null,
+    "doc": {
+      "_id": "p1", "title": "t",
+      "comments": [
+        { "_id": "c1", "text": "a", "stars": 5 },
+        { "_id": "c2", "text": null }
+      ]
+    },
+    "expect": {
+      "_id": "p1", "title": "t",
+      "comments": [
+        { "_id": "c1", "text": "a" },
+        { "_id": "c2", "text": "" }
+      ]
+    }
+  },
+  {
+    "kind": "process_node",
+    "name": "pn-relation-one",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {
+          "author": { "model": "User", "type": "one", "localField": "authorId", "foreignField": "_id" }
+        }
+      },
+      {
+        "name": "User", "collection": "users", "timestamps": false,
+        "fields": { "name": { "type": "string" }, "vip": { "type": "boolean" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title, author{name}}",
+    "context": null,
+    "doc": { "_id": "p1", "title": "t", "author": { "_id": "u1", "name": "n", "vip": true } },
+    "expect": { "_id": "p1", "title": "t", "author": { "_id": "u1", "name": "n" } }
+  },
+  {
+    "kind": "process_node",
+    "name": "pn-perm-unreadable-field",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": {
+          "title": { "type": "string" },
+          "secret": { "type": "string", "read": ["admin"] },
+          "public": { "type": "string" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title, secret, public}",
+    "context": { "userId": "u1", "roles": ["user"] },
+    "doc": { "_id": "1", "title": "t", "secret": "s", "public": "p" },
+    "expect": { "_id": "1", "title": "t", "public": "p" }
+  },
+  {
+    "kind": "process_node",
+    "name": "pn-owner-read-pass",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": {
+          "title": { "type": "string" },
+          "mine": { "type": "string", "read": ["creator"] }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title, mine}",
+    "context": { "userId": "u1", "roles": ["user"] },
+    "doc": { "_id": "1", "title": "t", "mine": "m", "createdBy": "u1" },
+    "expect": { "_id": "1", "title": "t", "mine": "m" }
+  },
+  {
+    "kind": "process_node",
+    "name": "pn-owner-read-fail",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": {
+          "title": { "type": "string" },
+          "mine": { "type": "string", "read": ["creator"] }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title, mine}",
+    "context": { "userId": "u1", "roles": ["user"] },
+    "doc": { "_id": "1", "title": "t", "mine": "m", "createdBy": "u2" },
+    "expect": { "_id": "1", "title": "t" }
+  },
+  {
+    "kind": "process_node",
+    "name": "pn-perm-relation-prune",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {
+          "comments": { "model": "Comment", "type": "many", "localField": "_id", "foreignField": "postId", "read": ["admin"] },
+          "reviewer": { "model": "User", "type": "one", "localField": "reviewerId", "foreignField": "_id" }
+        }
+      },
+      {
+        "name": "Comment", "collection": "comments", "timestamps": false,
+        "fields": { "text": { "type": "string" } },
+        "relations": {}
+      },
+      {
+        "name": "User", "collection": "users", "timestamps": false,
+        "fields": { "name": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title, comments{text}, reviewer{name}}",
+    "context": { "userId": "u1", "roles": ["user"] },
+    "doc": {
+      "_id": "1", "title": "t",
+      "comments": [{ "_id": "c1", "text": "a" }],
+      "reviewer": { "_id": "u1", "name": "n" }
+    },
+    "expect": { "_id": "1", "title": "t", "reviewer": { "_id": "u1", "name": "n" } }
+  },
+  {
+    "kind": "process_node",
+    "name": "pn-no-ctx-keeps-all",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {
+          "comments": { "model": "Comment", "type": "many", "localField": "_id", "foreignField": "postId", "read": ["admin"] }
+        }
+      },
+      {
+        "name": "Comment", "collection": "comments", "timestamps": false,
+        "fields": { "text": { "type": "string" }, "stars": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title, comments{text}}",
+    "context": null,
+    "doc": { "_id": "1", "title": "t", "comments": [{ "_id": "c1", "text": "a", "stars": 3 }] },
+    "expect": { "_id": "1", "title": "t", "comments": [{ "_id": "c1", "text": "a" }] }
+  },
+  {
+    "kind": "process_node",
+    "name": "pn-asyncfn-noop",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {
+          "comments": { "model": "Comment", "type": "many", "localField": "_id", "foreignField": "postId" }
+        },
+        "computes": {
+          "score": { "type": "int", "asyncFn": true, "depends": ["comments{text}"] }
+        }
+      },
+      {
+        "name": "Comment", "collection": "comments", "timestamps": false,
+        "fields": { "text": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title}",
+    "context": null,
+    "doc": { "_id": "1", "title": "t" },
+    "expect": { "_id": "1", "title": "t" }
+  },
+
+  {
+    "kind": "inject_depends",
+    "name": "dep-inject-new-relation",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {
+          "comments": { "model": "Comment", "type": "many", "localField": "_id", "foreignField": "postId" },
+          "author": { "model": "User", "type": "one", "localField": "authorId", "foreignField": "_id" },
+          "tags": { "model": "Tag", "type": "many", "localField": "_id", "foreignField": "postId" }
+        },
+        "computes": {
+          "score": { "type": "int", "asyncFn": true, "depends": ["comments{text, stars}", "author", "_id", "unknown"] }
+        }
+      },
+      {
+        "name": "Comment", "collection": "comments", "timestamps": false,
+        "fields": { "text": { "type": "string" }, "stars": { "type": "int" } },
+        "relations": {}
+      },
+      {
+        "name": "User", "collection": "users", "timestamps": false,
+        "fields": { "name": { "type": "string" } },
+        "relations": {}
+      },
+      {
+        "name": "Tag", "collection": "tags", "timestamps": false,
+        "fields": { "label": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title}",
+    "items": [
+      {
+        "_id": "p1", "title": "t",
+        "comments": [{ "_id": "c1", "text": "a", "stars": 1 }],
+        "author": { "_id": "u1", "name": "n" },
+        "tags": [{ "_id": "t1", "label": "l" }]
+      }
+    ],
+    "expect": {
+      "relDeps": [
+        { "name": "comments", "fields": ["text", "stars"] },
+        { "name": "author", "fields": [] }
+      ],
+      "ast": {
+        "model": "Post",
+        "params": {},
+        "fields": ["title"],
+        "relations": {
+          "comments": { "fields": ["text", "stars"], "relations": {}, "params": {} },
+          "author": { "fields": [], "relations": {}, "params": {} }
+        }
+      },
+      "injectInfo": { "relations": { "comments": "__all__", "author": "__all__" } },
+      "stripped": [{ "_id": "p1", "title": "t", "tags": [{ "_id": "t1", "label": "l" }] }]
+    }
+  },
+  {
+    "kind": "inject_depends",
+    "name": "dep-inject-existing-relation",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {
+          "comments": { "model": "Comment", "type": "many", "localField": "_id", "foreignField": "postId" },
+          "author": { "model": "User", "type": "one", "localField": "authorId", "foreignField": "_id" },
+          "tags": { "model": "Tag", "type": "many", "localField": "_id", "foreignField": "postId" }
+        },
+        "computes": {
+          "score": { "type": "int", "asyncFn": true, "depends": ["comments{text, stars}", "author{age}", "tags{label}"] }
+        }
+      },
+      {
+        "name": "Comment", "collection": "comments", "timestamps": false,
+        "fields": { "text": { "type": "string" }, "stars": { "type": "int" } },
+        "relations": {}
+      },
+      {
+        "name": "User", "collection": "users", "timestamps": false,
+        "fields": { "name": { "type": "string" }, "age": { "type": "int" } },
+        "relations": {}
+      },
+      {
+        "name": "Tag", "collection": "tags", "timestamps": false,
+        "fields": { "label": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title, comments{stars}, author{name, age}}",
+    "items": [
+      {
+        "_id": "p1", "title": "t",
+        "comments": [{ "_id": "c1", "text": "x", "stars": 1, "extra": 9 }],
+        "author": { "_id": "u1", "name": "n", "age": 3 },
+        "tags": [{ "_id": "t1", "label": "l" }]
+      }
+    ],
+    "expect": {
+      "relDeps": [
+        { "name": "comments", "fields": ["text", "stars"] },
+        { "name": "author", "fields": ["age"] },
+        { "name": "tags", "fields": ["label"] }
+      ],
+      "ast": {
+        "model": "Post",
+        "params": {},
+        "fields": ["title"],
+        "relations": {
+          "comments": { "fields": ["stars", "text"], "relations": {}, "params": {} },
+          "author": { "fields": ["name", "age"], "relations": {}, "params": {} },
+          "tags": { "fields": ["label"], "relations": {}, "params": {} }
+        }
+      },
+      "injectInfo": { "relations": { "comments": ["text"], "tags": "__all__" } },
+      "stripped": [
+        {
+          "_id": "p1", "title": "t",
+          "comments": [{ "_id": "c1", "stars": 1, "extra": 9 }],
+          "author": { "_id": "u1", "name": "n", "age": 3 }
+        }
+      ]
+    }
+  },
+  {
+    "kind": "inject_depends",
+    "name": "dep-no-asyncfn",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {
+          "comments": { "model": "Comment", "type": "many", "localField": "_id", "foreignField": "postId" }
+        },
+        "computes": { "score": { "type": "int" } }
+      },
+      {
+        "name": "Comment", "collection": "comments", "timestamps": false,
+        "fields": { "text": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Post{title, comments{text}}",
+    "expect": {
+      "relDeps": [],
+      "ast": {
+        "model": "Post",
+        "params": {},
+        "fields": ["title"],
+        "relations": {
+          "comments": { "fields": ["text"], "relations": {}, "params": {} }
+        }
+      },
+      "injectInfo": { "relations": {} },
+      "stripped": null
+    }
+  },
+
+  {
+    "kind": "permission",
+    "name": "perm-creator-schema",
+    "model": "Doc",
+    "schemas": [
+      {
+        "name": "Doc", "collection": "docs", "timestamps": false,
+        "read": ["creator"], "write": ["creator"],
+        "fields": {
+          "title": { "type": "string" },
+          "locked": { "type": "string", "write": ["admin"] },
+          "note": { "type": "string", "write": ["guest"] },
+          "meta": { "type": "object", "fields": { "a": { "type": "string" } } }
+        },
+        "relations": {
+          "comments": { "model": "Comment", "type": "many", "localField": "_id", "foreignField": "docId", "read": ["admin"] },
+          "reviewer": { "model": "User", "type": "one", "localField": "reviewerId", "foreignField": "_id" }
+        }
+      }
+    ],
+    "context": { "userId": "u1", "roles": ["user"] },
+    "condition": { "title": "x" },
+    "data": { "title": "a", "locked": "b", "note": "c", "meta.a": 1, "unknown.z": 2 },
+    "expect": {
+      "canRead": true,
+      "canWrite": true,
+      "shouldInjectOwner": true,
+      "condition": { "$and": [{ "title": "x" }, { "createdBy": "u1" }] },
+      "readableFields": ["locked", "meta", "note", "title"],
+      "readableRelations": ["reviewer"],
+      "writableFields": ["meta", "title"],
+      "filteredData": { "title": "a", "meta.a": 1 }
+    }
+  },
+  {
+    "kind": "permission",
+    "name": "perm-guest",
+    "model": "Doc2",
+    "schemas": [
+      {
+        "name": "Doc2", "collection": "docs2", "timestamps": false,
+        "read": ["guest"], "write": ["guest"],
+        "fields": {
+          "title": { "type": "string" },
+          "note": { "type": "string", "write": ["guest"] },
+          "locked": { "type": "string", "write": ["admin"] }
+        },
+        "relations": {}
+      }
+    ],
+    "context": { "userId": "u9", "roles": ["guest"] },
+    "condition": { "title": "x" },
+    "data": { "title": "a", "note": "b", "locked": "c" },
+    "expect": {
+      "canRead": true,
+      "canWrite": false,
+      "shouldInjectOwner": false,
+      "condition": { "title": "x" },
+      "readableFields": ["locked", "note", "title"],
+      "readableRelations": [],
+      "writableFields": ["note"],
+      "filteredData": { "note": "b" }
+    }
+  },
+  {
+    "kind": "permission",
+    "name": "perm-admin",
+    "model": "Doc3",
+    "schemas": [
+      {
+        "name": "Doc3", "collection": "docs3", "timestamps": false,
+        "read": ["creator"], "write": ["creator"],
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "context": { "userId": "u1", "roles": ["admin"] },
+    "condition": { "a": 1 },
+    "data": { "title": "x", "other": 2 },
+    "expect": {
+      "canRead": true,
+      "canWrite": true,
+      "shouldInjectOwner": false,
+      "condition": { "a": 1 },
+      "readableFields": ["title"],
+      "readableRelations": [],
+      "writableFields": ["title"],
+      "filteredData": { "title": "x" }
+    }
+  },
+  {
+    "kind": "permission",
+    "name": "perm-null-ctx",
+    "model": "Doc3",
+    "schemas": [
+      {
+        "name": "Doc3", "collection": "docs3", "timestamps": false,
+        "read": ["creator"], "write": ["creator"],
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "context": null,
+    "condition": { "a": 1 },
+    "data": { "title": "x", "other": 2 },
+    "expect": {
+      "canRead": true,
+      "canWrite": true,
+      "shouldInjectOwner": false,
+      "condition": { "a": 1 },
+      "readableFields": null,
+      "readableRelations": null,
+      "writableFields": null,
+      "filteredData": { "title": "x", "other": 2 }
+    }
+  },
+  {
+    "kind": "permission",
+    "name": "perm-internal",
+    "model": "Doc3",
+    "schemas": [
+      {
+        "name": "Doc3", "collection": "docs3", "timestamps": false,
+        "read": ["creator"], "write": ["creator"],
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "context": { "userId": "u1", "roles": ["user"], "internal": true },
+    "condition": { "a": 1 },
+    "data": { "title": "x", "other": 2 },
+    "expect": {
+      "canRead": true,
+      "canWrite": true,
+      "shouldInjectOwner": false,
+      "condition": { "a": 1 },
+      "readableFields": ["title"],
+      "readableRelations": [],
+      "writableFields": ["title"],
+      "filteredData": { "title": "x" }
+    }
+  },
+  {
+    "kind": "permission",
+    "name": "perm-empty-userid",
+    "model": "Doc3",
+    "schemas": [
+      {
+        "name": "Doc3", "collection": "docs3", "timestamps": false,
+        "read": ["creator"], "write": ["creator"],
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "context": { "userId": "", "roles": ["user"] },
+    "condition": { "a": 1 },
+    "data": { "title": "x", "other": 2 },
+    "expect": {
+      "canRead": true,
+      "canWrite": true,
+      "shouldInjectOwner": false,
+      "condition": { "a": 1 },
+      "readableFields": ["title"],
+      "readableRelations": [],
+      "writableFields": ["title"],
+      "filteredData": { "title": "x" }
+    }
+  },
+  {
+    "kind": "permission",
+    "name": "perm-role-match",
+    "model": "Doc4",
+    "schemas": [
+      {
+        "name": "Doc4", "collection": "docs4", "timestamps": false,
+        "read": ["user", "creator"], "write": ["user"],
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "context": { "userId": "u1", "roles": ["user"] },
+    "condition": { "a": 1 },
+    "data": { "title": "x", "other": 2 },
+    "expect": {
+      "canRead": true,
+      "canWrite": true,
+      "shouldInjectOwner": false,
+      "condition": { "a": 1 },
+      "readableFields": ["title"],
+      "readableRelations": [],
+      "writableFields": ["title"],
+      "filteredData": { "title": "x" }
+    }
+  },
+  {
+    "kind": "permission",
+    "name": "perm-no-read-config",
+    "model": "Doc5",
+    "schemas": [
+      {
+        "name": "Doc5", "collection": "docs5", "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "context": { "userId": "u1", "roles": ["user"] },
+    "condition": { "a": 1 },
+    "data": { "title": "x", "other": 2 },
+    "expect": {
+      "canRead": true,
+      "canWrite": true,
+      "shouldInjectOwner": false,
+      "condition": { "a": 1 },
+      "readableFields": ["title"],
+      "readableRelations": [],
+      "writableFields": ["title"],
+      "filteredData": { "title": "x" }
+    }
+  },
+  {
+    "kind": "permission",
+    "name": "perm-merge-owner-null-condition",
+    "model": "Doc6",
+    "schemas": [
+      {
+        "name": "Doc6", "collection": "docs6", "timestamps": false,
+        "read": ["creator"], "write": ["creator"],
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "context": { "userId": "u1" },
+    "condition": null,
+    "data": { "title": "x" },
+    "expect": {
+      "canRead": true,
+      "canWrite": true,
+      "shouldInjectOwner": true,
+      "condition": { "createdBy": "u1" },
+      "readableFields": ["title"],
+      "readableRelations": [],
+      "writableFields": ["title"],
+      "filteredData": { "title": "x" }
+    }
+  }
+]

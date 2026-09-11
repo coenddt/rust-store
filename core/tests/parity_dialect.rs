@@ -1,0 +1,248 @@
+//! dialect 对拍测试（Mongo 命令 → 关系型 SQL）
+//!
+//! 核心 parity 性质：同一命令在 MySQL / PostgreSQL / SQLite 三端，参数化 SQL 在归一化后
+//! 语义一致（只差标识符引号与占位符风格）；`restore_rows`/`introspect`/`overlay` 为纯逻辑，
+//! 四侧可复现。此测试把输入以 JSON 内联，作断言基准；之后可由 JS `gen-dialect-fixtures.js`
+//! 生成外部 golden 与之一致对比。
+
+use serde_json::{json, Value};
+
+use mongo_store_core::dialect::{
+    introspect_to_schema_json, merge_schema, restore_rows_json, translate, Backend,
+};
+use mongo_store_core::schema::Registry;
+
+fn registry_with(schemas: &[Value]) -> Registry {
+    let mut r = Registry::new();
+    for s in schemas {
+        r.register(s).expect("schema 注册失败");
+    }
+    r
+}
+
+/// 归一化 SQL：去标识符引号、占位符归一为 `?`、折叠空白、小写（仅用于跨端语义对比）
+fn normalize(sql: &str) -> String {
+    let s = sql
+        .replace('`', "")
+        .replace('"', "");
+    // `$n` → `?`
+    let mut out = String::with_capacity(s.len());
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '$' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+            while i < chars.len() && chars[i].is_ascii_digit() || (i < chars.len() && chars[i] == '$') {
+                i += 1;
+            }
+            out.push('?');
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+const SCHEMAS: &str = r#"[
+  {
+    "name": "Post", "collection": "posts", "timestamps": false,
+    "fields": { "title": { "type": "string" }, "status": { "type": "string" }, "views": { "type": "int" } },
+    "relations": {}
+  },
+  {
+    "name": "Order", "collection": "orders", "timestamps": false,
+    "fields": { "code": { "type": "string" }, "amount": { "type": "float" } },
+    "relations": {
+      "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
+    }
+  },
+  {
+    "name": "OrderItem", "collection": "order_items", "timestamps": false,
+    "fields": { "orderId": { "type": "string" }, "sku": { "type": "string" }, "qty": { "type": "int" } },
+    "relations": {}
+  }
+]"#;
+
+fn schemas() -> Vec<Value> {
+    serde_json::from_str(SCHEMAS).expect("内联 schemas 解析失败")
+}
+
+fn assert_sql_parity(name: &str, cmd: &Value) {
+    let registry = registry_with(&schemas());
+    let mut base: Option<String> = None;
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let out = translate(backend, cmd, &registry).expect(name);
+        let stmts = out.get("stmts").and_then(|s| s.as_array()).expect("stmts 数组");
+        assert_eq!(stmts.len(), 1, "[{}] 应恰一条语句", name);
+        let text = stmts[0].get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
+        let norm = normalize(&text);
+        match &base {
+            None => base = Some(norm),
+            Some(b) => assert_eq!(&norm, b, "[{}] 跨后端 SQL 不一致", name),
+        }
+    }
+}
+
+#[test]
+fn dialect_cross_backend_sql_parity() {
+    assert_sql_parity(
+        "find-simple",
+        &json!({ "kind": "find", "collection": "posts",
+                 "filter": { "status": "draft" },
+                 "projection": { "title": 1, "status": 1 } }),
+    );
+    assert_sql_parity(
+        "find-comparison",
+        &json!({ "kind": "find", "collection": "posts",
+                 "filter": { "views": { "$gte": 10 }, "status": "draft" },
+                 "projection": null }),
+    );
+    assert_sql_parity(
+        "count",
+        &json!({ "kind": "countDocuments", "collection": "posts",
+                 "filter": { "status": "draft" } }),
+    );
+    assert_sql_parity(
+        "insert-one",
+        &json!({ "kind": "insertOne", "collection": "posts",
+                 "doc": { "title": "hello", "status": "draft", "views": 5 } }),
+    );
+    assert_sql_parity(
+        "insert-many",
+        &json!({ "kind": "insertMany", "collection": "posts",
+                 "docs": [
+                    { "title": "a", "status": "draft", "views": 1 },
+                    { "title": "b", "status": "draft", "views": 2 }
+                 ] }),
+    );
+}
+
+#[test]
+fn dialect_aggregate_lookup_sql_parity() {
+    assert_sql_parity(
+        "aggregate-lookup",
+        &json!({ "kind": "aggregate", "collection": "orders", "pipeline": [
+            { "$match": { "amount": { "$gt": 0 } } },
+            { "$lookup": { "from": "order_items", "localField": "_id",
+                           "foreignField": "orderId", "as": "items" } },
+            { "$sort": { "code": 1 } }
+        ] }),
+    );
+}
+
+#[test]
+fn dialect_restore_rows_from_flat_lines() {
+    let registry = registry_with(&schemas());
+    // aggregate + $lookup（orders → items）
+    let out = translate(
+        Backend::Sqlite,
+        &json!({ "kind": "aggregate", "collection": "orders", "pipeline": [
+            { "$lookup": { "from": "order_items", "localField": "_id",
+                           "foreignField": "orderId", "as": "items" } }
+        ] }),
+        &registry,
+    )
+    .expect("translate");
+    let stmts = out.get("stmts").and_then(|s| s.as_array()).expect("stmts");
+    let shape = stmts[0].get("rowShape").cloned().expect("rowShape");
+
+    // 两条订单、第一条带 2 个 item、第二条含 null（LEFT JOIN 无匹配）
+    // 关系列 alias = <as>_<i>_<field>，i 为 JOIN 序号（单个 lookup → 0）
+    let rows = json!([
+        { "_id": "A", "code": "A-1", "items_0_sku": "sku-a", "items_0_qty": 2 },
+        { "_id": "A", "code": "A-1", "items_0_sku": "sku-b", "items_0_qty": 3 },
+        { "_id": "B", "code": "B-1", "items_0_sku": null,    "items_0_qty": null },
+    ]);
+
+    let restored = restore_rows_json(&shape, &rows).expect("restore");
+
+    let arr = restored.as_array().expect("还原应为数组");
+    assert_eq!(arr.len(), 2, "应有两条订单: {}", restored);
+    // 订单 A-1 合并出 items 数组
+    let has_a1 = arr
+        .iter()
+        .any(|d| d.get("items").and_then(|v| v.as_array()).map(|a| a.len() == 2).unwrap_or(false));
+    assert!(has_a1, "A-1 应还原出 2 个 items: {}", restored);
+    // 空 items：item 字段全 null → 不生成空对象
+    let has_b1 = arr.iter().any(|d| d.get("code").and_then(|v| v.as_str()) == Some("B-1"));
+    assert!(has_b1, "B-1 应被还原: {}", restored);
+}
+
+#[test]
+fn dialect_restore_rows_roundtrip_supports_is_array() {
+    // 直接构造数组形状（不依赖 translate），验证 is_array 聚合路径
+    let shape = json!({
+        "columns": [
+            { "alias": "_id",    "path": ["_id"],         "isArray": false, "subShape": null },
+            { "alias": "code",   "path": ["code"],        "isArray": false, "subShape": null },
+            { "alias": "it_0_sku","path": ["items","sku"],"isArray": true,  "subShape": null }
+        ]
+    });
+    let rows = json!([
+        { "_id": "1", "code": "A", "it_0_sku": "x" },
+        { "_id": "1", "code": "A", "it_0_sku": "y" },
+    ]);
+    let restored = restore_rows_json(&shape, &rows).expect("restore");
+    let arr = restored.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(
+        arr[0].get("items").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
+        2
+    );
+}
+
+#[test]
+fn dialect_introspection_to_schema_json() {
+    let rows = json!({
+        "tables": [ { "name": "posts" }, { "name": "order_items" } ],
+        "columns": [
+            { "table": "posts",       "name": "_id",       "type": "TEXT", "notnull": 1, "pk": 1 },
+            { "table": "posts",       "name": "title",     "type": "TEXT", "notnull": 0, "pk": 0 },
+            { "table": "posts",       "name": "views",     "type": "INTEGER", "notnull": 0, "pk": 0 },
+            { "table": "order_items", "name": "_id",       "type": "TEXT", "notnull": 1, "pk": 1 },
+            { "table": "order_items", "name": "order_id",  "type": "TEXT", "notnull": 1, "pk": 0 },
+            { "table": "order_items", "name": "sku",       "type": "TEXT", "notnull": 0, "pk": 0 }
+        ],
+        "fks": [
+            { "table": "order_items", "column": "order_id", "refTable": "posts", "refColumn": "_id" }
+        ],
+        "indexes": []
+    });
+    let schema = introspect_to_schema_json(&rows, &Backend::Sqlite).expect("introspect");
+
+    let arr = schema.as_array().expect("schema 数组");
+    // posts 应含 _id/title/views，views 映射为 number
+    let posts = arr.iter().find(|d| d.get("name").and_then(|v| v.as_str()) == Some("posts")).expect("posts def");
+    let views = posts.get("fields").and_then(|f| f.get("views").and_then(|v| v.get("type"))).and_then(|v| v.as_str());
+    assert_eq!(views, Some("number"), "views 应为 number");
+    // order_items 主键缺省 _id，外键 order_id → 对 posts 的 one 关系已生成
+    let oi = arr.iter().find(|d| d.get("name").and_then(|v| v.as_str()) == Some("order_items")).expect("order_items def");
+    let rel = oi.get("relations").and_then(|r| r.get("posts")).expect("posts 关系");
+    assert_eq!(rel.get("type").and_then(|v| v.as_str()), Some("one"));
+    // posts 侧应由第二轮补反向 many
+    let rels = posts.get("relations").and_then(|r| r.as_object()).expect("posts relations");
+    assert!(rels.contains_key("order_items"), "posts 应反向含 order_items 关系: {:#?}", rels);
+}
+
+#[test]
+fn dialect_overlay_merge_compute_and_permission() {
+    let base = json!([
+        { "name": "posts", "collection": "posts", "fields": { "title": { "type": "string" } }, "relations": {} }
+    ]);
+    let overlay = json!([
+        { "name": "posts",
+          "fields": { "views": { "type": "int", "default": 0 } },
+          "computes": { "slug": { "fn": true, "depends": ["title"] } },
+          "read": { "roles": ["admin", "editor"] } }
+    ]);
+    let merged = merge_schema(&base, &overlay).expect("merge");
+    let def = merged.as_array().unwrap().first().unwrap();
+    // 计算列注入
+    let computes = def.get("computes").expect("computes 存在");
+    assert_eq!(computes.get("slug").is_some(), true);
+    // 字段并集
+    let fields = def.get("fields").and_then(|f| f.as_object()).expect("fields");
+    assert!(fields.contains_key("title") && fields.contains_key("views"));
+    // read 覆盖
+    assert_eq!(def.get("read").and_then(|r| r.get("roles").and_then(|v| v.as_array()).map(|a| a.len())), Some(2));
+}

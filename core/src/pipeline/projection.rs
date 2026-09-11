@@ -1,0 +1,148 @@
+//! $project 投影构建
+
+use std::collections::HashSet;
+
+use serde_json::{json, Map, Value};
+
+use crate::permission::{get_readable_fields, Context};
+use crate::schema::{ComputeDef, Schema};
+
+use super::ast::Ast;
+
+/// 从投影中移除当前用户不可读的字段
+fn apply_permission_prune(proj: &mut Map<String, Value>, schema: &Schema, ctx: Option<&Context>) {
+    let Some(c) = ctx else { return };
+    let Some(readable) = get_readable_fields(schema, Some(c)) else {
+        return;
+    };
+    let keys: Vec<String> = proj.keys().cloned().collect();
+    for key in keys {
+        if key == "_id" {
+            continue;
+        }
+        if schema.fields.contains_key(&key) && !readable.contains(&key) {
+            proj.remove(&key);
+        }
+    }
+}
+
+fn merge_compute_depends(
+    proj: &mut Map<String, Value>,
+    app_computes: &[&ComputeDef],
+    dot_parent_fields: &HashSet<String>,
+) {
+    for c in app_computes {
+        for dep in &c.depends {
+            if dot_parent_fields.contains(dep) {
+                continue;
+            }
+            proj.entry(dep.clone()).or_insert(json!(1));
+        }
+    }
+}
+
+/// 按计算列 depends 把依赖字段并入投影
+///
+/// NOTE: JS 侧还有一条 `_mergeAllSchemaFields` 兜底分支
+/// （`appComputes.every(c => Array.isArray(c.depends))` 为假时走全字段并入），
+/// 但 `register()` 规范化时恒有 `depends: val.depends || []`，故该条件恒为真、
+/// 兜底分支实际不可达 —— 这里只移植可达路径，待 P0 契约确认后再定去留。
+fn append_compute_deps(
+    proj: &mut Map<String, Value>,
+    schema: &Schema,
+    dot_parent_fields: &HashSet<String>,
+) {
+    let app_computes: Vec<&ComputeDef> = schema
+        .computes
+        .iter()
+        .map(|(_, c)| c)
+        .filter(|c| c.has_fn || c.has_async_fn)
+        .collect();
+    if app_computes.is_empty() {
+        return;
+    }
+    merge_compute_depends(proj, &app_computes, dot_parent_fields);
+}
+
+/// 收集真实 schema 字段的投影条目（排除计算列/点号重复）
+fn collect_real_fields(
+    ast: &Ast,
+    schema: &Schema,
+    compute_keys: &HashSet<String>,
+) -> (Map<String, Value>, HashSet<String>, bool) {
+    let mut proj: Map<String, Value> = Map::new();
+    let mut dot_parent_fields: HashSet<String> = HashSet::new();
+    let mut any_field_requested: HashSet<String> = HashSet::new();
+    let mut has_real_field = false;
+
+    for f in &ast.fields {
+        if compute_keys.contains(f) {
+            continue;
+        }
+        if f.contains('.') {
+            let root = f.split('.').next().unwrap_or("").to_string();
+            if schema.fields.contains_key(&root) {
+                dot_parent_fields.insert(root.clone());
+                if !any_field_requested.contains(&root) {
+                    proj.insert(f.clone(), json!(1));
+                }
+                has_real_field = true;
+            }
+        } else if schema.fields.contains_key(f) {
+            proj.insert(f.clone(), json!(1));
+            any_field_requested.insert(f.clone());
+            has_real_field = true;
+        }
+    }
+
+    // 如果父字段被整个请求，移除其 dot-notation 子条目
+    if has_real_field {
+        for root in dot_parent_fields.iter().cloned().collect::<Vec<_>>() {
+            if proj.contains_key(&root) {
+                for key in proj.keys().cloned().collect::<Vec<_>>() {
+                    if key.starts_with(&format!("{}.", root)) {
+                        proj.remove(&key);
+                    }
+                }
+            }
+        }
+    }
+
+    (proj, dot_parent_fields, has_real_field)
+}
+
+/// 从 GQL 根字段列表 + schema computes 计算投影；无有效字段时返回 None
+pub fn build_projection(ast: &Ast, schema: &Schema, ctx: Option<&Context>) -> Option<Value> {
+    if ast.fields.is_empty() {
+        return None;
+    }
+
+    let compute_keys: HashSet<String> = schema.computes.iter().map(|(k, _)| k.clone()).collect();
+    let mut proj: Map<String, Value> = Map::new();
+    proj.insert("_id".to_string(), json!(1));
+
+    // 仅包含实际 schema 字段（排除计算列与点号重复）
+    let (fields_proj, dot_parent_fields, has_real_field) =
+        collect_real_fields(ast, schema, &compute_keys);
+    for (k, v) in fields_proj {
+        proj.insert(k, v);
+    }
+    if !has_real_field {
+        return None;
+    }
+
+    // 收集需要在应用层执行的计算列（fn + asyncFn），其依赖字段不能被投影排除
+    append_compute_deps(&mut proj, schema, &dot_parent_fields);
+
+    // 关系名加入投影（否则 $project 阶段会丢弃 $lookup 的结果）
+    for (rel_name, _) in &ast.relations {
+        if !proj.contains_key(rel_name) {
+            proj.insert(rel_name.clone(), json!(1));
+        }
+    }
+
+    // 权限裁剪：从投影中移除当前用户不可读的字段
+    apply_permission_prune(&mut proj, schema, ctx);
+
+    Some(Value::Object(proj))
+}

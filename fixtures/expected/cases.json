@@ -1,0 +1,1450 @@
+[
+  {
+    "name": "parse-basic",
+    "error": false,
+    "tokens": [
+      {
+        "t": "id",
+        "v": "M"
+      },
+      {
+        "t": "p",
+        "v": "("
+      },
+      {
+        "t": "id",
+        "v": "$condition"
+      },
+      {
+        "t": "p",
+        "v": ":"
+      },
+      {
+        "t": "ref",
+        "v": "@c0"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "$sort"
+      },
+      {
+        "t": "p",
+        "v": ":"
+      },
+      {
+        "t": "ref",
+        "v": "@s1"
+      },
+      {
+        "t": "p",
+        "v": ")"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "a"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "Row"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "b"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "c"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      }
+    ],
+    "ast": {
+      "model": "M",
+      "params": {
+        "condition": "@c0",
+        "sort": "@s1"
+      },
+      "fields": [
+        "a"
+      ],
+      "relations": {
+        "Row": {
+          "fields": [
+            "b",
+            "c"
+          ],
+          "relations": {},
+          "params": {}
+        }
+      }
+    },
+    "pipeline": [
+      {
+        "$match": {
+          "a": "x"
+        }
+      },
+      {
+        "$lookup": {
+          "from": "row",
+          "let": {
+            "rel__id": {
+              "$ifNull": [
+                "$_id",
+                null
+              ]
+            }
+          },
+          "pipeline": [
+            {
+              "$match": {
+                "$expr": {
+                  "$eq": [
+                    "$mId",
+                    "$$rel__id"
+                  ]
+                }
+              }
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "b": 1,
+                "c": 1
+              }
+            }
+          ],
+          "as": "Row"
+        }
+      },
+      {
+        "$sort": {
+          "a": -1
+        }
+      }
+    ],
+    "projection": {
+      "_id": 1,
+      "a": 1,
+      "Row": 1
+    }
+  },
+  {
+    "name": "parse-rel-params",
+    "error": false,
+    "tokens": [
+      {
+        "t": "id",
+        "v": "M"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "a"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "Row"
+      },
+      {
+        "t": "p",
+        "v": "("
+      },
+      {
+        "t": "id",
+        "v": "$sort"
+      },
+      {
+        "t": "p",
+        "v": ":"
+      },
+      {
+        "t": "ref",
+        "v": "@s0"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "$limit"
+      },
+      {
+        "t": "p",
+        "v": ":"
+      },
+      {
+        "t": "ref",
+        "v": "@l0"
+      },
+      {
+        "t": "p",
+        "v": ")"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      }
+    ],
+    "ast": {
+      "model": "M",
+      "params": {},
+      "fields": [
+        "a"
+      ],
+      "relations": {
+        "Row": {
+          "fields": [],
+          "relations": {},
+          "params": {
+            "sort": "@s0",
+            "limit": "@l0"
+          }
+        }
+      }
+    },
+    "pipeline": [
+      {
+        "$lookup": {
+          "from": "row",
+          "let": {
+            "rel__id": {
+              "$ifNull": [
+                "$_id",
+                null
+              ]
+            }
+          },
+          "pipeline": [
+            {
+              "$match": {
+                "$expr": {
+                  "$eq": [
+                    "$mId",
+                    "$$rel__id"
+                  ]
+                }
+              }
+            },
+            {
+              "$sort": {
+                "b": 1
+              }
+            },
+            {
+              "$limit": 5
+            }
+          ],
+          "as": "Row"
+        }
+      }
+    ],
+    "projection": {
+      "_id": 1,
+      "a": 1,
+      "Row": 1
+    }
+  },
+  {
+    "name": "build-root",
+    "error": false,
+    "tokens": [
+      {
+        "t": "id",
+        "v": "Post"
+      },
+      {
+        "t": "p",
+        "v": "("
+      },
+      {
+        "t": "id",
+        "v": "$condition"
+      },
+      {
+        "t": "p",
+        "v": ":"
+      },
+      {
+        "t": "ref",
+        "v": "@c0"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "$sort"
+      },
+      {
+        "t": "p",
+        "v": ":"
+      },
+      {
+        "t": "ref",
+        "v": "@s1"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "$skip"
+      },
+      {
+        "t": "p",
+        "v": ":"
+      },
+      {
+        "t": "ref",
+        "v": "@sk"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "$limit"
+      },
+      {
+        "t": "p",
+        "v": ":"
+      },
+      {
+        "t": "ref",
+        "v": "@l"
+      },
+      {
+        "t": "p",
+        "v": ")"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "title"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "status"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "views"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      }
+    ],
+    "ast": {
+      "model": "Post",
+      "params": {
+        "condition": "@c0",
+        "sort": "@s1",
+        "skip": "@sk",
+        "limit": "@l"
+      },
+      "fields": [
+        "title",
+        "status",
+        "views"
+      ],
+      "relations": {}
+    },
+    "pipeline": [
+      {
+        "$match": {
+          "status": "draft"
+        }
+      },
+      {
+        "$sort": {
+          "createdAt": -1
+        }
+      },
+      {
+        "$skip": 0
+      },
+      {
+        "$limit": 20
+      }
+    ],
+    "projection": {
+      "_id": 1,
+      "title": 1,
+      "status": 1,
+      "views": 1
+    }
+  },
+  {
+    "name": "relation-many",
+    "error": false,
+    "tokens": [
+      {
+        "t": "id",
+        "v": "Order"
+      },
+      {
+        "t": "p",
+        "v": "("
+      },
+      {
+        "t": "id",
+        "v": "$condition"
+      },
+      {
+        "t": "p",
+        "v": ":"
+      },
+      {
+        "t": "ref",
+        "v": "@c0"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "$limit"
+      },
+      {
+        "t": "p",
+        "v": ":"
+      },
+      {
+        "t": "ref",
+        "v": "@l"
+      },
+      {
+        "t": "p",
+        "v": ")"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "code"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "amount"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "items"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "sku"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "qty"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      }
+    ],
+    "ast": {
+      "model": "Order",
+      "params": {
+        "condition": "@c0",
+        "limit": "@l"
+      },
+      "fields": [
+        "code",
+        "amount"
+      ],
+      "relations": {
+        "items": {
+          "fields": [
+            "sku",
+            "qty"
+          ],
+          "relations": {},
+          "params": {}
+        }
+      }
+    },
+    "pipeline": [
+      {
+        "$match": {
+          "amount": {
+            "$gt": 0
+          }
+        }
+      },
+      {
+        "$lookup": {
+          "from": "order_items",
+          "let": {
+            "rel__id": {
+              "$ifNull": [
+                "$_id",
+                null
+              ]
+            }
+          },
+          "pipeline": [
+            {
+              "$match": {
+                "$expr": {
+                  "$eq": [
+                    "$orderId",
+                    "$$rel__id"
+                  ]
+                }
+              }
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "sku": 1,
+                "qty": 1
+              }
+            }
+          ],
+          "as": "items"
+        }
+      },
+      {
+        "$limit": 10
+      }
+    ],
+    "projection": {
+      "_id": 1,
+      "code": 1,
+      "amount": 1,
+      "items": 1
+    }
+  },
+  {
+    "name": "relation-one",
+    "error": false,
+    "tokens": [
+      {
+        "t": "id",
+        "v": "Parent"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "name"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "child"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "nick"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      }
+    ],
+    "ast": {
+      "model": "Parent",
+      "params": {},
+      "fields": [
+        "name"
+      ],
+      "relations": {
+        "child": {
+          "fields": [
+            "nick"
+          ],
+          "relations": {},
+          "params": {}
+        }
+      }
+    },
+    "pipeline": [
+      {
+        "$lookup": {
+          "from": "children",
+          "let": {
+            "rel__id": {
+              "$ifNull": [
+                "$_id",
+                null
+              ]
+            }
+          },
+          "pipeline": [
+            {
+              "$match": {
+                "$expr": {
+                  "$eq": [
+                    "$parentId",
+                    "$$rel__id"
+                  ]
+                }
+              }
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "nick": 1
+              }
+            }
+          ],
+          "as": "child"
+        }
+      },
+      {
+        "$unwind": {
+          "path": "$child",
+          "preserveNullAndEmptyArrays": true
+        }
+      }
+    ],
+    "projection": {
+      "_id": 1,
+      "name": 1,
+      "child": 1
+    }
+  },
+  {
+    "name": "array-local-field",
+    "error": false,
+    "tokens": [
+      {
+        "t": "id",
+        "v": "Article"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "title"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "tagIds"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "tags"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "name"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      }
+    ],
+    "ast": {
+      "model": "Article",
+      "params": {},
+      "fields": [
+        "title",
+        "tagIds"
+      ],
+      "relations": {
+        "tags": {
+          "fields": [
+            "name"
+          ],
+          "relations": {},
+          "params": {}
+        }
+      }
+    },
+    "pipeline": [
+      {
+        "$lookup": {
+          "from": "tags",
+          "let": {
+            "rel_tagIds": {
+              "$cond": [
+                {
+                  "$isArray": "$tagIds"
+                },
+                "$tagIds",
+                []
+              ]
+            }
+          },
+          "pipeline": [
+            {
+              "$match": {
+                "$expr": {
+                  "$in": [
+                    "$_id",
+                    "$$rel_tagIds"
+                  ]
+                }
+              }
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "name": 1
+              }
+            }
+          ],
+          "as": "tags"
+        }
+      }
+    ],
+    "projection": {
+      "_id": 1,
+      "title": 1,
+      "tagIds": 1,
+      "tags": 1
+    }
+  },
+  {
+    "name": "nested-two-levels",
+    "error": false,
+    "tokens": [
+      {
+        "t": "id",
+        "v": "A"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "n"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "bs"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "n"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "cs"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "n"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      }
+    ],
+    "ast": {
+      "model": "A",
+      "params": {},
+      "fields": [
+        "n"
+      ],
+      "relations": {
+        "bs": {
+          "fields": [
+            "n"
+          ],
+          "relations": {
+            "cs": {
+              "fields": [
+                "n"
+              ],
+              "relations": {},
+              "params": {}
+            }
+          },
+          "params": {}
+        }
+      }
+    },
+    "pipeline": [
+      {
+        "$lookup": {
+          "from": "b",
+          "let": {
+            "rel__id": {
+              "$ifNull": [
+                "$_id",
+                null
+              ]
+            }
+          },
+          "pipeline": [
+            {
+              "$match": {
+                "$expr": {
+                  "$eq": [
+                    "$aId",
+                    "$$rel__id"
+                  ]
+                }
+              }
+            },
+            {
+              "$lookup": {
+                "from": "c",
+                "let": {
+                  "rel__id": {
+                    "$ifNull": [
+                      "$_id",
+                      null
+                    ]
+                  }
+                },
+                "pipeline": [
+                  {
+                    "$match": {
+                      "$expr": {
+                        "$eq": [
+                          "$bId",
+                          "$$rel__id"
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "$project": {
+                      "_id": 1,
+                      "n": 1
+                    }
+                  }
+                ],
+                "as": "cs"
+              }
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "n": 1
+              }
+            }
+          ],
+          "as": "bs"
+        }
+      }
+    ],
+    "projection": {
+      "_id": 1,
+      "n": 1,
+      "bs": 1
+    }
+  },
+  {
+    "name": "object-flatten",
+    "error": false,
+    "tokens": [
+      {
+        "t": "id",
+        "v": "Doc"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "title"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "meta"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "x"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "y"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      }
+    ],
+    "ast": {
+      "model": "Doc",
+      "params": {},
+      "fields": [
+        "title"
+      ],
+      "relations": {
+        "meta": {
+          "fields": [
+            "x",
+            "y"
+          ],
+          "relations": {},
+          "params": {}
+        }
+      }
+    },
+    "pipeline": [],
+    "projection": {
+      "_id": 1,
+      "title": 1,
+      "meta.x": 1,
+      "meta.y": 1
+    }
+  },
+  {
+    "name": "compute-lookup",
+    "error": false,
+    "tokens": [
+      {
+        "t": "id",
+        "v": "Shop"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "name"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "orderCount"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "label"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      }
+    ],
+    "ast": {
+      "model": "Shop",
+      "params": {},
+      "fields": [
+        "name",
+        "orderCount",
+        "label"
+      ],
+      "relations": {}
+    },
+    "pipeline": [
+      {
+        "$lookup": {
+          "from": "orders",
+          "let": {
+            "sid": "$_id"
+          },
+          "pipeline": [
+            {
+              "$match": {
+                "$expr": {
+                  "$eq": [
+                    "$shopId",
+                    "$$sid"
+                  ]
+                }
+              }
+            }
+          ],
+          "as": "_orders"
+        }
+      },
+      {
+        "$addFields": {
+          "label": {
+            "$concat": [
+              "$name",
+              "!"
+            ]
+          }
+        }
+      }
+    ],
+    "projection": {
+      "_id": 1,
+      "name": 1
+    }
+  },
+  {
+    "name": "custom-pipeline",
+    "error": false,
+    "tokens": [
+      {
+        "t": "id",
+        "v": "X"
+      },
+      {
+        "t": "p",
+        "v": "("
+      },
+      {
+        "t": "id",
+        "v": "$pipeline"
+      },
+      {
+        "t": "p",
+        "v": ":"
+      },
+      {
+        "t": "ref",
+        "v": "@p"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "$sort"
+      },
+      {
+        "t": "p",
+        "v": ":"
+      },
+      {
+        "t": "ref",
+        "v": "@s"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "$limit"
+      },
+      {
+        "t": "p",
+        "v": ":"
+      },
+      {
+        "t": "ref",
+        "v": "@l"
+      },
+      {
+        "t": "p",
+        "v": ")"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "a"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      }
+    ],
+    "ast": {
+      "model": "X",
+      "params": {
+        "pipeline": "@p",
+        "sort": "@s",
+        "limit": "@l"
+      },
+      "fields": [
+        "a"
+      ],
+      "relations": {}
+    },
+    "pipeline": [
+      {
+        "$match": {
+          "a": {
+            "$gt": 1
+          }
+        }
+      },
+      {
+        "$group": {
+          "_id": null,
+          "n": {
+            "$sum": 1
+          }
+        }
+      },
+      {
+        "$sort": {
+          "a": 1
+        }
+      },
+      {
+        "$limit": 3
+      }
+    ],
+    "projection": {
+      "_id": 1,
+      "a": 1
+    }
+  },
+  {
+    "name": "permission-prune",
+    "error": false,
+    "tokens": [
+      {
+        "t": "id",
+        "v": "Secret"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "title"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "ownerOnly"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "public"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      }
+    ],
+    "ast": {
+      "model": "Secret",
+      "params": {},
+      "fields": [
+        "title",
+        "ownerOnly",
+        "public"
+      ],
+      "relations": {}
+    },
+    "pipeline": [],
+    "projection": {
+      "_id": 1,
+      "title": 1,
+      "public": 1
+    }
+  },
+  {
+    "name": "compute-depends",
+    "error": false,
+    "tokens": [
+      {
+        "t": "id",
+        "v": "Inv"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "note"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "total"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      }
+    ],
+    "ast": {
+      "model": "Inv",
+      "params": {},
+      "fields": [
+        "note",
+        "total"
+      ],
+      "relations": {}
+    },
+    "pipeline": [],
+    "projection": {
+      "_id": 1,
+      "note": 1,
+      "qty": 1,
+      "price": 1
+    }
+  },
+  {
+    "name": "rel-projection-depends",
+    "error": false,
+    "tokens": [
+      {
+        "t": "id",
+        "v": "Cart"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "n"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "lines"
+      },
+      {
+        "t": "p",
+        "v": "{"
+      },
+      {
+        "t": "id",
+        "v": "sku"
+      },
+      {
+        "t": "p",
+        "v": ","
+      },
+      {
+        "t": "id",
+        "v": "subtotal"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      },
+      {
+        "t": "p",
+        "v": "}"
+      }
+    ],
+    "ast": {
+      "model": "Cart",
+      "params": {},
+      "fields": [
+        "n"
+      ],
+      "relations": {
+        "lines": {
+          "fields": [
+            "sku",
+            "subtotal"
+          ],
+          "relations": {},
+          "params": {}
+        }
+      }
+    },
+    "pipeline": [
+      {
+        "$lookup": {
+          "from": "lines",
+          "let": {
+            "rel__id": {
+              "$ifNull": [
+                "$_id",
+                null
+              ]
+            }
+          },
+          "pipeline": [
+            {
+              "$match": {
+                "$expr": {
+                  "$eq": [
+                    "$cartId",
+                    "$$rel__id"
+                  ]
+                }
+              }
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "sku": 1,
+                "subtotal": 1,
+                "qty": 1,
+                "price": 1
+              }
+            }
+          ],
+          "as": "lines"
+        }
+      }
+    ],
+    "projection": {
+      "_id": 1,
+      "n": 1,
+      "lines": 1
+    }
+  },
+  {
+    "name": "error-unclosed",
+    "error": true
+  }
+]

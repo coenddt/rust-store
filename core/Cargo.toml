@@ -1,0 +1,33 @@
+[package]
+name = "mongo-store-core"
+version = "0.1.0"
+edition = "2021"
+description = "mongo-store 语言无关核心（Phase 1：GQL 解析 / Pipeline / Projection 纯逻辑）"
+publish = false
+
+[lib]
+name = "mongo_store_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = "1"
+
+[[test]]
+name = "parity"
+path = "tests/parity.rs"
+
+[[test]]
+name = "parity_computes"
+path = "tests/parity_computes.rs"
+
+[[test]]
+name = "parity_commands"
+path = "tests/parity_commands.rs"
+
+[[test]]
+name = "parity_write"
+path = "tests/parity_write.rs"
+
+[[test]]
+name = "parity_fnfns"
+path = "tests/parity_fnfns.rs"

@@ -1,0 +1,201 @@
+[
+  {
+    "name": "fn-basic",
+    "kind": "process_node",
+    "result": {
+      "doc": {
+        "_id": "1",
+        "total": 5
+      }
+    }
+  },
+  {
+    "name": "fn-default-when-null",
+    "kind": "process_node",
+    "result": {
+      "doc": {
+        "_id": "2",
+        "weird": 0
+      }
+    }
+  },
+  {
+    "name": "fn-not-requested",
+    "kind": "process_node",
+    "result": {
+      "doc": {
+        "_id": "1",
+        "a": 2
+      }
+    }
+  },
+  {
+    "name": "fn-unreadable",
+    "kind": "process_node",
+    "result": {
+      "doc": {
+        "_id": "1"
+      }
+    }
+  },
+  {
+    "name": "fn-depends-filled",
+    "kind": "process_node",
+    "result": {
+      "doc": {
+        "_id": "1",
+        "total": 8
+      }
+    }
+  },
+  {
+    "name": "fn-ref-default",
+    "kind": "process_node",
+    "result": {
+      "doc": {
+        "_id": "1",
+        "sum_ab": 11
+      }
+    }
+  },
+  {
+    "name": "fn-in-relation",
+    "kind": "process_node",
+    "result": {
+      "doc": {
+        "code": "c",
+        "items": [
+          {
+            "subtotal": 6
+          },
+          {
+            "subtotal": 5
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "fn-label-string",
+    "kind": "process_node",
+    "result": {
+      "doc": {
+        "_id": "1",
+        "label": "big",
+        "greet": "hi:tom"
+      }
+    }
+  },
+  {
+    "name": "afn-basic",
+    "kind": "async_fns",
+    "result": {
+      "items": [
+        {
+          "_id": "1",
+          "w": 3,
+          "h": 4,
+          "area": 12
+        },
+        {
+          "_id": "2",
+          "w": 2,
+          "h": 5,
+          "area": 10
+        }
+      ]
+    }
+  },
+  {
+    "name": "afn-ctx",
+    "kind": "async_fns",
+    "result": {
+      "items": [
+        {
+          "_id": "1",
+          "tag": "u:u1"
+        }
+      ]
+    }
+  },
+  {
+    "name": "afn-read-denied",
+    "kind": "async_fns",
+    "result": {
+      "items": [
+        {
+          "_id": "1"
+        }
+      ]
+    }
+  },
+  {
+    "name": "afn-read-no-ctx",
+    "kind": "async_fns",
+    "result": {
+      "items": [
+        {
+          "_id": "1",
+          "tag": "anon"
+        }
+      ]
+    }
+  },
+  {
+    "name": "pp-async-strip",
+    "kind": "postprocess",
+    "result": {
+      "items": [
+        {
+          "_id": "1",
+          "title": "a",
+          "skuTag": "s1|s2"
+        }
+      ]
+    }
+  },
+  {
+    "name": "pp-sync-and-async",
+    "kind": "postprocess",
+    "result": {
+      "items": [
+        {
+          "_id": "1",
+          "items": [
+            {
+              "sku": "s1"
+            }
+          ],
+          "total": 5,
+          "skuTag": "s1"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ins-fn",
+    "kind": "insert",
+    "result": {
+      "command": {
+        "kind": "insertOne",
+        "collection": "posts",
+        "doc": {
+          "a": 2,
+          "b": 3,
+          "_id": "PLOYW3V28AAAA",
+          "createdAt": 1700000000000,
+          "updatedAt": 1700000000000
+        }
+      },
+      "returns": {
+        "a": 2,
+        "b": 3,
+        "_id": "PLOYW3V28AAAA",
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000,
+        "total": 5
+      },
+      "newId": "PLOYW3V28AAAA"
+    }
+  }
+]

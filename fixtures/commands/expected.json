@@ -1,0 +1,1627 @@
+[
+  {
+    "name": "q-find-fastpath",
+    "kind": "query",
+    "result": {
+      "collection": "posts",
+      "mode": "find",
+      "commands": [
+        {
+          "kind": "find",
+          "collection": "posts",
+          "filter": {
+            "status": "draft"
+          },
+          "projection": {
+            "_id": 1,
+            "title": 1,
+            "status": 1
+          }
+        }
+      ],
+      "postprocess": {
+        "ast": {
+          "model": "Post",
+          "params": {
+            "condition": "@c0"
+          },
+          "fields": [
+            "title",
+            "status"
+          ],
+          "relations": {}
+        },
+        "inject": null
+      },
+      "sort": null
+    }
+  },
+  {
+    "name": "q-find-no-projection",
+    "kind": "query",
+    "result": {
+      "collection": "posts",
+      "mode": "find",
+      "commands": [
+        {
+          "kind": "find",
+          "collection": "posts",
+          "filter": {},
+          "projection": null
+        }
+      ],
+      "postprocess": {
+        "ast": {
+          "model": "Post",
+          "params": {
+            "condition": "@c0"
+          },
+          "fields": [
+            "_id"
+          ],
+          "relations": {}
+        },
+        "inject": null
+      },
+      "sort": null
+    }
+  },
+  {
+    "name": "q-find-no-condition",
+    "kind": "query",
+    "result": {
+      "collection": "posts",
+      "mode": "aggregate",
+      "commands": [
+        {
+          "kind": "aggregate",
+          "collection": "posts",
+          "pipeline": [
+            {
+              "$project": {
+                "_id": 1,
+                "title": 1
+              }
+            }
+          ]
+        }
+      ],
+      "postprocess": {
+        "ast": {
+          "model": "Post",
+          "params": {},
+          "fields": [
+            "title"
+          ],
+          "relations": {}
+        },
+        "inject": null
+      },
+      "sort": null
+    }
+  },
+  {
+    "name": "q-aggregate-relation",
+    "kind": "query",
+    "result": {
+      "collection": "orders",
+      "mode": "aggregate",
+      "commands": [
+        {
+          "kind": "aggregate",
+          "collection": "orders",
+          "pipeline": [
+            {
+              "$match": {
+                "amount": {
+                  "$gt": 0
+                }
+              }
+            },
+            {
+              "$lookup": {
+                "from": "order_items",
+                "let": {
+                  "rel__id": {
+                    "$ifNull": [
+                      "$_id",
+                      null
+                    ]
+                  }
+                },
+                "pipeline": [
+                  {
+                    "$match": {
+                      "$expr": {
+                        "$eq": [
+                          "$orderId",
+                          "$$rel__id"
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "$project": {
+                      "_id": 1,
+                      "sku": 1
+                    }
+                  }
+                ],
+                "as": "items"
+              }
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "code": 1,
+                "items": 1
+              }
+            }
+          ]
+        }
+      ],
+      "postprocess": {
+        "ast": {
+          "model": "Order",
+          "params": {
+            "condition": "@c0"
+          },
+          "fields": [
+            "code"
+          ],
+          "relations": {
+            "items": {
+              "fields": [
+                "sku"
+              ],
+              "relations": {},
+              "params": {}
+            }
+          }
+        },
+        "inject": null
+      },
+      "sort": null
+    }
+  },
+  {
+    "name": "q-two-phase-limit",
+    "kind": "query",
+    "result": {
+      "collection": "orders",
+      "mode": "two_phase",
+      "commands": [
+        {
+          "kind": "aggregate",
+          "collection": "orders",
+          "pipeline": [
+            {
+              "$match": {}
+            },
+            {
+              "$sort": {
+                "createdAt": -1
+              }
+            },
+            {
+              "$skip": 20
+            },
+            {
+              "$limit": 10
+            },
+            {
+              "$project": {
+                "_id": 1
+              }
+            }
+          ]
+        },
+        {
+          "kind": "aggregate",
+          "collection": "orders",
+          "pipeline": [
+            {
+              "$match": {
+                "_id": {
+                  "$in": "{{phase1.ids}}"
+                }
+              }
+            },
+            {
+              "$lookup": {
+                "from": "order_items",
+                "let": {
+                  "rel__id": {
+                    "$ifNull": [
+                      "$_id",
+                      null
+                    ]
+                  }
+                },
+                "pipeline": [
+                  {
+                    "$match": {
+                      "$expr": {
+                        "$eq": [
+                          "$orderId",
+                          "$$rel__id"
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "$project": {
+                      "_id": 1,
+                      "sku": 1
+                    }
+                  }
+                ],
+                "as": "items"
+              }
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "code": 1,
+                "items": 1
+              }
+            }
+          ]
+        }
+      ],
+      "postprocess": {
+        "ast": {
+          "model": "Order",
+          "params": {
+            "condition": "@c0",
+            "sort": "@s0",
+            "skip": "@sk",
+            "limit": "@l"
+          },
+          "fields": [
+            "code"
+          ],
+          "relations": {
+            "items": {
+              "fields": [
+                "sku"
+              ],
+              "relations": {},
+              "params": {}
+            }
+          }
+        },
+        "inject": null
+      },
+      "sort": {
+        "$sort": {
+          "createdAt": -1
+        }
+      }
+    }
+  },
+  {
+    "name": "q-two-phase-sort-by-relation",
+    "kind": "query",
+    "result": {
+      "collection": "orders",
+      "mode": "aggregate",
+      "commands": [
+        {
+          "kind": "aggregate",
+          "collection": "orders",
+          "pipeline": [
+            {
+              "$lookup": {
+                "from": "order_items",
+                "let": {
+                  "rel__id": {
+                    "$ifNull": [
+                      "$_id",
+                      null
+                    ]
+                  }
+                },
+                "pipeline": [
+                  {
+                    "$match": {
+                      "$expr": {
+                        "$eq": [
+                          "$orderId",
+                          "$$rel__id"
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "$project": {
+                      "_id": 1,
+                      "qty": 1
+                    }
+                  }
+                ],
+                "as": "items"
+              }
+            },
+            {
+              "$sort": {
+                "items.qty": -1
+              }
+            },
+            {
+              "$limit": 5
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "code": 1,
+                "items": 1
+              }
+            }
+          ]
+        }
+      ],
+      "postprocess": {
+        "ast": {
+          "model": "Order",
+          "params": {
+            "sort": "@s0",
+            "limit": "@l"
+          },
+          "fields": [
+            "code"
+          ],
+          "relations": {
+            "items": {
+              "fields": [
+                "qty"
+              ],
+              "relations": {},
+              "params": {}
+            }
+          }
+        },
+        "inject": null
+      },
+      "sort": null
+    }
+  },
+  {
+    "name": "q-custom-pipeline",
+    "kind": "query",
+    "result": {
+      "collection": "posts",
+      "mode": "custom_pipeline",
+      "commands": [
+        {
+          "kind": "aggregate",
+          "collection": "posts",
+          "pipeline": [
+            {
+              "$match": {
+                "status": "y"
+              }
+            },
+            {
+              "$sort": {
+                "title": 1
+              }
+            },
+            {
+              "$limit": 3
+            }
+          ]
+        }
+      ],
+      "postprocess": null,
+      "sort": null
+    }
+  },
+  {
+    "name": "q-owner-inject",
+    "kind": "query",
+    "result": {
+      "collection": "posts",
+      "mode": "find",
+      "commands": [
+        {
+          "kind": "find",
+          "collection": "posts",
+          "filter": {
+            "$and": [
+              {
+                "status": "draft"
+              },
+              {
+                "createdBy": "u1"
+              }
+            ]
+          },
+          "projection": {
+            "_id": 1,
+            "title": 1
+          }
+        }
+      ],
+      "postprocess": {
+        "ast": {
+          "model": "Post",
+          "params": {
+            "condition": "@c0"
+          },
+          "fields": [
+            "title"
+          ],
+          "relations": {}
+        },
+        "inject": null
+      },
+      "sort": null
+    }
+  },
+  {
+    "name": "q-permission-denied",
+    "kind": "query",
+    "error": true
+  },
+  {
+    "name": "qwc-skip-limit",
+    "kind": "query_with_count",
+    "result": {
+      "collection": "posts",
+      "mode": "aggregate",
+      "commands": [
+        {
+          "kind": "aggregate",
+          "collection": "posts",
+          "pipeline": [
+            {
+              "$match": {
+                "status": "draft"
+              }
+            },
+            {
+              "$sort": {
+                "title": 1
+              }
+            },
+            {
+              "$skip": 0
+            },
+            {
+              "$limit": 10
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "title": 1
+              }
+            }
+          ]
+        }
+      ],
+      "postprocess": {
+        "ast": {
+          "model": "Post",
+          "params": {
+            "condition": "@c0",
+            "sort": "@s0",
+            "skip": "@sk",
+            "limit": "@l"
+          },
+          "fields": [
+            "title"
+          ],
+          "relations": {}
+        },
+        "inject": null
+      },
+      "sort": null,
+      "countCommand": {
+        "kind": "countDocuments",
+        "collection": "posts",
+        "filter": {
+          "status": "draft"
+        }
+      },
+      "page": 0,
+      "pageSize": 10,
+      "hasMore": true
+    }
+  },
+  {
+    "name": "qwc-page-pagesize-cap",
+    "kind": "query_with_count",
+    "result": {
+      "collection": "posts",
+      "mode": "aggregate",
+      "commands": [
+        {
+          "kind": "aggregate",
+          "collection": "posts",
+          "pipeline": [
+            {
+              "$match": {}
+            },
+            {
+              "$skip": 5000
+            },
+            {
+              "$limit": 5000
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "title": 1
+              }
+            }
+          ]
+        }
+      ],
+      "postprocess": {
+        "ast": {
+          "model": "Post",
+          "params": {
+            "condition": "@c0",
+            "skip": "@sk",
+            "limit": "@l"
+          },
+          "fields": [
+            "title"
+          ],
+          "relations": {}
+        },
+        "inject": null
+      },
+      "sort": null,
+      "countCommand": {
+        "kind": "countDocuments",
+        "collection": "posts",
+        "filter": {}
+      },
+      "page": 1,
+      "pageSize": 5000,
+      "hasMore": false
+    }
+  },
+  {
+    "name": "qwc-two-phase",
+    "kind": "query_with_count",
+    "result": {
+      "collection": "orders",
+      "mode": "two_phase",
+      "commands": [
+        {
+          "kind": "aggregate",
+          "collection": "orders",
+          "pipeline": [
+            {
+              "$match": {}
+            },
+            {
+              "$sort": {
+                "createdAt": 1
+              }
+            },
+            {
+              "$skip": 10
+            },
+            {
+              "$limit": 5
+            },
+            {
+              "$project": {
+                "_id": 1
+              }
+            }
+          ]
+        },
+        {
+          "kind": "aggregate",
+          "collection": "orders",
+          "pipeline": [
+            {
+              "$match": {
+                "_id": {
+                  "$in": "{{phase1.ids}}"
+                }
+              }
+            },
+            {
+              "$lookup": {
+                "from": "order_items",
+                "let": {
+                  "rel__id": {
+                    "$ifNull": [
+                      "$_id",
+                      null
+                    ]
+                  }
+                },
+                "pipeline": [
+                  {
+                    "$match": {
+                      "$expr": {
+                        "$eq": [
+                          "$orderId",
+                          "$$rel__id"
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "$project": {
+                      "_id": 1,
+                      "sku": 1
+                    }
+                  }
+                ],
+                "as": "items"
+              }
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "code": 1,
+                "items": 1
+              }
+            }
+          ]
+        }
+      ],
+      "postprocess": {
+        "ast": {
+          "model": "Order",
+          "params": {
+            "condition": "@c0",
+            "sort": "@s0",
+            "skip": "@sk",
+            "limit": "@l"
+          },
+          "fields": [
+            "code"
+          ],
+          "relations": {
+            "items": {
+              "fields": [
+                "sku"
+              ],
+              "relations": {},
+              "params": {}
+            }
+          }
+        },
+        "inject": null
+      },
+      "sort": {
+        "$sort": {
+          "createdAt": 1
+        }
+      },
+      "countCommand": {
+        "kind": "countDocuments",
+        "collection": "orders",
+        "filter": {}
+      },
+      "page": 2,
+      "pageSize": 5,
+      "hasMore": false
+    }
+  },
+  {
+    "name": "page-from-skip-limit",
+    "kind": "resolve_page",
+    "result": {
+      "page": 2,
+      "pageSize": 10
+    }
+  },
+  {
+    "name": "page-from-skip-limit-uneven",
+    "kind": "resolve_page",
+    "result": {
+      "page": 2,
+      "pageSize": 10
+    }
+  },
+  {
+    "name": "page-explicit-cap",
+    "kind": "resolve_page",
+    "result": {
+      "page": 3,
+      "pageSize": 5000
+    }
+  },
+  {
+    "name": "page-negative-and-string",
+    "kind": "resolve_page",
+    "result": {
+      "page": 0,
+      "pageSize": 25
+    }
+  },
+  {
+    "name": "page-defaults",
+    "kind": "resolve_page",
+    "result": {
+      "page": 0,
+      "pageSize": 50
+    }
+  },
+  {
+    "name": "restore-order-basic",
+    "kind": "restore_sort_order",
+    "result": {
+      "items": [
+        {
+          "_id": "1",
+          "v": "a"
+        },
+        {
+          "_id": "2",
+          "v": "b"
+        },
+        {
+          "_id": "3",
+          "v": "c"
+        }
+      ]
+    }
+  },
+  {
+    "name": "restore-order-missing-id-last",
+    "kind": "restore_sort_order",
+    "result": {
+      "items": [
+        {
+          "_id": "1",
+          "v": "a"
+        },
+        {
+          "_id": "2",
+          "v": "b"
+        },
+        {
+          "_id": "9",
+          "v": "x"
+        }
+      ]
+    }
+  },
+  {
+    "name": "restore-order-no-sort",
+    "kind": "restore_sort_order",
+    "result": {
+      "items": [
+        {
+          "_id": "2",
+          "v": "b"
+        },
+        {
+          "_id": "1",
+          "v": "a"
+        }
+      ]
+    }
+  },
+  {
+    "name": "ins-basic",
+    "kind": "insert",
+    "result": {
+      "command": {
+        "kind": "insertOne",
+        "collection": "posts",
+        "doc": {
+          "title": "hello",
+          "_id": "PLOYW3V28AAAA",
+          "createdAt": 1700000000000,
+          "updatedAt": 1700000000000
+        }
+      },
+      "returns": {
+        "title": "hello",
+        "_id": "PLOYW3V28AAAA",
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000,
+        "views": 0
+      },
+      "newId": "PLOYW3V28AAAA"
+    }
+  },
+  {
+    "name": "ins-existing-id-and-null-stripped",
+    "kind": "insert",
+    "result": {
+      "command": {
+        "kind": "insertOne",
+        "collection": "posts",
+        "doc": {
+          "_id": "P-CUSTOM",
+          "title": "x",
+          "createdAt": 1700000000000,
+          "updatedAt": 1700000000000
+        }
+      },
+      "returns": {
+        "_id": "P-CUSTOM",
+        "title": "x",
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000,
+        "views": 0
+      },
+      "newId": "P-CUSTOM"
+    }
+  },
+  {
+    "name": "ins-creator-and-write-filter",
+    "kind": "insert",
+    "result": {
+      "command": {
+        "kind": "insertOne",
+        "collection": "posts",
+        "doc": {
+          "title": "t",
+          "_id": "PLOYW3V28AAAA",
+          "createdBy": "u1",
+          "createdAt": 1700000000000,
+          "updatedAt": 1700000000000
+        }
+      },
+      "returns": {
+        "title": "t",
+        "_id": "PLOYW3V28AAAA",
+        "createdBy": "u1",
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000,
+        "secret": ""
+      },
+      "newId": "PLOYW3V28AAAA"
+    }
+  },
+  {
+    "name": "ins-no-write-permission",
+    "kind": "insert",
+    "error": true
+  },
+  {
+    "name": "exists-basic",
+    "kind": "exists",
+    "result": {
+      "command": {
+        "kind": "findOne",
+        "collection": "posts",
+        "filter": {
+          "title": "a"
+        },
+        "projection": {
+          "_id": 1
+        }
+      },
+      "found": true,
+      "collections": [
+        "posts"
+      ]
+    }
+  },
+  {
+    "name": "count-null-filter",
+    "kind": "count",
+    "result": {
+      "command": {
+        "kind": "countDocuments",
+        "collection": "posts",
+        "filter": {}
+      }
+    }
+  },
+  {
+    "name": "count-with-filter",
+    "kind": "count",
+    "result": {
+      "command": {
+        "kind": "countDocuments",
+        "collection": "posts",
+        "filter": {
+          "status": "draft"
+        }
+      }
+    }
+  },
+  {
+    "name": "agg-raw-pipeline",
+    "kind": "aggregate",
+    "result": {
+      "command": {
+        "kind": "aggregate",
+        "collection": "posts",
+        "pipeline": [
+          {
+            "$match": {
+              "status": "draft"
+            }
+          },
+          {
+            "$group": {
+              "_id": "$title",
+              "n": {
+                "$sum": 1
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "im-basic",
+    "kind": "insert_many",
+    "result": {
+      "command": {
+        "kind": "insertMany",
+        "collection": "posts",
+        "docs": [
+          {
+            "title": "a",
+            "_id": "PLOYW3V28AAAA",
+            "createdAt": 1700000000000,
+            "updatedAt": 1700000000000
+          },
+          {
+            "title": "b",
+            "_id": "PLOYW3V28AAAA",
+            "createdAt": 1700000000000,
+            "updatedAt": 1700000000000
+          }
+        ]
+      },
+      "returns": [
+        {
+          "title": "a",
+          "_id": "PLOYW3V28AAAA",
+          "createdAt": 1700000000000,
+          "updatedAt": 1700000000000,
+          "views": 0
+        },
+        {
+          "title": "b",
+          "_id": "PLOYW3V28AAAA",
+          "createdAt": 1700000000000,
+          "updatedAt": 1700000000000,
+          "views": 0
+        }
+      ]
+    }
+  },
+  {
+    "name": "im-explicit-id-and-null",
+    "kind": "insert_many",
+    "result": {
+      "command": {
+        "kind": "insertMany",
+        "collection": "posts",
+        "docs": [
+          {
+            "_id": "P1",
+            "title": "a",
+            "createdAt": 1700000000000,
+            "updatedAt": 1700000000000
+          },
+          {
+            "title": "b",
+            "_id": "PLOYW3V28AAAA",
+            "createdAt": 1700000000000,
+            "updatedAt": 1700000000000
+          }
+        ]
+      },
+      "returns": [
+        {
+          "_id": "P1",
+          "title": "a",
+          "createdAt": 1700000000000,
+          "updatedAt": 1700000000000,
+          "views": 0
+        },
+        {
+          "title": "b",
+          "_id": "PLOYW3V28AAAA",
+          "createdAt": 1700000000000,
+          "updatedAt": 1700000000000,
+          "views": 0
+        }
+      ]
+    }
+  },
+  {
+    "name": "im-empty",
+    "kind": "insert_many",
+    "result": {
+      "command": null,
+      "returns": []
+    }
+  },
+  {
+    "name": "im-denied",
+    "kind": "insert_many",
+    "error": true
+  },
+  {
+    "name": "upd-set",
+    "kind": "update",
+    "result": {
+      "commands": [
+        {
+          "kind": "findOneAndUpdate",
+          "collection": "posts",
+          "filter": {
+            "_id": "p1"
+          },
+          "update": {
+            "$set": {
+              "views": 5,
+              "updatedAt": 1700000000000
+            }
+          },
+          "options": {
+            "returnDocument": "after"
+          }
+        }
+      ],
+      "returns": {
+        "_id": "p1",
+        "title": "a",
+        "views": 5,
+        "createdAt": 1,
+        "updatedAt": 1700000000000
+      }
+    }
+  },
+  {
+    "name": "upd-raw-operators",
+    "kind": "update",
+    "result": {
+      "commands": [
+        {
+          "kind": "findOneAndUpdate",
+          "collection": "posts",
+          "filter": {
+            "_id": "p1"
+          },
+          "update": {
+            "$inc": {
+              "views": 1
+            },
+            "$set": {
+              "updatedAt": 1700000000000
+            }
+          },
+          "options": {
+            "returnDocument": "after"
+          }
+        }
+      ],
+      "returns": {
+        "_id": "p1",
+        "title": "a",
+        "views": 6,
+        "createdAt": 1,
+        "updatedAt": 1700000000000
+      }
+    }
+  },
+  {
+    "name": "upd-empty-set",
+    "kind": "update",
+    "error": true
+  },
+  {
+    "name": "upd-creator-schema-pass",
+    "kind": "update",
+    "result": {
+      "commands": [
+        {
+          "kind": "findOneAndUpdate",
+          "collection": "posts_w",
+          "filter": {
+            "_id": "p1"
+          },
+          "update": {
+            "$set": {
+              "title": "new"
+            }
+          },
+          "options": {
+            "returnDocument": "after"
+          }
+        }
+      ],
+      "returns": {
+        "_id": "p1",
+        "title": "new",
+        "createdBy": "u1",
+        "views": 0
+      }
+    }
+  },
+  {
+    "name": "upd-guest",
+    "kind": "update",
+    "error": true
+  },
+  {
+    "name": "upd-with-options",
+    "kind": "update",
+    "result": {
+      "commands": [
+        {
+          "kind": "findOneAndUpdate",
+          "collection": "posts",
+          "filter": {
+            "code": "c1"
+          },
+          "update": {
+            "$set": {
+              "views": 2,
+              "updatedAt": 1700000000000
+            }
+          },
+          "options": {
+            "returnDocument": "after",
+            "upsert": true
+          }
+        }
+      ],
+      "returns": null
+    }
+  },
+  {
+    "name": "updm-basic",
+    "kind": "update_many",
+    "result": {
+      "command": {
+        "kind": "updateMany",
+        "collection": "posts",
+        "filter": {
+          "title": "a"
+        },
+        "update": {
+          "$set": {
+            "views": 1,
+            "updatedAt": 1700000000000
+          }
+        }
+      },
+      "returns": {
+        "modifiedCount": 3
+      }
+    }
+  },
+  {
+    "name": "updm-guest",
+    "kind": "update_many",
+    "error": true
+  },
+  {
+    "name": "rm-archive",
+    "kind": "remove",
+    "result": {
+      "commands": [
+        {
+          "kind": "find",
+          "collection": "posts",
+          "filter": {
+            "_id": "p1"
+          },
+          "projection": null
+        },
+        {
+          "kind": "insertMany",
+          "collection": "posts_deleted",
+          "docs": [
+            {
+              "_id": "p1",
+              "title": "a",
+              "createdAt": 5,
+              "updatedAt": 5,
+              "deletedAt": 1700000000000
+            }
+          ]
+        },
+        {
+          "kind": "deleteMany",
+          "collection": "posts",
+          "filter": {
+            "_id": "p1"
+          }
+        }
+      ],
+      "returns": {
+        "deletedCount": 1,
+        "archivedCount": 1
+      }
+    }
+  },
+  {
+    "name": "rm-no-match",
+    "kind": "remove",
+    "result": {
+      "commands": [
+        {
+          "kind": "find",
+          "collection": "posts",
+          "filter": {
+            "_id": "pX"
+          },
+          "projection": null
+        },
+        {
+          "kind": "deleteMany",
+          "collection": "posts",
+          "filter": {
+            "_id": "pX"
+          }
+        }
+      ],
+      "returns": {
+        "deletedCount": 0,
+        "archivedCount": 0
+      }
+    }
+  },
+  {
+    "name": "rm-creator-schema-pass",
+    "kind": "remove",
+    "result": {
+      "commands": [
+        {
+          "kind": "find",
+          "collection": "posts_w",
+          "filter": {
+            "_id": "p1"
+          },
+          "projection": null
+        },
+        {
+          "kind": "deleteMany",
+          "collection": "posts_w",
+          "filter": {
+            "_id": "p1"
+          }
+        }
+      ],
+      "returns": {
+        "deletedCount": 1,
+        "archivedCount": 0
+      }
+    }
+  },
+  {
+    "name": "rm-guest",
+    "kind": "remove",
+    "error": true
+  },
+  {
+    "name": "ups-new-id",
+    "kind": "upsert",
+    "result": {
+      "command": {
+        "kind": "findOneAndUpdate",
+        "collection": "posts",
+        "filter": {
+          "code": "c1"
+        },
+        "update": {
+          "$set": {
+            "code": "c1",
+            "views": 1,
+            "updatedAt": 1700000000000
+          },
+          "$setOnInsert": {
+            "_id": "PLOYW3V28AAAA",
+            "createdAt": 1700000000000
+          }
+        },
+        "options": {
+          "upsert": true,
+          "returnDocument": "after"
+        }
+      },
+      "returns": {
+        "_id": "PLOYW3V28AAAA",
+        "code": "c1",
+        "views": 1,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000,
+        "title": ""
+      }
+    }
+  },
+  {
+    "name": "ups-return-before",
+    "kind": "upsert",
+    "result": {
+      "command": {
+        "kind": "findOneAndUpdate",
+        "collection": "posts",
+        "filter": {
+          "code": "c1"
+        },
+        "update": {
+          "$set": {
+            "views": 1,
+            "updatedAt": 1700000000000
+          },
+          "$setOnInsert": {
+            "_id": "PLOYW3V28AAAA",
+            "createdAt": 1700000000000
+          }
+        },
+        "options": {
+          "upsert": true,
+          "returnDocument": "before"
+        }
+      },
+      "returns": {
+        "_id": "p1",
+        "code": "c1",
+        "views": 0,
+        "createdAt": 1,
+        "updatedAt": 1
+      }
+    }
+  },
+  {
+    "name": "ups-explicit-id",
+    "kind": "upsert",
+    "result": {
+      "command": {
+        "kind": "findOneAndUpdate",
+        "collection": "posts",
+        "filter": {
+          "code": "c1"
+        },
+        "update": {
+          "$set": {
+            "code": "c1",
+            "title": "x",
+            "updatedAt": 1700000000000
+          },
+          "$setOnInsert": {
+            "_id": "P-EXIST",
+            "createdAt": 1700000000000
+          }
+        },
+        "options": {
+          "upsert": true,
+          "returnDocument": "after"
+        }
+      },
+      "returns": {
+        "_id": "P-EXIST",
+        "code": "c1",
+        "title": "x",
+        "createdAt": 1,
+        "updatedAt": 1700000000000
+      }
+    }
+  },
+  {
+    "name": "ups-denied",
+    "kind": "upsert",
+    "error": true
+  },
+  {
+    "name": "mut-insert",
+    "kind": "mutation",
+    "result": {
+      "commands": [
+        {
+          "kind": "insertOne",
+          "collection": "posts",
+          "doc": {
+            "title": "x",
+            "_id": "PLOYW3V28AAAA",
+            "createdAt": 1700000000000,
+            "updatedAt": 1700000000000
+          }
+        }
+      ],
+      "returns": {
+        "title": "x",
+        "_id": "PLOYW3V28AAAA",
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000,
+        "views": 0
+      }
+    }
+  },
+  {
+    "name": "mut-upsert-unique",
+    "kind": "mutation",
+    "result": {
+      "commands": [
+        {
+          "kind": "findOneAndUpdate",
+          "collection": "posts",
+          "filter": {
+            "$or": [
+              {
+                "code": "c1"
+              }
+            ]
+          },
+          "update": {
+            "$set": {
+              "code": "c1",
+              "title": "x",
+              "updatedAt": 1700000000000
+            },
+            "$setOnInsert": {
+              "_id": "PLOYW3V28AAAA",
+              "createdAt": 1700000000000
+            }
+          },
+          "options": {
+            "upsert": true,
+            "returnDocument": "after"
+          }
+        }
+      ],
+      "returns": {
+        "_id": "p1",
+        "code": "c1",
+        "title": "x",
+        "createdAt": 1,
+        "updatedAt": 1,
+        "views": 0
+      }
+    }
+  },
+  {
+    "name": "mut-with-children",
+    "kind": "mutation",
+    "result": {
+      "commands": [
+        {
+          "kind": "insertOne",
+          "collection": "orders",
+          "doc": {
+            "code": "c1",
+            "_id": "OLOYW3V28AAAA",
+            "createdAt": 1700000000000,
+            "updatedAt": 1700000000000
+          }
+        },
+        {
+          "kind": "insertOne",
+          "collection": "order_items",
+          "doc": {
+            "sku": "s1",
+            "orderId": "OLOYW3V28AAAA",
+            "_id": "OILOYW3V28AAAA",
+            "createdAt": 1700000000000,
+            "updatedAt": 1700000000000
+          }
+        },
+        {
+          "kind": "insertOne",
+          "collection": "order_items",
+          "doc": {
+            "sku": "s2",
+            "orderId": "OLOYW3V28AAAA",
+            "_id": "OILOYW3V28AAAA",
+            "createdAt": 1700000000000,
+            "updatedAt": 1700000000000
+          }
+        }
+      ],
+      "returns": {
+        "code": "c1",
+        "_id": "OLOYW3V28AAAA",
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    }
+  },
+  {
+    "name": "mut-one-child",
+    "kind": "mutation",
+    "result": {
+      "commands": [
+        {
+          "kind": "insertOne",
+          "collection": "orders2",
+          "doc": {
+            "code": "c1",
+            "_id": "OLOYW3V28AAAA",
+            "createdAt": 1700000000000,
+            "updatedAt": 1700000000000
+          }
+        },
+        {
+          "kind": "findOneAndUpdate",
+          "collection": "receipts",
+          "filter": {
+            "orderId": "OLOYW3V28AAAA"
+          },
+          "update": {
+            "$set": {
+              "amount": 9,
+              "orderId": "OLOYW3V28AAAA",
+              "updatedAt": 1700000000000
+            },
+            "$setOnInsert": {
+              "_id": "RLOYW3V28AAAA",
+              "createdAt": 1700000000000
+            }
+          },
+          "options": {
+            "upsert": true,
+            "returnDocument": "after"
+          }
+        }
+      ],
+      "returns": {
+        "code": "c1",
+        "_id": "OLOYW3V28AAAA",
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    }
+  },
+  {
+    "name": "mut-many-child-upsert",
+    "kind": "mutation",
+    "result": {
+      "commands": [
+        {
+          "kind": "insertOne",
+          "collection": "orders3",
+          "doc": {
+            "code": "c1",
+            "_id": "OLOYW3V28AAAA",
+            "createdAt": 1700000000000,
+            "updatedAt": 1700000000000
+          }
+        },
+        {
+          "kind": "findOneAndUpdate",
+          "collection": "order_items_idx",
+          "filter": {
+            "$or": [
+              {
+                "sku": "s1"
+              }
+            ]
+          },
+          "update": {
+            "$set": {
+              "sku": "s1",
+              "orderId": "OLOYW3V28AAAA",
+              "updatedAt": 1700000000000
+            },
+            "$setOnInsert": {
+              "_id": "OILOYW3V28AAAA",
+              "createdAt": 1700000000000
+            }
+          },
+          "options": {
+            "upsert": true,
+            "returnDocument": "after"
+          }
+        }
+      ],
+      "returns": {
+        "code": "c1",
+        "_id": "OLOYW3V28AAAA",
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    }
+  },
+  {
+    "name": "mut-denied",
+    "kind": "mutation",
+    "error": true
+  }
+]

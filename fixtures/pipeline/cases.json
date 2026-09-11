@@ -1,0 +1,251 @@
+[
+  {
+    "name": "parse-basic",
+    "schemas": [
+      {
+        "name": "M", "collection": "m", "timestamps": false,
+        "fields": { "a": { "type": "string" } },
+        "relations": { "Row": { "model": "Row", "type": "many", "localField": "_id", "foreignField": "mId" } }
+      },
+      {
+        "name": "Row", "collection": "row", "timestamps": false,
+        "fields": { "b": { "type": "string" }, "c": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "M($condition:@c0,$sort:@s1){a, Row{b, c}}",
+    "params": { "c0": { "a": "x" }, "s1": { "a": -1 } },
+    "context": null
+  },
+  {
+    "name": "parse-rel-params",
+    "schemas": [
+      {
+        "name": "M", "collection": "m", "timestamps": false,
+        "fields": { "a": { "type": "string" } },
+        "relations": { "Row": { "model": "Row", "type": "many", "localField": "_id", "foreignField": "mId" } }
+      },
+      {
+        "name": "Row", "collection": "row", "timestamps": false,
+        "fields": { "b": { "type": "string" }, "c": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "M{a, Row($sort:@s0,$limit:@l0)}",
+    "params": { "s0": { "b": 1 }, "l0": 5 },
+    "context": null
+  },
+  {
+    "name": "build-root",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "timestamps": true,
+        "fields": {
+          "title": { "type": "string" },
+          "status": { "type": "string", "default": "draft" },
+          "views": { "type": "int" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Post($condition:@c0,$sort:@s1,$skip:@sk,$limit:@l){title, status, views}",
+    "params": { "c0": { "status": "draft" }, "s1": { "createdAt": -1 }, "sk": 0, "l": 20 },
+    "context": null
+  },
+  {
+    "name": "relation-many",
+    "schemas": [
+      {
+        "name": "Order", "collection": "orders", "timestamps": true,
+        "fields": { "code": { "type": "string" }, "amount": { "type": "float" } },
+        "relations": { "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" } }
+      },
+      {
+        "name": "OrderItem", "collection": "order_items", "timestamps": true,
+        "fields": { "orderId": { "type": "string" }, "sku": { "type": "string" }, "qty": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Order($condition:@c0,$limit:@l){code, amount, items{sku, qty}}",
+    "params": { "c0": { "amount": { "$gt": 0 } }, "l": 10 },
+    "context": null
+  },
+  {
+    "name": "relation-one",
+    "schemas": [
+      {
+        "name": "Parent", "collection": "parents", "timestamps": false,
+        "fields": { "name": { "type": "string" } },
+        "relations": { "child": { "model": "Child", "type": "one", "localField": "_id", "foreignField": "parentId" } }
+      },
+      {
+        "name": "Child", "collection": "children", "timestamps": false,
+        "fields": { "parentId": { "type": "string" }, "nick": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Parent{name, child{nick}}",
+    "params": {},
+    "context": null
+  },
+  {
+    "name": "array-local-field",
+    "schemas": [
+      {
+        "name": "Tag", "collection": "tags", "timestamps": false,
+        "fields": { "name": { "type": "string" } },
+        "relations": {}
+      },
+      {
+        "name": "Article", "collection": "articles", "timestamps": false,
+        "fields": { "title": { "type": "string" }, "tagIds": { "type": "array" } },
+        "relations": { "tags": { "model": "Tag", "type": "many", "localField": "tagIds", "foreignField": "_id" } }
+      }
+    ],
+    "gql": "Article{title, tagIds, tags{name}}",
+    "params": {},
+    "context": null
+  },
+  {
+    "name": "nested-two-levels",
+    "schemas": [
+      {
+        "name": "A", "collection": "a", "timestamps": false,
+        "fields": { "n": { "type": "string" } },
+        "relations": { "bs": { "model": "B", "type": "many", "localField": "_id", "foreignField": "aId" } }
+      },
+      {
+        "name": "B", "collection": "b", "timestamps": false,
+        "fields": { "aId": { "type": "string" }, "n": { "type": "string" } },
+        "relations": { "cs": { "model": "C", "type": "many", "localField": "_id", "foreignField": "bId" } }
+      },
+      {
+        "name": "C", "collection": "c", "timestamps": false,
+        "fields": { "bId": { "type": "string" }, "n": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "A{n, bs{n, cs{n}}}",
+    "params": {},
+    "context": null
+  },
+  {
+    "name": "object-flatten",
+    "schemas": [
+      {
+        "name": "Doc", "collection": "docs", "timestamps": false,
+        "fields": {
+          "title": { "type": "string" },
+          "meta": { "type": "object", "fields": { "x": { "type": "string" }, "y": { "type": "string" } } }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Doc{title, meta{x, y}}",
+    "params": {},
+    "context": null
+  },
+  {
+    "name": "compute-lookup",
+    "schemas": [
+      {
+        "name": "Shop", "collection": "shops", "timestamps": false,
+        "fields": { "name": { "type": "string" } },
+        "computes": {
+          "orderCount": {
+            "type": "int",
+            "lookup": {
+              "from": "orders",
+              "let": { "sid": "$_id" },
+              "pipeline": [{ "$match": { "$expr": { "$eq": ["$shopId", "$$sid"] } } }],
+              "as": "_orders"
+            },
+            "addFields": { "$size": { "$ifNull": ["$_orders", []] } }
+          },
+          "label": { "type": "string", "lookup": { "$concat": ["$name", "!"] } }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Shop{name, orderCount, label}",
+    "params": {},
+    "context": null
+  },
+  {
+    "name": "custom-pipeline",
+    "schemas": [
+      { "name": "X", "collection": "xs", "timestamps": false, "fields": { "a": { "type": "int" } }, "relations": {} }
+    ],
+    "gql": "X($pipeline:@p,$sort:@s,$limit:@l){a}",
+    "params": {
+      "p": [{ "$match": { "a": { "$gt": 1 } } }, { "$group": { "_id": null, "n": { "$sum": 1 } } }],
+      "s": { "a": 1 },
+      "l": 3
+    },
+    "context": null
+  },
+  {
+    "name": "permission-prune",
+    "schemas": [
+      {
+        "name": "Secret", "collection": "secrets", "timestamps": false,
+        "fields": {
+          "title": { "type": "string" },
+          "ownerOnly": { "type": "string", "read": ["admin"] },
+          "public": { "type": "string" }
+        },
+        "relations": {},
+        "read": ["admin", "creator", "editor"]
+      }
+    ],
+    "gql": "Secret{title, ownerOnly, public}",
+    "params": {},
+    "context": { "userId": "u1", "roles": ["editor"] }
+  },
+  {
+    "name": "compute-depends",
+    "schemas": [
+      {
+        "name": "Inv", "collection": "invs", "timestamps": false,
+        "fields": { "qty": { "type": "int" }, "price": { "type": "float" }, "note": { "type": "string" } },
+        "computes": { "total": { "type": "float", "fn": true, "depends": ["qty", "price"] } },
+        "relations": {}
+      }
+    ],
+    "gql": "Inv{note, total}",
+    "params": {},
+    "context": null
+  },
+  {
+    "name": "rel-projection-depends",
+    "schemas": [
+      {
+        "name": "Cart", "collection": "carts", "timestamps": false,
+        "fields": { "n": { "type": "string" } },
+        "relations": { "lines": { "model": "Line", "type": "many", "localField": "_id", "foreignField": "cartId" } }
+      },
+      {
+        "name": "Line", "collection": "lines", "timestamps": false,
+        "fields": {
+          "cartId": { "type": "string" }, "sku": { "type": "string" },
+          "qty": { "type": "int" }, "price": { "type": "float" }
+        },
+        "computes": { "subtotal": { "type": "float", "fn": true, "depends": ["qty", "price"] } },
+        "relations": {}
+      }
+    ],
+    "gql": "Cart{n, lines{sku, subtotal}}",
+    "params": {},
+    "context": null
+  },
+  {
+    "name": "error-unclosed",
+    "schemas": [
+      { "name": "M", "collection": "m", "timestamps": false, "fields": { "a": { "type": "string" } }, "relations": {} }
+    ],
+    "gql": "M{$condition:",
+    "params": {},
+    "context": null,
+    "expect_error": true
+  }
+]

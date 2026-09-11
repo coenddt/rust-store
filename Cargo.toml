@@ -1,0 +1,16 @@
+# mongo-store-rust —— Rust 单核心 + 双绑定 workspace
+#
+# 成员：
+#   core/       mongo-store-core  语言无关核心（GQL/权限/计算列/命令规划，纯逻辑无 IO）
+#   core-node/  mongo-store-node  Node 绑定（napi-rs，产出 dist/mongo-store-node.node）
+#   core-py/    mongo-store-py    Python 绑定（PyO3，产出 dist/mongo_store_py.pyd）
+#
+# workspace 统一使用根目录 target/ 与根 Cargo.lock（成员级 Cargo.lock 已移除）。
+
+[workspace]
+resolver = "2"
+members = [
+    "core",
+    "core-node",
+    "core-py",
+]

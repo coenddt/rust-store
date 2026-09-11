@@ -1,0 +1,468 @@
+[
+  {
+    "name": "pn-defaults-basic",
+    "kind": "process_node",
+    "_id": "1",
+    "title": "a",
+    "views": 0,
+    "status": "draft",
+    "active": false,
+    "tags": []
+  },
+  {
+    "name": "pn-null-filled",
+    "kind": "process_node",
+    "_id": "1",
+    "title": "",
+    "views": 5
+  },
+  {
+    "name": "pn-nested-object-defaults",
+    "kind": "process_node",
+    "_id": "1",
+    "profile": {
+      "nick": "",
+      "zip": "000000"
+    }
+  },
+  {
+    "name": "pn-dot-prune",
+    "kind": "process_node",
+    "_id": "1",
+    "profile": {
+      "nick": "n"
+    }
+  },
+  {
+    "name": "pn-relation-many",
+    "kind": "process_node",
+    "_id": "p1",
+    "title": "t",
+    "comments": [
+      {
+        "_id": "c1",
+        "text": "a"
+      },
+      {
+        "_id": "c2",
+        "text": ""
+      }
+    ]
+  },
+  {
+    "name": "pn-relation-one",
+    "kind": "process_node",
+    "_id": "p1",
+    "title": "t",
+    "author": {
+      "_id": "u1",
+      "name": "n"
+    }
+  },
+  {
+    "name": "pn-perm-unreadable-field",
+    "kind": "process_node",
+    "_id": "1",
+    "title": "t",
+    "public": "p"
+  },
+  {
+    "name": "pn-owner-read-pass",
+    "kind": "process_node",
+    "_id": "1",
+    "title": "t",
+    "mine": "m"
+  },
+  {
+    "name": "pn-owner-read-fail",
+    "kind": "process_node",
+    "_id": "1",
+    "title": "t"
+  },
+  {
+    "name": "pn-perm-relation-prune",
+    "kind": "process_node",
+    "_id": "1",
+    "title": "t",
+    "reviewer": {
+      "_id": "u1",
+      "name": "n"
+    }
+  },
+  {
+    "name": "pn-no-ctx-keeps-all",
+    "kind": "process_node",
+    "_id": "1",
+    "title": "t",
+    "comments": [
+      {
+        "_id": "c1",
+        "text": "a"
+      }
+    ]
+  },
+  {
+    "name": "pn-asyncfn-noop",
+    "kind": "process_node",
+    "_id": "1",
+    "title": "t"
+  },
+  {
+    "name": "dep-inject-new-relation",
+    "kind": "inject_depends",
+    "relDeps": [
+      {
+        "name": "comments",
+        "fields": [
+          "text",
+          "stars"
+        ]
+      },
+      {
+        "name": "author",
+        "fields": []
+      }
+    ],
+    "ast": {
+      "model": "Post",
+      "params": {},
+      "fields": [
+        "title"
+      ],
+      "relations": {
+        "comments": {
+          "fields": [
+            "text",
+            "stars"
+          ],
+          "relations": {},
+          "params": {}
+        },
+        "author": {
+          "fields": [],
+          "relations": {},
+          "params": {}
+        }
+      }
+    },
+    "injectInfo": {
+      "relations": {
+        "comments": "__all__",
+        "author": "__all__"
+      }
+    },
+    "stripped": [
+      {
+        "_id": "p1",
+        "title": "t",
+        "tags": [
+          {
+            "_id": "t1",
+            "label": "l"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "dep-inject-existing-relation",
+    "kind": "inject_depends",
+    "relDeps": [
+      {
+        "name": "comments",
+        "fields": [
+          "text",
+          "stars"
+        ]
+      },
+      {
+        "name": "author",
+        "fields": [
+          "age"
+        ]
+      },
+      {
+        "name": "tags",
+        "fields": [
+          "label"
+        ]
+      }
+    ],
+    "ast": {
+      "model": "Post",
+      "params": {},
+      "fields": [
+        "title"
+      ],
+      "relations": {
+        "comments": {
+          "fields": [
+            "stars",
+            "text"
+          ],
+          "relations": {},
+          "params": {}
+        },
+        "author": {
+          "fields": [
+            "name",
+            "age"
+          ],
+          "relations": {},
+          "params": {}
+        },
+        "tags": {
+          "fields": [
+            "label"
+          ],
+          "relations": {},
+          "params": {}
+        }
+      }
+    },
+    "injectInfo": {
+      "relations": {
+        "comments": [
+          "text"
+        ],
+        "tags": "__all__"
+      }
+    },
+    "stripped": [
+      {
+        "_id": "p1",
+        "title": "t",
+        "comments": [
+          {
+            "_id": "c1",
+            "stars": 1,
+            "extra": 9
+          }
+        ],
+        "author": {
+          "_id": "u1",
+          "name": "n",
+          "age": 3
+        }
+      }
+    ]
+  },
+  {
+    "name": "dep-no-asyncfn",
+    "kind": "inject_depends",
+    "relDeps": [],
+    "ast": {
+      "model": "Post",
+      "params": {},
+      "fields": [
+        "title"
+      ],
+      "relations": {
+        "comments": {
+          "fields": [
+            "text"
+          ],
+          "relations": {},
+          "params": {}
+        }
+      }
+    },
+    "injectInfo": {
+      "relations": {}
+    },
+    "stripped": null
+  },
+  {
+    "name": "perm-creator-schema",
+    "kind": "permission",
+    "canRead": true,
+    "canWrite": true,
+    "shouldInjectOwner": true,
+    "condition": {
+      "$and": [
+        {
+          "title": "x"
+        },
+        {
+          "createdBy": "u1"
+        }
+      ]
+    },
+    "readableFields": [
+      "locked",
+      "meta",
+      "note",
+      "title"
+    ],
+    "readableRelations": [
+      "reviewer"
+    ],
+    "writableFields": [
+      "meta",
+      "title"
+    ],
+    "filteredData": {
+      "title": "a",
+      "meta.a": 1
+    }
+  },
+  {
+    "name": "perm-guest",
+    "kind": "permission",
+    "canRead": true,
+    "canWrite": false,
+    "shouldInjectOwner": false,
+    "condition": {
+      "title": "x"
+    },
+    "readableFields": [
+      "locked",
+      "note",
+      "title"
+    ],
+    "readableRelations": [],
+    "writableFields": [
+      "note"
+    ],
+    "filteredData": {
+      "note": "b"
+    }
+  },
+  {
+    "name": "perm-admin",
+    "kind": "permission",
+    "canRead": true,
+    "canWrite": true,
+    "shouldInjectOwner": false,
+    "condition": {
+      "a": 1
+    },
+    "readableFields": [
+      "title"
+    ],
+    "readableRelations": [],
+    "writableFields": [
+      "title"
+    ],
+    "filteredData": {
+      "title": "x"
+    }
+  },
+  {
+    "name": "perm-null-ctx",
+    "kind": "permission",
+    "canRead": true,
+    "canWrite": true,
+    "shouldInjectOwner": false,
+    "condition": {
+      "a": 1
+    },
+    "readableFields": null,
+    "readableRelations": null,
+    "writableFields": null,
+    "filteredData": {
+      "title": "x",
+      "other": 2
+    }
+  },
+  {
+    "name": "perm-internal",
+    "kind": "permission",
+    "canRead": true,
+    "canWrite": true,
+    "shouldInjectOwner": false,
+    "condition": {
+      "a": 1
+    },
+    "readableFields": [
+      "title"
+    ],
+    "readableRelations": [],
+    "writableFields": [
+      "title"
+    ],
+    "filteredData": {
+      "title": "x"
+    }
+  },
+  {
+    "name": "perm-empty-userid",
+    "kind": "permission",
+    "canRead": true,
+    "canWrite": true,
+    "shouldInjectOwner": false,
+    "condition": {
+      "a": 1
+    },
+    "readableFields": [
+      "title"
+    ],
+    "readableRelations": [],
+    "writableFields": [
+      "title"
+    ],
+    "filteredData": {
+      "title": "x"
+    }
+  },
+  {
+    "name": "perm-role-match",
+    "kind": "permission",
+    "canRead": true,
+    "canWrite": true,
+    "shouldInjectOwner": false,
+    "condition": {
+      "a": 1
+    },
+    "readableFields": [
+      "title"
+    ],
+    "readableRelations": [],
+    "writableFields": [
+      "title"
+    ],
+    "filteredData": {
+      "title": "x"
+    }
+  },
+  {
+    "name": "perm-no-read-config",
+    "kind": "permission",
+    "canRead": true,
+    "canWrite": true,
+    "shouldInjectOwner": false,
+    "condition": {
+      "a": 1
+    },
+    "readableFields": [
+      "title"
+    ],
+    "readableRelations": [],
+    "writableFields": [
+      "title"
+    ],
+    "filteredData": {
+      "title": "x"
+    }
+  },
+  {
+    "name": "perm-merge-owner-null-condition",
+    "kind": "permission",
+    "canRead": true,
+    "canWrite": true,
+    "shouldInjectOwner": true,
+    "condition": {
+      "createdBy": "u1"
+    },
+    "readableFields": [
+      "title"
+    ],
+    "readableRelations": [],
+    "writableFields": [
+      "title"
+    ],
+    "filteredData": {
+      "title": "x"
+    }
+  }
+]
