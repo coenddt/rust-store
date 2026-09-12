@@ -81,7 +81,7 @@ fn user_pipeline_disabled_blocks_all_plan_paths() {
         .expect_err("plan_query_with_count 应报错");
     assert!(err.contains("已被禁用"), "错误信息异常: {}", err);
 
-    let err = plan_federated(PIPELINE_GQL, &pipeline_params(), &reg, None)
+    let err = plan_federated(PIPELINE_GQL, &pipeline_params(), &reg, None, &json!({}))
         .expect_err("plan_federated 应报错");
     assert!(err.contains("已被禁用"), "错误信息异常: {}", err);
 }
