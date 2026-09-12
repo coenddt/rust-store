@@ -14,8 +14,12 @@ use crate::Registry;
 
 #[napi]
 impl Registry {
-    /// 生成联邦计划：按 `Schema.datasource` 把一条 GQL 拆成
-    /// 「各源命令序列 + 内存 join 边」；Host 逐源执行命令后调 `mergeFederated`
+    /// 生成联邦计划：按 schema 的 `(datasource, namespace)` 与数据源 kind 把一条 GQL
+    /// 拆成「各源命令序列 + 内存 join 边」；Host 逐源执行命令后调 `mergeFederated`
+    ///
+    /// `dsConfig`：`{ "sources": { name: kind } }`（与 `init` 的数据源声明一致；
+    /// `null` = 单源 Mongo）。SQL 同源跨 namespace 仍下推（qualified JOIN），
+    /// Mongo 跨 db 剥离为内存 join。
     ///
     /// 返回 `{v, kind:"federated", root, sources, join, postprocess, degraded}`；
     /// 单源（无跨源关系）时 `sources` 仅根单元、`join.edges` 为空。
@@ -25,10 +29,12 @@ impl Registry {
         gql: String,
         params: Value,
         ctx: Option<Value>,
+        ds_config: Option<Value>,
     ) -> Result<Value> {
         let params = Self::params_map(&params);
         let context = ctx.as_ref().and_then(context_from_value);
-        core_plan_federated(&gql, &params, &self.core, context.as_ref()).map_err(err)
+        let ds_cfg = ds_config.unwrap_or(Value::Null);
+        core_plan_federated(&gql, &params, &self.core, context.as_ref(), &ds_cfg).map_err(err)
     }
 
     /// 合并各源结果 → 嵌套文档数组；`results` 必须与 `plan.sources` **同序同长**

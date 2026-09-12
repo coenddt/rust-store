@@ -16,7 +16,9 @@
             "_id": 1,
             "title": 1,
             "status": 1
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "postprocess": {
@@ -47,7 +49,9 @@
           "kind": "find",
           "collection": "posts",
           "filter": {},
-          "projection": null
+          "projection": null,
+          "source": "default",
+          "namespace": null
         }
       ],
       "postprocess": {
@@ -83,7 +87,9 @@
                 "title": 1
               }
             }
-          ]
+          ],
+          "source": "default",
+          "namespace": null
         }
       ],
       "postprocess": {
@@ -157,7 +163,9 @@
                 "items": 1
               }
             }
-          ]
+          ],
+          "source": "default",
+          "namespace": null
         }
       ],
       "postprocess": {
@@ -214,7 +222,9 @@
                 "_id": 1
               }
             }
-          ]
+          ],
+          "source": "default",
+          "namespace": null
         },
         {
           "kind": "aggregate",
@@ -266,7 +276,9 @@
                 "items": 1
               }
             }
-          ]
+          ],
+          "source": "default",
+          "namespace": null
         }
       ],
       "postprocess": {
@@ -358,7 +370,9 @@
                 "items": 1
               }
             }
-          ]
+          ],
+          "source": "default",
+          "namespace": null
         }
       ],
       "postprocess": {
@@ -410,7 +424,9 @@
             {
               "$limit": 3
             }
-          ]
+          ],
+          "source": "default",
+          "namespace": null
         }
       ],
       "postprocess": null,
@@ -440,7 +456,9 @@
           "projection": {
             "_id": 1,
             "title": 1
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "postprocess": {
@@ -497,7 +515,9 @@
                 "title": 1
               }
             }
-          ]
+          ],
+          "source": "default",
+          "namespace": null
         }
       ],
       "postprocess": {
@@ -522,7 +542,9 @@
         "collection": "posts",
         "filter": {
           "status": "draft"
-        }
+        },
+        "source": "default",
+        "namespace": null
       },
       "page": 0,
       "pageSize": 10,
@@ -555,7 +577,9 @@
                 "title": 1
               }
             }
-          ]
+          ],
+          "source": "default",
+          "namespace": null
         }
       ],
       "postprocess": {
@@ -577,7 +601,9 @@
       "countCommand": {
         "kind": "countDocuments",
         "collection": "posts",
-        "filter": {}
+        "filter": {},
+        "source": "default",
+        "namespace": null
       },
       "page": 1,
       "pageSize": 5000,
@@ -614,7 +640,9 @@
                 "_id": 1
               }
             }
-          ]
+          ],
+          "source": "default",
+          "namespace": null
         },
         {
           "kind": "aggregate",
@@ -666,7 +694,9 @@
                 "items": 1
               }
             }
-          ]
+          ],
+          "source": "default",
+          "namespace": null
         }
       ],
       "postprocess": {
@@ -701,7 +731,9 @@
       "countCommand": {
         "kind": "countDocuments",
         "collection": "orders",
-        "filter": {}
+        "filter": {},
+        "source": "default",
+        "namespace": null
       },
       "page": 2,
       "pageSize": 5,
@@ -816,7 +848,9 @@
           "_id": "PLOYW3V28AAAA",
           "createdAt": 1700000000000,
           "updatedAt": 1700000000000
-        }
+        },
+        "source": "default",
+        "namespace": null
       },
       "returns": {
         "title": "hello",
@@ -840,7 +874,9 @@
           "title": "x",
           "createdAt": 1700000000000,
           "updatedAt": 1700000000000
-        }
+        },
+        "source": "default",
+        "namespace": null
       },
       "returns": {
         "_id": "P-CUSTOM",
@@ -865,7 +901,9 @@
           "createdBy": "u1",
           "createdAt": 1700000000000,
           "updatedAt": 1700000000000
-        }
+        },
+        "source": "default",
+        "namespace": null
       },
       "returns": {
         "title": "t",
@@ -895,7 +933,9 @@
         },
         "projection": {
           "_id": 1
-        }
+        },
+        "source": "default",
+        "namespace": null
       },
       "found": true,
       "collections": [
@@ -910,7 +950,9 @@
       "command": {
         "kind": "countDocuments",
         "collection": "posts",
-        "filter": {}
+        "filter": {},
+        "source": "default",
+        "namespace": null
       }
     }
   },
@@ -923,7 +965,9 @@
         "collection": "posts",
         "filter": {
           "status": "draft"
-        }
+        },
+        "source": "default",
+        "namespace": null
       }
     }
   },
@@ -948,7 +992,9 @@
               }
             }
           }
-        ]
+        ],
+        "source": "default",
+        "namespace": null
       }
     }
   },
@@ -972,7 +1018,9 @@
             "createdAt": 1700000000000,
             "updatedAt": 1700000000000
           }
-        ]
+        ],
+        "source": "default",
+        "namespace": null
       },
       "returns": [
         {
@@ -1012,7 +1060,9 @@
             "createdAt": 1700000000000,
             "updatedAt": 1700000000000
           }
-        ]
+        ],
+        "source": "default",
+        "namespace": null
       },
       "returns": [
         {
@@ -1064,7 +1114,9 @@
           },
           "options": {
             "returnDocument": "after"
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "returns": {
@@ -1097,7 +1149,9 @@
           },
           "options": {
             "returnDocument": "after"
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "returns": {
@@ -1132,7 +1186,9 @@
           },
           "options": {
             "returnDocument": "after"
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "returns": {
@@ -1168,7 +1224,9 @@
           "options": {
             "returnDocument": "after",
             "upsert": true
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "returns": null
@@ -1189,7 +1247,9 @@
             "views": 1,
             "updatedAt": 1700000000000
           }
-        }
+        },
+        "source": "default",
+        "namespace": null
       },
       "returns": {
         "modifiedCount": 3
@@ -1212,7 +1272,9 @@
           "filter": {
             "_id": "p1"
           },
-          "projection": null
+          "projection": null,
+          "source": "default",
+          "namespace": null
         },
         {
           "kind": "insertMany",
@@ -1225,14 +1287,18 @@
               "updatedAt": 5,
               "deletedAt": 1700000000000
             }
-          ]
+          ],
+          "source": "default",
+          "namespace": null
         },
         {
           "kind": "deleteMany",
           "collection": "posts",
           "filter": {
             "_id": "p1"
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "returns": {
@@ -1252,14 +1318,18 @@
           "filter": {
             "_id": "pX"
           },
-          "projection": null
+          "projection": null,
+          "source": "default",
+          "namespace": null
         },
         {
           "kind": "deleteMany",
           "collection": "posts",
           "filter": {
             "_id": "pX"
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "returns": {
@@ -1279,14 +1349,18 @@
           "filter": {
             "_id": "p1"
           },
-          "projection": null
+          "projection": null,
+          "source": "default",
+          "namespace": null
         },
         {
           "kind": "deleteMany",
           "collection": "posts_w",
           "filter": {
             "_id": "p1"
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "returns": {
@@ -1324,7 +1398,9 @@
         "options": {
           "upsert": true,
           "returnDocument": "after"
-        }
+        },
+        "source": "default",
+        "namespace": null
       },
       "returns": {
         "_id": "PLOYW3V28AAAA",
@@ -1359,7 +1435,9 @@
         "options": {
           "upsert": true,
           "returnDocument": "before"
-        }
+        },
+        "source": "default",
+        "namespace": null
       },
       "returns": {
         "_id": "p1",
@@ -1394,7 +1472,9 @@
         "options": {
           "upsert": true,
           "returnDocument": "after"
-        }
+        },
+        "source": "default",
+        "namespace": null
       },
       "returns": {
         "_id": "P-EXIST",
@@ -1423,7 +1503,9 @@
             "_id": "PLOYW3V28AAAA",
             "createdAt": 1700000000000,
             "updatedAt": 1700000000000
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "returns": {
@@ -1464,7 +1546,9 @@
           "options": {
             "upsert": true,
             "returnDocument": "after"
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "returns": {
@@ -1490,7 +1574,9 @@
             "_id": "OLOYW3V28AAAA",
             "createdAt": 1700000000000,
             "updatedAt": 1700000000000
-          }
+          },
+          "source": "default",
+          "namespace": null
         },
         {
           "kind": "insertOne",
@@ -1501,7 +1587,9 @@
             "_id": "OILOYW3V28AAAA",
             "createdAt": 1700000000000,
             "updatedAt": 1700000000000
-          }
+          },
+          "source": "default",
+          "namespace": null
         },
         {
           "kind": "insertOne",
@@ -1512,7 +1600,9 @@
             "_id": "OILOYW3V28AAAA",
             "createdAt": 1700000000000,
             "updatedAt": 1700000000000
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "returns": {
@@ -1536,7 +1626,9 @@
             "_id": "OLOYW3V28AAAA",
             "createdAt": 1700000000000,
             "updatedAt": 1700000000000
-          }
+          },
+          "source": "default",
+          "namespace": null
         },
         {
           "kind": "findOneAndUpdate",
@@ -1558,7 +1650,9 @@
           "options": {
             "upsert": true,
             "returnDocument": "after"
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "returns": {
@@ -1582,7 +1676,9 @@
             "_id": "OLOYW3V28AAAA",
             "createdAt": 1700000000000,
             "updatedAt": 1700000000000
-          }
+          },
+          "source": "default",
+          "namespace": null
         },
         {
           "kind": "findOneAndUpdate",
@@ -1608,7 +1704,9 @@
           "options": {
             "upsert": true,
             "returnDocument": "after"
-          }
+          },
+          "source": "default",
+          "namespace": null
         }
       ],
       "returns": {

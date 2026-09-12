@@ -9,7 +9,7 @@ use crate::dialect::ir::{RowCol, RowShape, SqlStmt};
 use crate::dialect::Backend;
 
 use super::lookup_join::{resolve_join, Join};
-use super::{col_fn, projection_fields, q};
+use super::{col_fn, projection_fields, q, tname};
 
 /// `$lookup` 子 pipeline 是否含每父 top-N（子 `$limit` / `$skip`）——
 /// 需窗口函数 / LATERAL 才能下推，本里程碑未实现，须标记 `_unsupported`。
@@ -117,35 +117,40 @@ pub(super) fn translate_aggregate(
     }
 
     // 每个 JOIN：LEFT JOIN，并展开关系表的标量字段（含关系自身的 _id 便于聚合）
-    let mut from_sql = format!("{} t", q(backend, &schema.collection));
+    let mut from_sql = format!("{} t", tname(backend, schema));
     let mut all_params: Vec<Value> = Vec::new();
     for (i, j) in joins.iter().enumerate() {
         let r = format!("r{}", i);
+        // 关系目标 schema：namespace 限定与字段展开都依赖它；定位失败 = 关系悬空 → 跳过并告警
+        let rel_schema = match registry.get(&j.model) {
+            Ok(s) => s,
+            Err(e) => {
+                warnings.push(format!("$lookup 关系 {} 目标不可定位，跳过 JOIN: {}", j.alias, e));
+                continue;
+            }
+        };
         from_sql.push_str(&format!(
             " LEFT JOIN {} {} ON {}.{} = t.{}",
-            q(backend, &j.from),
+            tname(backend, rel_schema),
             r,
             r,
             q(backend, &j.foreign_col),
             q(backend, &j.local_col),
         ));
-        // 关系表自身 schema
-        if let Ok(rel_schema) = registry.get_by_collection(&j.from) {
-            let rel_cols = projection_fields(rel_schema, None);
-            for rf in rel_cols {
-                if rel_schema.fields.get(&rf).map(|f| f.field_type == "object" || f.field_type == "array").unwrap_or(false) {
-                    continue;
-                }
-                let alias_col = format!("{}_{}_{}", j.alias, i, rf);
-                cols_sql.push(format!("{}.{} AS {}", r, q(backend, &rf), q(backend, &alias_col)));
-                // 聚合数组：路径 rel_name.rf
-                columns.push(RowCol {
-                    alias: alias_col,
-                    json_path: vec![j.rel_name.clone(), rf.clone()],
-                    is_array: true,
-                    sub_shape: None,
-                });
+        let rel_cols = projection_fields(rel_schema, None);
+        for rf in rel_cols {
+            if rel_schema.fields.get(&rf).map(|f| f.field_type == "object" || f.field_type == "array").unwrap_or(false) {
+                continue;
             }
+            let alias_col = format!("{}_{}_{}", j.alias, i, rf);
+            cols_sql.push(format!("{}.{} AS {}", r, q(backend, &rf), q(backend, &alias_col)));
+            // 聚合数组：路径 rel_name.rf
+            columns.push(RowCol {
+                alias: alias_col,
+                json_path: vec![j.rel_name.clone(), rf.clone()],
+                is_array: true,
+                sub_shape: None,
+            });
         }
     }
 

@@ -56,11 +56,25 @@ pub struct Schema {
     pub indexes: Vec<Value>,
     /// 绑定的数据源名（可选；缺省 = `default`，回落单源 Mongo）。见 [`crate::datasource`]
     pub datasource: Option<String>,
+    /// 连接内的库/schema 名（可选；缺省 = `null`，用连接自身默认：Mongo db 实例的库名、
+    /// PG 的 search_path、MySQL 的连接库、SQLite 的 main）。
+    /// 与 `datasource`/`collection` 构成定位三元组，见 [`Registry::get_by_location`]。
+    pub namespace: Option<String>,
 }
 
 impl Schema {
     pub fn compute(&self, name: &str) -> Option<&ComputeDef> {
         self.computes.iter().find(|(k, _)| k == name).map(|(_, c)| c)
+    }
+
+    /// 解析后的数据源名（缺省 `default`）
+    pub fn source(&self) -> &str {
+        self.datasource.as_deref().unwrap_or(crate::datasource::DEFAULT_SOURCE)
+    }
+
+    /// 解析后的 namespace（空串归一为 `None`）
+    pub fn ns(&self) -> Option<&str> {
+        self.namespace.as_deref().filter(|s| !s.is_empty())
     }
 }
 
@@ -215,7 +229,15 @@ impl Registry {
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .map(String::from),
+            namespace: obj
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from),
         };
+
+        // 定位三元组唯一性（fail fast，绝不静默串源）：同名覆盖除外
+        self.check_location_unique(&name, &schema)?;
 
         let is_archive = obj.get("_isArchive").map(is_truthy).unwrap_or(false);
         self.schemas.insert(name.clone(), schema);
@@ -237,9 +259,12 @@ impl Registry {
                 "fields": Value::Object(arch_fields),
                 "indexes": obj.get("indexes").cloned().unwrap_or_else(|| json!([])),
             });
-            // 归档表与原表同库
+            // 归档表与原表同库：datasource 与 namespace 一并继承
             if let Some(ds) = obj.get("datasource") {
                 arch["datasource"] = ds.clone();
+            }
+            if let Some(ns) = obj.get("namespace") {
+                arch["namespace"] = ns.clone();
             }
             self.register(&arch)?;
         }
@@ -263,12 +288,89 @@ impl Registry {
         self.allow_user_pipeline = allow;
     }
 
-    /// 按 collection 名获取 schema（翻译器等按命令里的 `collection` 反向定位）
-    pub fn get_by_collection(&self, collection: &str) -> Result<&Schema, String> {
+    /// 按定位三元组精确获取 schema（命令路由的唯一定位入口）
+    ///
+    /// `(source, namespace, collection)` 三元组在 Registry 内唯一（注册期校验），
+    /// 故此处零候选 = 未注册；一候选 = 精确命中。**不做任何猜测回落**。
+    pub fn get_by_location(
+        &self,
+        source: &str,
+        namespace: Option<&str>,
+        collection: &str,
+    ) -> Result<&Schema, String> {
+        let ns = namespace.filter(|s| !s.is_empty());
         self.schemas
             .values()
-            .find(|s| s.collection == collection)
-            .ok_or_else(|| format!("Schema 未注册（collection = {}）", collection))
+            .find(|s| {
+                s.collection == collection
+                    && s.source() == source
+                    && s.ns() == ns
+            })
+            .ok_or_else(|| {
+                format!(
+                    "Schema 未定位（source = {}, namespace = {:?}, collection = {}）",
+                    source, ns, collection
+                )
+            })
+    }
+
+    /// 命令结构定位（方言翻译用）：优先三元组精确命中；未命中时（`route_override`
+    /// 改写 namespace 的多租户场景）回落 `(source, collection)` 定位 —— 结构 schema
+    /// 与定位 namespace 正交（见 multi-datasource-routing-plan.md §6：权限/字段
+    /// 校验仍按结构 schema）。
+    ///
+    /// `(source, collection)` 恰一候选 → 命中；多候选时取 `namespace = null` 的
+    /// 结构声明，无 null 声明 → 报错（拒绝猜测，铁律 3）。
+    pub fn get_for_command(
+        &self,
+        source: &str,
+        namespace: Option<&str>,
+        collection: &str,
+    ) -> Result<&Schema, String> {
+        if let Ok(s) = self.get_by_location(source, namespace, collection) {
+            return Ok(s);
+        }
+        let candidates: Vec<&Schema> = self
+            .schemas
+            .values()
+            .filter(|s| s.collection == collection && s.source() == source)
+            .collect();
+        match candidates.len() {
+            0 => self.get_by_location(source, namespace, collection),
+            1 => Ok(candidates[0]),
+            _ => candidates
+                .iter()
+                .find(|s| s.ns().is_none())
+                .copied()
+                .ok_or_else(|| {
+                    format!(
+                        "命令定位 ({}, {:?}, {}) 存在多个结构 schema（多租户 override 需唯一的 (source, collection) 结构声明）",
+                        source, namespace, collection
+                    )
+                }),
+        }
+    }
+
+    /// 定位三元组唯一性校验：不同 schema 名占用同一 `(source, namespace, collection)`
+    /// → Err（同名覆盖 = 更新语义，放行）。
+    fn check_location_unique(&self, name: &str, schema: &Schema) -> Result<(), String> {
+        let conflict = self.schemas.iter().find(|(n, s)| {
+            n.as_str() != name
+                && s.collection == schema.collection
+                && s.source() == schema.source()
+                && s.ns() == schema.ns()
+        });
+        match conflict {
+            None => Ok(()),
+            Some((other, s)) => Err(format!(
+                "定位三元组冲突: ({}, {:?}, {}) 已被 schema `{}`（collection = {}）占用",
+                schema.source(),
+                schema.ns(),
+                schema.collection,
+                other,
+                s.collection
+            )),
+        }
     }
 
     pub fn list(&self) -> Vec<String> {

@@ -1,12 +1,13 @@
 //! 联邦计划：把一条 GQL 拆成「各源命令序列 + join 边」
 //!
-//! 拆源规则：
-//!   - 关系两端 `datasource` 相同 → **同源**，留在该源的取数 AST 里，由
-//!     `$lookup` / `JOIN` 原生下推（内存 join 只处理跨源那一段）；
-//!   - 关系两端 `datasource` 不同 → **跨源**，从取数 AST 中剥离，登记为一条
-//!     `join` 边，并为子模型单独生成一个取数单元（自己那一源）。
+//! 拆源规则（`can_pushdown`，见 `multi-datasource-routing-plan.md` §五）：
+//!   - 关系两端**不同 source** → 跨源，从取数 AST 中剥离，登记为一条 `join` 边，
+//!     并为子模型单独生成一个取数单元（自己那一源）；
+//!   - 同 source 且同 namespace → **下推**，留在该源取数 AST（`$lookup` / `JOIN`）；
+//!   - 同 source 跨 namespace：SQL 后端物理支持（qualified 表名 JOIN）→ **仍下推**；
+//!     Mongo 跨 db 无 `$lookup` → 剥离（内存 join）。
 //!
-//! 父取数 AST 会被就地改成「只剩同源关系」；后处理 AST（`postprocess.ast`）仍是
+//! 父取数 AST 会被就地改成「只剩可下推关系」；后处理 AST（`postprocess.ast`）仍是
 //! **含全部关系**的完整快照，从而 `strip_query` / `process_node` 可递归下钻到内存
 //! join 还原出来的嵌套文档（对齐契约「postprocess 与单库同形状」）。
 
@@ -16,20 +17,43 @@ use serde_json::{json, Map, Value};
 
 use crate::command::{build_plan, plan_query_ast_mut, ERR_PERMISSION};
 use crate::computes::{merge_depends_into_ast, InjectInfo};
-use crate::datasource::DEFAULT_SOURCE;
+use crate::datasource::{DataSource, DataSourceConfig};
 use crate::permission::{can_read_schema, merge_owner_condition, Context};
 use crate::pipeline::{flatten_object_fields, is_nullish, param, parse_gql, Ast, RelAst};
 use crate::schema::{Registry, Schema};
 
 /// 契约版本：形状变更必须升版并附迁移说明
-pub const FEDERATION_VERSION: u64 = 1;
+pub const FEDERATION_VERSION: u64 = 2;
 
-/// schema 绑定的数据源名（未声明 → `default`）
-fn source_of(schema: &Schema) -> String {
-    schema
-        .datasource
-        .clone()
-        .unwrap_or_else(|| DEFAULT_SOURCE.to_string())
+/// 定位二元组（source + namespace）
+#[derive(Debug, Clone, PartialEq)]
+struct Loc {
+    source: String,
+    namespace: Option<String>,
+}
+
+fn loc_of(schema: &Schema) -> Loc {
+    Loc {
+        source: schema.source().to_string(),
+        namespace: schema.namespace.clone(),
+    }
+}
+
+/// 同源下推判定：
+/// - 跨 source → 不下推（内存 join）；
+/// - 双方都是 SQL → 下推（同/跨 namespace 都行，qualified 表名）；
+/// - 其余（Mongo，或 kind 未知）→ 仅同 namespace 下推（`$lookup` 不能跨 db；
+///   kind 未知时保守不跨 ns 下推，宁拆勿错）。
+fn can_pushdown(parent: &Schema, child: &Schema, ds_cfg: &DataSourceConfig) -> Result<bool, String> {
+    if parent.source() != child.source() {
+        return Ok(false);
+    }
+    let pds = ds_cfg.resolve(parent.datasource.as_deref()).ok();
+    let cds = ds_cfg.resolve(child.datasource.as_deref()).ok();
+    Ok(match (pds, cds) {
+        (Some(DataSource::Sql(_)), Some(DataSource::Sql(_))) => true,
+        _ => parent.namespace == child.namespace,
+    })
 }
 
 /// 确保 `field` 出现在请求字段里（跨源 join 的键必须取回才能内存 join）
@@ -49,6 +73,7 @@ struct UnitSpec {
     /// 结果回喂的键（`merge_federated` 的 `results[key]`）
     key: String,
     source: String,
+    namespace: Option<String>,
     model: String,
     ast: Ast,
     /// 该单元在嵌套结构中的父层级深度（= 父边 `path.len()`，根为 0）
@@ -75,7 +100,7 @@ struct EdgeSpec {
 /// `fields` / `relations` 是**当前层**的取数 AST 片段（父模型视角）。
 fn walk(
     parent_model: &str,
-    parent_source: &str,
+    ds_cfg: &DataSourceConfig,
     fields: &mut Vec<String>,
     relations: &mut Vec<(String, RelAst)>,
     path: &[String],
@@ -101,7 +126,7 @@ fn walk(
         }
 
         let child_schema = registry.get(&rel_def.model)?.clone();
-        let child_source = source_of(&child_schema);
+        let child_loc = loc_of(&child_schema);
 
         // 先递归处理更深层：深层跨源关系会从本关系里剥离并各自成单元
         let mut child_path = path.to_vec();
@@ -110,7 +135,7 @@ fn walk(
             let (_, rel_ast) = &mut relations[i];
             walk(
                 &rel_def.model,
-                &child_source,
+                ds_cfg,
                 &mut rel_ast.fields,
                 &mut rel_ast.relations,
                 &child_path,
@@ -122,8 +147,8 @@ fn walk(
             )?;
         }
 
-        if child_source == parent_source {
-            // 同源：留在本层，由该源的 $lookup / JOIN 下推
+        if can_pushdown(&parent_schema, &child_schema, ds_cfg)? {
+            // 同源（SQL 同源含跨 namespace；Mongo 同源同库）：留在本层，由该源 $lookup / JOIN 下推
             i += 1;
             continue;
         }
@@ -172,7 +197,8 @@ fn walk(
         let depth = path.len();
         units.push(UnitSpec {
             key: key.clone(),
-            source: child_source,
+            source: child_loc.source.clone(),
+            namespace: child_loc.namespace.clone(),
             model: rel_def.model.clone(),
             ast: child_ast,
             depth,
@@ -228,6 +254,9 @@ fn detect_cross_source_sort(
 
 /// 生成联邦计划（纯逻辑）
 ///
+/// `ds_config`：`{ "sources": { name: kind } }`（Host `init` 时的 kind 配置；
+/// `null` = 单源 Mongo）。下推判定依赖它区分 SQL / Mongo（见 [`can_pushdown`]）。
+///
 /// 单源（无跨源关系）时同样可用：`sources` 只有根单元、`join.edges` 为空，
 /// Host 走与单库一致的执行路径。
 pub fn plan_federated(
@@ -235,7 +264,9 @@ pub fn plan_federated(
     params: &Map<String, Value>,
     registry: &Registry,
     ctx: Option<&Context>,
+    ds_config: &Value,
 ) -> Result<Value, String> {
+    let ds_cfg = DataSourceConfig::from_json(ds_config)?;
     let mut params = params.clone();
     let mut ast = parse_gql(gql)?;
     let root_schema = registry.get(&ast.model)?.clone();
@@ -283,7 +314,7 @@ pub fn plan_federated(
         flatten_object_fields(&mut post_ast, &root_schema);
     }
 
-    let root_source = source_of(&root_schema);
+    let root_loc = loc_of(&root_schema);
     let mut units: Vec<UnitSpec> = Vec::new();
     let mut edges: Vec<EdgeSpec> = Vec::new();
     let mut degraded: Vec<Value> = Vec::new();
@@ -291,7 +322,7 @@ pub fn plan_federated(
     let mut fetch_ast = ast;
     walk(
         &fetch_ast.model,
-        &root_source,
+        &ds_cfg,
         &mut fetch_ast.fields,
         &mut fetch_ast.relations,
         &[],
@@ -316,7 +347,8 @@ pub fn plan_federated(
 
     let mut sources = vec![json!({
         "key": "0",
-        "source": root_source,
+        "source": root_loc.source,
+        "namespace": root_loc.namespace.map(|s| json!(s)).unwrap_or(Value::Null),
         "model": root_schema.name,
         "mode": root_plan.mode.as_str(),
         "commands": root_plan.commands,
@@ -334,6 +366,7 @@ pub fn plan_federated(
         sources.push(json!({
             "key": unit.key,
             "source": unit.source,
+            "namespace": unit.namespace.as_ref().map(|s| json!(s)).unwrap_or(Value::Null),
             "model": unit.model,
             "mode": plan.mode.as_str(),
             "commands": plan.commands,

@@ -210,6 +210,6 @@ pub fn plan_upsert(
         "upsert": true,
         "returnDocument": if return_new { "after" } else { "before" },
     });
-    let command = cmd_find_one_and_update(&schema.collection, condition, &update_doc, &fu_options);
+    let command = cmd_find_one_and_update(schema, condition, &update_doc, &fu_options);
     Ok(json!({ "command": command }))
 }

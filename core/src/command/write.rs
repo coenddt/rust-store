@@ -31,7 +31,7 @@ pub fn plan_insert(
     let doc = build_insert_doc(schema, ctx, data, now, new_id)?;
     let doc = Value::Object(doc);
     Ok(json!({
-        "command": cmd_insert_one(&schema.collection, &doc),
+        "command": cmd_insert_one(schema, &doc),
         "returns": apply_defaults_and_computes(&doc, schema, fn_registry)?,
     }))
 }
@@ -90,7 +90,7 @@ pub fn plan_exists(
 ) -> Result<Value, String> {
     let schema = registry.get(schema_name)?;
     Ok(cmd_find_one(
-        &schema.collection,
+        schema,
         condition,
         Some(&json!({ "_id": 1 })),
     ))
@@ -107,7 +107,7 @@ pub fn plan_count(
         None | Some(Value::Null) => json!({}),
         Some(v) => v.clone(),
     };
-    Ok(cmd_count_documents(&schema.collection, &filter))
+    Ok(cmd_count_documents(schema, &filter))
 }
 
 /// 原生聚合（对应 JS `aggregate`）
@@ -117,7 +117,7 @@ pub fn plan_aggregate(
     pipeline: &[Value],
 ) -> Result<Value, String> {
     let schema = registry.get(schema_name)?;
-    Ok(cmd_aggregate(&schema.collection, pipeline))
+    Ok(cmd_aggregate(schema, pipeline))
 }
 
 pub(super) fn has_creator_permission(schema: &Schema) -> bool {
@@ -177,7 +177,7 @@ pub fn check_write_perm(
     if creator_only && is_truthy(condition) {
         return match probe {
             Probe::NotProbed => Ok(Some(cmd_find_one(
-                &schema.collection,
+                schema,
                 condition,
                 Some(&json!({ "_id": 1, "createdBy": 1 })),
             ))),

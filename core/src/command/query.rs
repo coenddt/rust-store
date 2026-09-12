@@ -246,7 +246,7 @@ pub fn build_plan(
             return Ok(QueryPlan {
                 collection: collection.clone(),
                 mode: Mode::Find,
-                commands: vec![cmd_find(&collection, filter, projection.as_ref())],
+                commands: vec![cmd_find(schema, filter, projection.as_ref())],
                 postprocess: post(),
                 sort: None,
             });
@@ -289,8 +289,8 @@ pub fn build_plan(
                 collection: collection.clone(),
                 mode: Mode::TwoPhase,
                 commands: vec![
-                    cmd_aggregate(&collection, &id_pipeline),
-                    cmd_aggregate(&collection, &full),
+                    cmd_aggregate(schema, &id_pipeline),
+                    cmd_aggregate(schema, &full),
                 ],
                 postprocess: post(),
                 sort: sort_stage,
@@ -313,7 +313,7 @@ pub fn build_plan(
         } else {
             Mode::Aggregate
         },
-        commands: vec![cmd_aggregate(&schema.collection, &final_stages)],
+        commands: vec![cmd_aggregate(schema, &final_stages)],
         postprocess: if has_pipeline { None } else { post() },
         sort: None,
     })

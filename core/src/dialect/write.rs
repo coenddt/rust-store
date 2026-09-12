@@ -24,7 +24,19 @@ pub fn translate_write(
 ) -> Result<Vec<SqlStmt>, String> {
     let kind = cmd.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     let collection = cmd.get("collection").and_then(|v| v.as_str()).unwrap_or("");
-    let schema = registry.get_by_collection(collection)?;
+    // 三元组定位：source 缺省 default / namespace 缺省 null（兼容无定位字段的旧命令）
+    let source = cmd
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or(crate::datasource::DEFAULT_SOURCE);
+    let namespace = cmd.get("namespace").and_then(|v| v.as_str());
+    // 结构 schema 按 (source, collection) 定位（override 回落见 `get_for_command`）；
+    // 表名限定跟随命令 namespace（§6：定位由命令决定，结构由 Registry 决定）
+    let mut schema = registry.get_for_command(source, namespace, collection)?.clone();
+    if let Some(ns) = namespace {
+        schema.namespace = Some(ns.to_string());
+    }
+    let schema = &schema;
 
     match kind {
         "insertOne" => {
@@ -55,7 +67,7 @@ pub fn translate_write(
             let mut seq = 0usize;
             let wh = build_filter(&filter, backend, "t", &col_map(schema), &mut seq);
             let where_sql = if wh.text.is_empty() { String::new() } else { format!(" WHERE {}", wh.text) };
-            let text = format!("DELETE FROM {} AS t{}", q(backend, &schema.collection), where_sql);
+            let text = format!("DELETE FROM {} AS t{}", tname(backend, schema), where_sql);
             Ok(vec![SqlStmt::write(text, wh.params)])
         }
         _ => Err(format!("translate: 未知写命令 kind = {}", kind)),
@@ -147,11 +159,11 @@ fn build_insert(backend: Backend, schema: &Schema, doc: &Value) -> SqlStmt {
         // 空插入：INSERT 空行
         return match backend {
             Backend::Mysql => SqlStmt::write(
-                format!("INSERT INTO {} () VALUES ()", q(backend, &schema.collection)),
+                format!("INSERT INTO {} () VALUES ()", tname(backend, schema)),
                 Vec::new(),
             ),
             _ => SqlStmt::write(
-                format!("INSERT INTO {} DEFAULT VALUES", q(backend, &schema.collection)),
+                format!("INSERT INTO {} DEFAULT VALUES", tname(backend, schema)),
                 Vec::new(),
             ),
         };
@@ -164,7 +176,7 @@ fn build_insert(backend: Backend, schema: &Schema, doc: &Value) -> SqlStmt {
         .collect();
     let text = format!(
         "INSERT INTO {} ({}) VALUES ({})",
-        q(backend, &schema.collection),
+        tname(backend, schema),
         cols_sql,
         phs.join(", "),
     );
@@ -189,7 +201,7 @@ fn build_insert_many(backend: Backend, schema: &Schema, docs: &[Value]) -> Resul
     }
     let text = format!(
         "INSERT INTO {} ({}) VALUES {}",
-        q(backend, &schema.collection),
+        tname(backend, schema),
         cols_sql,
         groups.join(", "),
     );
@@ -289,7 +301,7 @@ fn translate_update_many(
     let where_sql = where_of(&mut binder, schema, filter);
     let text = format!(
         "UPDATE {} AS t SET {}{}",
-        q(backend, &schema.collection),
+        tname(backend, schema),
         assigns.join(", "),
         where_sql,
     );
@@ -316,7 +328,7 @@ fn translate_find_one_and_update(
     let where_sql = where_of(&mut binder, schema, filter);
     let update_text = format!(
         "UPDATE {} AS t SET {}{}",
-        q(backend, &schema.collection),
+        tname(backend, schema),
         assigns.join(", "),
         where_sql,
     );
@@ -343,7 +355,7 @@ fn translate_find_one_and_update(
         let select_text = format!(
             "SELECT {} FROM {} t{}",
             select_list,
-            q(backend, &schema.collection),
+            tname(backend, schema),
             where_sql_s,
         );
         let mut read_stmt = SqlStmt::write(select_text, read_binder.params);
@@ -417,7 +429,7 @@ fn translate_upsert(
         let ret = returning.iter().map(|c| q(backend, c)).collect::<Vec<_>>().join(", ");
         let text = format!(
             "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {} RETURNING {}",
-            q(backend, &schema.collection),
+            tname(backend, schema),
             cols_sql,
             phs.join(", "),
             target_sql,
@@ -433,7 +445,7 @@ fn translate_upsert(
         // MySQL：`ON DUPLICATE KEY UPDATE` 后按 filter 回读
         let text = format!(
             "INSERT INTO {} ({}) VALUES ({}) ON DUPLICATE KEY UPDATE {}",
-            q(backend, &schema.collection),
+            tname(backend, schema),
             cols_sql,
             phs.join(", "),
             assigns.join(", "),
@@ -450,7 +462,7 @@ fn translate_upsert(
         let select_text = format!(
             "SELECT {} FROM {} t{}",
             select_list,
-            q(backend, &schema.collection),
+            tname(backend, schema),
             where_sql,
         );
         let mut read_stmt = SqlStmt::write(select_text, read_binder.params);
@@ -501,4 +513,9 @@ fn upsert_target_pairs(schema: &Schema, filter: &Value) -> Result<Vec<(String, V
 
 fn q(backend: Backend, ident: &str) -> String {
     backend.quote_ident(ident)
+}
+
+/// 表名 SQL：带 schema.namespace 限定（区别于列/别名的 `q`）
+fn tname(backend: Backend, schema: &Schema) -> String {
+    backend.qualified_table(schema.ns(), &schema.collection)
 }

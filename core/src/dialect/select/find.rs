@@ -8,7 +8,7 @@ use crate::dialect::filter::build_filter;
 use crate::dialect::ir::{RowCol, RowShape, SqlStmt};
 use crate::dialect::Backend;
 
-use super::{col_fn, projection_fields, q};
+use super::{col_fn, projection_fields, q, tname};
 
 // find：根表标量 + 可选 projection
 pub(super) fn translate_find(
@@ -38,7 +38,7 @@ pub(super) fn translate_find(
         }
     }
     let select_list = if cols_sql.is_empty() { q(backend, "_id") } else { cols_sql.join(", ") };
-    let from = q(backend, &schema.collection);
+    let from = tname(backend, schema);
     let where_sql = if wh.text.is_empty() { String::new() } else { format!(" WHERE {}", wh.text) };
     Ok(vec![SqlStmt::select(
         format!("SELECT {} FROM {} t{}", select_list, from, where_sql),

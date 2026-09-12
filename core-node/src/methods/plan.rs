@@ -5,6 +5,7 @@ use napi::Result;
 use napi_derive::napi;
 use serde_json::{json, Value};
 
+use rust_store_core::command::apply_route_override as core_apply_route_override;
 use rust_store_core::command::{
     plan_aggregate as core_plan_aggregate, plan_archive_docs as core_plan_archive_docs,
     plan_count as core_plan_count, plan_exists as core_plan_exists,
@@ -34,6 +35,15 @@ fn probe_of(probe_found: Option<bool>, probe_doc: Option<&Value>) -> Probe<'_> {
             None => Probe::NoResult,
         },
     }
+}
+
+/// 多租户路由 override（§6）：`route_override` 键出现才替换计划内命令体的
+/// `source` / `namespace`（见 core `apply_route_override`）
+fn with_route_override(mut plan: Value, route_override: &Option<Value>) -> Value {
+    if let Some(ov) = route_override.as_ref().filter(|v| !v.is_null()) {
+        core_apply_route_override(&mut plan, ov);
+    }
+    plan
 }
 
 #[napi]
@@ -66,12 +76,19 @@ impl Registry {
     // ─── Phase 2：Command 序列 ─────────────────────────────
 
     #[napi]
-    pub fn plan_query(&self, gql: String, params: Value, ctx: Option<Value>) -> Result<Value> {
+    pub fn plan_query(
+        &self,
+        gql: String,
+        params: Value,
+        ctx: Option<Value>,
+        route_override: Option<Value>,
+    ) -> Result<Value> {
         let params = Self::params_map(&params);
         let context = ctx.as_ref().and_then(context_from_value);
-        core_plan_query(&gql, &params, &self.core, context.as_ref())
+        let plan = core_plan_query(&gql, &params, &self.core, context.as_ref())
             .map(|p| p.to_value())
-            .map_err(err)
+            .map_err(err)?;
+        Ok(with_route_override(plan, &route_override))
     }
 
     /// 列表 + total；`total` 由 Host 执行 `countCommand` 后回喂，用于算 `hasMore`
@@ -82,17 +99,19 @@ impl Registry {
         params: Value,
         ctx: Option<Value>,
         total: Option<f64>,
+        route_override: Option<Value>,
     ) -> Result<Value> {
         let params = Self::params_map(&params);
         let context = ctx.as_ref().and_then(context_from_value);
-        let plan = core_plan_query_with_count(&gql, &params, &self.core, context.as_ref()).map_err(err)?;
+        let plan =
+            core_plan_query_with_count(&gql, &params, &self.core, context.as_ref()).map_err(err)?;
 
         let mut out = plan.to_value().as_object().cloned().unwrap_or_default();
         out.insert(
             "hasMore".to_string(),
             json!(plan.has_more(total.unwrap_or(0.0))),
         );
-        Ok(Value::Object(out))
+        Ok(with_route_override(Value::Object(out), &route_override))
     }
 
     #[napi]
@@ -126,10 +145,11 @@ impl Registry {
         now: i64,
         new_id: String,
         ctx: Option<Value>,
+        route_override: Option<Value>,
     ) -> Result<Value> {
         let context = ctx.as_ref().and_then(context_from_value);
         let bridge = self.bridge(&env);
-        core_plan_insert(
+        let plan = core_plan_insert(
             &model,
             &self.core,
             context.as_ref(),
@@ -138,23 +158,42 @@ impl Registry {
             &new_id,
             Some(&bridge),
         )
-        .map_err(err)
+        .map_err(err)?;
+        Ok(with_route_override(plan, &route_override))
     }
 
     #[napi]
-    pub fn plan_exists(&self, model: String, condition: Value) -> Result<Value> {
-        core_plan_exists(&model, &self.core, &condition).map_err(err)
+    pub fn plan_exists(
+        &self,
+        model: String,
+        condition: Value,
+        route_override: Option<Value>,
+    ) -> Result<Value> {
+        let plan = core_plan_exists(&model, &self.core, &condition).map_err(err)?;
+        Ok(with_route_override(plan, &route_override))
     }
 
     #[napi]
-    pub fn plan_count(&self, model: String, filter: Option<Value>) -> Result<Value> {
+    pub fn plan_count(
+        &self,
+        model: String,
+        filter: Option<Value>,
+        route_override: Option<Value>,
+    ) -> Result<Value> {
         let filter = filter.as_ref().filter(|v| !v.is_null());
-        core_plan_count(&model, &self.core, filter).map_err(err)
+        let plan = core_plan_count(&model, &self.core, filter).map_err(err)?;
+        Ok(with_route_override(plan, &route_override))
     }
 
     #[napi]
-    pub fn plan_aggregate(&self, model: String, pipeline: Vec<Value>) -> Result<Value> {
-        core_plan_aggregate(&model, &self.core, &pipeline).map_err(err)
+    pub fn plan_aggregate(
+        &self,
+        model: String,
+        pipeline: Vec<Value>,
+        route_override: Option<Value>,
+    ) -> Result<Value> {
+        let plan = core_plan_aggregate(&model, &self.core, &pipeline).map_err(err)?;
+        Ok(with_route_override(plan, &route_override))
     }
 
     // ─── Phase 2.5：写路径命令规划 ─────────────────────────
@@ -169,10 +208,11 @@ impl Registry {
         now: i64,
         new_ids: Vec<String>,
         ctx: Option<Value>,
+        route_override: Option<Value>,
     ) -> Result<Value> {
         let context = ctx.as_ref().and_then(context_from_value);
         let bridge = self.bridge(&env);
-        core_plan_insert_many(
+        let plan = core_plan_insert_many(
             &model,
             &self.core,
             context.as_ref(),
@@ -181,7 +221,8 @@ impl Registry {
             &new_ids,
             Some(&bridge),
         )
-        .map_err(err)
+        .map_err(err)?;
+        Ok(with_route_override(plan, &route_override))
     }
 
     /// 更新一条（findOneAndUpdate + returnDocument AFTER）。
@@ -199,9 +240,10 @@ impl Registry {
         ctx: Option<Value>,
         probe_found: Option<bool>,
         probe_doc: Option<Value>,
+        route_override: Option<Value>,
     ) -> Result<Value> {
         let context = ctx.as_ref().and_then(context_from_value);
-        core_plan_update(
+        let plan = core_plan_update(
             &model,
             &self.core,
             context.as_ref(),
@@ -211,7 +253,8 @@ impl Registry {
             now,
             probe_of(probe_found, probe_doc.as_ref()),
         )
-        .map_err(err)
+        .map_err(err)?;
+        Ok(with_route_override(plan, &route_override))
     }
 
     /// 批量更新（guest / 无写授权直接拒绝，不走 creator 探针）
@@ -223,10 +266,13 @@ impl Registry {
         data: Value,
         now: i64,
         ctx: Option<Value>,
+        route_override: Option<Value>,
     ) -> Result<Value> {
         let context = ctx.as_ref().and_then(context_from_value);
-        core_plan_update_many(&model, &self.core, context.as_ref(), &condition, &data, now)
-            .map_err(err)
+        let plan =
+            core_plan_update_many(&model, &self.core, context.as_ref(), &condition, &data, now)
+                .map_err(err)?;
+        Ok(with_route_override(plan, &route_override))
     }
 
     /// 删除计划：归档表存在时返回 findCommand（Host 取源文档后调 planArchiveDocs）+
@@ -239,22 +285,31 @@ impl Registry {
         ctx: Option<Value>,
         probe_found: Option<bool>,
         probe_doc: Option<Value>,
+        route_override: Option<Value>,
     ) -> Result<Value> {
         let context = ctx.as_ref().and_then(context_from_value);
-        core_plan_remove(
+        let plan = core_plan_remove(
             &model,
             &self.core,
             context.as_ref(),
             &condition,
             probe_of(probe_found, probe_doc.as_ref()),
         )
-        .map_err(err)
+        .map_err(err)?;
+        Ok(with_route_override(plan, &route_override))
     }
 
     /// 归档文档命令：源文档补 `deletedAt` 后批量写入 `<collection>_deleted`
     #[napi]
-    pub fn plan_archive_docs(&self, model: String, docs: Vec<Value>, now: i64) -> Result<Value> {
-        core_plan_archive_docs(&model, &self.core, &docs, now).map_err(err)
+    pub fn plan_archive_docs(
+        &self,
+        model: String,
+        docs: Vec<Value>,
+        now: i64,
+        route_override: Option<Value>,
+    ) -> Result<Value> {
+        let plan = core_plan_archive_docs(&model, &self.core, &docs, now).map_err(err)?;
+        Ok(with_route_override(plan, &route_override))
     }
 
     /// 显式条件 upsert；`newId` 仅在需生成 `_id` 时被使用
@@ -268,9 +323,10 @@ impl Registry {
         now: i64,
         new_id: String,
         ctx: Option<Value>,
+        route_override: Option<Value>,
     ) -> Result<Value> {
         let context = ctx.as_ref().and_then(context_from_value);
-        core_plan_upsert(
+        let plan = core_plan_upsert(
             &model,
             &self.core,
             context.as_ref(),
@@ -280,7 +336,8 @@ impl Registry {
             now,
             &new_id,
         )
-        .map_err(err)
+        .map_err(err)?;
+        Ok(with_route_override(plan, &route_override))
     }
 
     /// mutation 规划：展开为有序步骤序列 `{steps: [{model, command}]}`，
@@ -293,10 +350,13 @@ impl Registry {
         now: i64,
         new_ids: Vec<String>,
         ctx: Option<Value>,
+        route_override: Option<Value>,
     ) -> Result<Value> {
         let context = ctx.as_ref().and_then(context_from_value);
-        core_plan_mutation(&model, &self.core, context.as_ref(), &data, now, &new_ids)
-            .map_err(err)
+        let plan =
+            core_plan_mutation(&model, &self.core, context.as_ref(), &data, now, &new_ids)
+                .map_err(err)?;
+        Ok(with_route_override(plan, &route_override))
     }
 
     /// 写路径结果回喂：对 findOneAndUpdate 返回文档补默认值 / 同步计算列

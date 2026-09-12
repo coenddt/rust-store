@@ -10,16 +10,21 @@
 //!
 //! 命令 JSON 形状（语言无关，Node/Python 两侧共用）：
 //!
+//! `source` / `namespace` / `collection` 为**定位三元组**，由生成该命令的 schema 一次填入
+//! （`source` 缺省 `"default"`，`namespace` 缺省 `null` = 连接自身默认库/schema）。
+//! Host 依据 `cmd.source`（而非 collection 反查）选择连接；`namespace` 的用法见
+//! `multi-datasource-routing-plan.md`（Mongo client 型 source / SQL qualified 表名）。
+//!
 //! ```json
-//! { "kind": "find",              "collection": "u", "filter": {...}, "projection": {...}|null }
-//! { "kind": "aggregate",         "collection": "u", "pipeline": [ ... ] }
-//! { "kind": "countDocuments",    "collection": "u", "filter": {...} }
-//! { "kind": "findOne",           "collection": "u", "filter": {...}, "projection": {...}|null }
-//! { "kind": "insertOne",         "collection": "u", "doc": {...} }
-//! { "kind": "insertMany",        "collection": "u", "docs": [ ... ] }
-//! { "kind": "findOneAndUpdate",  "collection": "u", "filter": {...}, "update": {...}, "options": {...} }
-//! { "kind": "updateMany",        "collection": "u", "filter": {...}, "update": {...} }
-//! { "kind": "deleteMany",        "collection": "u", "filter": {...} }
+//! { "kind": "find", "source": "default", "namespace": null, "collection": "u", "filter": {...}, "projection": {...}|null }
+//! { "kind": "aggregate", "source": "pg1", "namespace": "app", "collection": "u", "pipeline": [ ... ] }
+//! { "kind": "countDocuments", "source": "default", "namespace": null, "collection": "u", "filter": {...} }
+//! { "kind": "findOne", "source": "default", "namespace": null, "collection": "u", "filter": {...}, "projection": {...}|null }
+//! { "kind": "insertOne", "source": "default", "namespace": null, "collection": "u", "doc": {...} }
+//! { "kind": "insertMany", "source": "default", "namespace": null, "collection": "u", "docs": [ ... ] }
+//! { "kind": "findOneAndUpdate", "source": "default", "namespace": null, "collection": "u", "filter": {...}, "update": {...}, "options": {...} }
+//! { "kind": "updateMany", "source": "default", "namespace": null, "collection": "u", "filter": {...}, "update": {...} }
+//! { "kind": "deleteMany", "source": "default", "namespace": null, "collection": "u", "filter": {...} }
 //! ```
 //!
 //! 两阶段查询（`$lookup` + `$skip/$limit`）的命令序列里，第二条 aggregate 的
@@ -49,8 +54,8 @@ mod query;
 mod write;
 
 pub use cmd::{
-    cmd_aggregate, cmd_count_documents, cmd_delete_many, cmd_find, cmd_find_one,
-    cmd_find_one_and_update, cmd_insert_many, cmd_insert_one, cmd_update_many,
+    apply_route_override, cmd_aggregate, cmd_count_documents, cmd_delete_many, cmd_find,
+    cmd_find_one, cmd_find_one_and_update, cmd_insert_many, cmd_insert_one, cmd_update_many,
 };
 pub use count::{plan_query_with_count, CountQueryPlan};
 pub use finalize::{finalize_query, prepare_query, strip_query};

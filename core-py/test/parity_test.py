@@ -513,6 +513,7 @@ def project_plan(plan):
         {
             "key": s.get("key"),
             "source": s.get("source"),
+            "namespace": s.get("namespace"),
             "model": s.get("model"),
             "mode": s.get("mode"),
         }
@@ -532,7 +533,12 @@ def project_plan(plan):
 
 
 def run_federation_plan(reg, fx):
-    plan = reg.plan_federated(fx.get("gql") or "", fx.get("params") or {}, fx.get("context"))
+    plan = reg.plan_federated(
+        fx.get("gql") or "",
+        fx.get("params") or {},
+        fx.get("context"),
+        fx.get("dsConfig"),
+    )
 
     # 契约：postprocess 必须与单库 plan_query 同形状
     if fx.get("parity_with_query"):

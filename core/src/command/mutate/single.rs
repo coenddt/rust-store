@@ -46,7 +46,7 @@ pub fn plan_update(
     };
 
     let command = cmd_find_one_and_update(
-        &schema.collection,
+        schema,
         condition,
         &update_doc,
         &find_one_and_update_options(options),
@@ -73,12 +73,12 @@ pub fn plan_remove(
         let arch = registry.get(&archive_name)?;
         (
             json!(arch.collection),
-            Some(cmd_find(&schema.collection, condition, None)),
+            Some(cmd_find(schema, condition, None)),
         )
     } else {
         (Value::Null, None)
     };
-    let delete_command = cmd_delete_many(&schema.collection, condition);
+    let delete_command = cmd_delete_many(schema, condition);
     Ok(json!({
         "archiveCollection": archive_collection,
         "findCommand": find_command,
@@ -105,6 +105,6 @@ pub fn plan_archive_docs(
         })
         .collect();
     Ok(json!({
-        "command": cmd_insert_many(&arch.collection, &archived),
+        "command": cmd_insert_many(arch, &archived),
     }))
 }

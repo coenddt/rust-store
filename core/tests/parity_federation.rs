@@ -75,6 +75,7 @@ fn project_plan(plan: &Value) -> Value {
                     json!({
                         "key": s.get("key").cloned().unwrap_or(Value::Null),
                         "source": s.get("source").cloned().unwrap_or(Value::Null),
+                        "namespace": s.get("namespace").cloned().unwrap_or(Value::Null),
                         "model": s.get("model").cloned().unwrap_or(Value::Null),
                         "mode": s.get("mode").cloned().unwrap_or(Value::Null),
                     })
@@ -111,7 +112,13 @@ fn run_plan(fx: &Value) -> Result<Value, String> {
     let registry = build_registry(fx)?;
     let params = params_map(fx);
     let ctx = ctx_of(fx);
-    let plan = plan_federated(gql_of(fx), &params, &registry, ctx.as_ref())?;
+    let plan = plan_federated(
+        gql_of(fx),
+        &params,
+        &registry,
+        ctx.as_ref(),
+        fx.get("dsConfig").unwrap_or(&Value::Null),
+    )?;
 
     // 契约：postprocess 必须与单库 plan_query 同形状（联邦只在「取数 AST」上拆源，
     // 后处理 AST 始终是含全部关系的完整快照）

@@ -3,6 +3,7 @@
 use pyo3::prelude::*;
 use serde_json::{json, Map, Value};
 
+use rust_store_core::command::apply_route_override as core_apply_route_override;
 use rust_store_core::command::{
     plan_aggregate as core_plan_aggregate, plan_archive_docs as core_plan_archive_docs,
     plan_count as core_plan_count, plan_exists as core_plan_exists,
@@ -32,6 +33,15 @@ fn probe_of<'a>(probe_found: Option<bool>, probe_doc: Option<&'a Value>) -> Prob
             None => Probe::NoResult,
         },
     }
+}
+
+/// 多租户路由 override（§6）：`route_override` 键出现才替换计划内命令体的
+/// `source` / `namespace`（见 core `apply_route_override`）
+fn with_route_override(mut plan: Value, route_override: Option<&Value>) -> Value {
+    if let Some(ov) = route_override.filter(|v| !v.is_null()) {
+        core_apply_route_override(&mut plan, ov);
+    }
+    plan
 }
 
 #[pymethods]
@@ -74,22 +84,29 @@ impl Registry {
 
     // ─── Phase 2：Command 序列 ─────────────────────────────
 
-    #[pyo3(signature = (gql, params=None, ctx=None))]
+    #[pyo3(signature = (gql, params=None, ctx=None, route_override=None))]
     fn plan_query(
         &self,
         py: Python<'_>,
         gql: String,
         params: Option<&Bound<'_, PyAny>>,
         ctx: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let params = params_from(params)?;
         let context = ctx_from(ctx)?;
-        let plan = core_plan_query(&gql, &params, &self.core, context.as_ref()).map_err(err)?;
-        to_py(py, plan.to_value())
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
+        let plan = core_plan_query(&gql, &params, &self.core, context.as_ref())
+            .map(|p| p.to_value())
+            .map_err(err)?;
+        to_py(py, with_route_override(plan, ro.as_ref()))
     }
 
     /// 列表 + total；`total` 由 Host 执行 `countCommand` 后回喂，用于算 `hasMore`
-    #[pyo3(signature = (gql, params=None, ctx=None, total=None))]
+    #[pyo3(signature = (gql, params=None, ctx=None, total=None, route_override=None))]
     fn plan_query_with_count(
         &self,
         py: Python<'_>,
@@ -97,9 +114,14 @@ impl Registry {
         params: Option<&Bound<'_, PyAny>>,
         ctx: Option<&Bound<'_, PyAny>>,
         total: Option<f64>,
+        route_override: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let params = params_from(params)?;
         let context = ctx_from(ctx)?;
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
         let plan =
             core_plan_query_with_count(&gql, &params, &self.core, context.as_ref()).map_err(err)?;
 
@@ -108,7 +130,7 @@ impl Registry {
             "hasMore".to_string(),
             json!(plan.has_more(total.unwrap_or(0.0))),
         );
-        to_py(py, Value::Object(out))
+        to_py(py, with_route_override(Value::Object(out), ro.as_ref()))
     }
 
     #[pyo3(signature = (gql, params=None))]
@@ -149,7 +171,7 @@ impl Registry {
     }
 
     /// 生成插入命令；`now` / `new_id` 由 Host 提供（core 无时钟与随机源）
-    #[pyo3(signature = (model, data=None, now=0, new_id="", ctx=None))]
+    #[pyo3(signature = (model, data=None, now=0, new_id="", ctx=None, route_override=None))]
     fn plan_insert(
         &self,
         py: Python<'_>,
@@ -158,11 +180,16 @@ impl Registry {
         now: i64,
         new_id: &str,
         ctx: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let context = ctx_from(ctx)?;
         let data = match data {
             Some(v) => py_to_json(v)?,
             None => Value::Null,
+        };
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
         };
         let bridge = PyFnBridge {
             py,
@@ -178,57 +205,76 @@ impl Registry {
             Some(&bridge),
         )
         .map_err(err)?;
-        to_py(py, out)
+        to_py(py, with_route_override(out, ro.as_ref()))
     }
 
-    #[pyo3(signature = (model, condition=None))]
+    #[pyo3(signature = (model, condition=None, route_override=None))]
     fn plan_exists(
         &self,
         py: Python<'_>,
         model: String,
         condition: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let condition = match condition {
             Some(v) if !v.is_none() => py_to_json(v)?,
             _ => Value::Object(Map::new()),
         };
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
         let out = core_plan_exists(&model, &self.core, &condition).map_err(err)?;
-        to_py(py, out)
+        to_py(py, with_route_override(out, ro.as_ref()))
     }
 
-    #[pyo3(signature = (model, filter=None))]
+    #[pyo3(signature = (model, filter=None, route_override=None))]
     fn plan_count(
         &self,
         py: Python<'_>,
         model: String,
         filter: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let filter = match filter {
             Some(v) if !v.is_none() => Some(py_to_json(v)?),
             _ => None,
         };
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
         let out = core_plan_count(&model, &self.core, filter.as_ref()).map_err(err)?;
-        to_py(py, out)
+        to_py(py, with_route_override(out, ro.as_ref()))
     }
 
+    #[pyo3(signature = (model, pipeline=None, route_override=None))]
     fn plan_aggregate(
         &self,
         py: Python<'_>,
         model: String,
-        pipeline: &Bound<'_, PyAny>,
+        pipeline: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
-        let pipeline = match py_to_json(pipeline)? {
-            Value::Array(a) => a,
-            _ => Vec::new(),
+        let pipeline = match pipeline {
+            Some(v) => match py_to_json(v)? {
+                Value::Array(a) => a,
+                _ => Vec::new(),
+            },
+            None => Vec::new(),
+        };
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
         };
         let out = core_plan_aggregate(&model, &self.core, &pipeline).map_err(err)?;
-        to_py(py, out)
+        to_py(py, with_route_override(out, ro.as_ref()))
     }
 
     // ─── Phase 2.5：写路径命令规划 ─────────────────────────
 
     /// 批量插入命令；`new_ids` 按需消费（仅无 `_id` 的文档取用）
-    #[pyo3(signature = (model, docs=None, now=0, new_ids=None, ctx=None))]
+    #[pyo3(signature = (model, docs=None, now=0, new_ids=None, ctx=None, route_override=None))]
     fn plan_insert_many(
         &self,
         py: Python<'_>,
@@ -237,6 +283,7 @@ impl Registry {
         now: i64,
         new_ids: Option<&Bound<'_, PyAny>>,
         ctx: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let docs = value_list(docs)?;
         let new_ids: Vec<String> = value_list(new_ids)?
@@ -247,6 +294,10 @@ impl Registry {
             })
             .collect();
         let context = ctx_from(ctx)?;
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
         let bridge = PyFnBridge {
             py,
             fns: &self.sync_fns,
@@ -261,14 +312,14 @@ impl Registry {
             Some(&bridge),
         )
         .map_err(err)?;
-        to_py(py, out)
+        to_py(py, with_route_override(out, ro.as_ref()))
     }
 
     /// 更新一条（findOneAndUpdate + returnDocument AFTER）。
     ///
     /// creator 写权限需探针时返回 `{"needsProbe": cmd}`；Host 执行探针后携
     /// `probe_found`（True/False）与 `probe_doc` 重入即得 `{"command": cmd}`。
-    #[pyo3(signature = (model, condition=None, data=None, options=None, now=0, ctx=None, probe_found=None, probe_doc=None))]
+    #[pyo3(signature = (model, condition=None, data=None, options=None, now=0, ctx=None, probe_found=None, probe_doc=None, route_override=None))]
     fn plan_update(
         &self,
         py: Python<'_>,
@@ -280,6 +331,7 @@ impl Registry {
         ctx: Option<&Bound<'_, PyAny>>,
         probe_found: Option<bool>,
         probe_doc: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let condition = match condition {
             Some(v) => py_to_json(v)?,
@@ -294,6 +346,10 @@ impl Registry {
             _ => Value::Null,
         };
         let probe_doc = match probe_doc {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
+        let ro = match route_override {
             Some(v) if !v.is_none() => Some(py_to_json(v)?),
             _ => None,
         };
@@ -309,11 +365,11 @@ impl Registry {
             probe_of(probe_found, probe_doc.as_ref()),
         )
         .map_err(err)?;
-        to_py(py, out)
+        to_py(py, with_route_override(out, ro.as_ref()))
     }
 
     /// 批量更新（guest / 无写授权直接拒绝，不走 creator 探针）
-    #[pyo3(signature = (model, condition=None, data=None, now=0, ctx=None))]
+    #[pyo3(signature = (model, condition=None, data=None, now=0, ctx=None, route_override=None))]
     fn plan_update_many(
         &self,
         py: Python<'_>,
@@ -322,6 +378,7 @@ impl Registry {
         data: Option<&Bound<'_, PyAny>>,
         now: i64,
         ctx: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let condition = match condition {
             Some(v) => py_to_json(v)?,
@@ -331,15 +388,19 @@ impl Registry {
             Some(v) => py_to_json(v)?,
             None => Value::Null,
         };
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
         let context = ctx_from(ctx)?;
         let out = core_plan_update_many(&model, &self.core, context.as_ref(), &condition, &data, now)
             .map_err(err)?;
-        to_py(py, out)
+        to_py(py, with_route_override(out, ro.as_ref()))
     }
 
     /// 删除计划：归档表存在时返回 findCommand（Host 取源文档后调 planArchiveDocs）+
     /// deleteCommand。creator 探针语义同 planUpdate。
-    #[pyo3(signature = (model, condition=None, ctx=None, probe_found=None, probe_doc=None))]
+    #[pyo3(signature = (model, condition=None, ctx=None, probe_found=None, probe_doc=None, route_override=None))]
     fn plan_remove(
         &self,
         py: Python<'_>,
@@ -348,12 +409,17 @@ impl Registry {
         ctx: Option<&Bound<'_, PyAny>>,
         probe_found: Option<bool>,
         probe_doc: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let condition = match condition {
             Some(v) => py_to_json(v)?,
             None => Value::Null,
         };
         let probe_doc = match probe_doc {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
+        let ro = match route_override {
             Some(v) if !v.is_none() => Some(py_to_json(v)?),
             _ => None,
         };
@@ -366,25 +432,30 @@ impl Registry {
             probe_of(probe_found, probe_doc.as_ref()),
         )
         .map_err(err)?;
-        to_py(py, out)
+        to_py(py, with_route_override(out, ro.as_ref()))
     }
 
     /// 归档文档命令：源文档补 `deletedAt` 后批量写入 `<collection>_deleted`
-    #[pyo3(signature = (model, docs=None, now=0))]
+    #[pyo3(signature = (model, docs=None, now=0, route_override=None))]
     fn plan_archive_docs(
         &self,
         py: Python<'_>,
         model: String,
         docs: Option<&Bound<'_, PyAny>>,
         now: i64,
+        route_override: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let docs = value_list(docs)?;
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
         let out = core_plan_archive_docs(&model, &self.core, &docs, now).map_err(err)?;
-        to_py(py, out)
+        to_py(py, with_route_override(out, ro.as_ref()))
     }
 
     /// 显式条件 upsert；`new_id` 仅在需生成 `_id` 时被使用
-    #[pyo3(signature = (model, condition=None, data=None, options=None, now=0, new_id="", ctx=None))]
+    #[pyo3(signature = (model, condition=None, data=None, options=None, now=0, new_id="", ctx=None, route_override=None))]
     fn plan_upsert(
         &self,
         py: Python<'_>,
@@ -395,6 +466,7 @@ impl Registry {
         now: i64,
         new_id: &str,
         ctx: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let condition = match condition {
             Some(v) => py_to_json(v)?,
@@ -408,6 +480,10 @@ impl Registry {
             Some(v) if !v.is_none() => py_to_json(v)?,
             _ => Value::Null,
         };
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
         let context = ctx_from(ctx)?;
         let out = core_plan_upsert(
             &model,
@@ -420,12 +496,12 @@ impl Registry {
             new_id,
         )
         .map_err(err)?;
-        to_py(py, out)
+        to_py(py, with_route_override(out, ro.as_ref()))
     }
 
     /// mutation 规划：展开为有序步骤序列 `{steps: [{model, command}]}`，
     /// 父子依赖用 `{{step.<N>._id}}` 占位符表达，由 Host 依次执行并回填
-    #[pyo3(signature = (model, data=None, now=0, new_ids=None, ctx=None))]
+    #[pyo3(signature = (model, data=None, now=0, new_ids=None, ctx=None, route_override=None))]
     fn plan_mutation(
         &self,
         py: Python<'_>,
@@ -434,6 +510,7 @@ impl Registry {
         now: i64,
         new_ids: Option<&Bound<'_, PyAny>>,
         ctx: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let data = match data {
             Some(v) => py_to_json(v)?,
@@ -446,11 +523,15 @@ impl Registry {
                 _ => None,
             })
             .collect();
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
         let context = ctx_from(ctx)?;
         let out =
             core_plan_mutation(&model, &self.core, context.as_ref(), &data, now, &new_ids)
                 .map_err(err)?;
-        to_py(py, out)
+        to_py(py, with_route_override(out, ro.as_ref()))
     }
 
     /// 写路径结果回喂：对 findOneAndUpdate 返回文档补默认值 / 同步计算列

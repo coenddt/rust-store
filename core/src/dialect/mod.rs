@@ -55,6 +55,17 @@ impl Backend {
         }
     }
 
+    /// 表名 → SQL：namespace 可选限定（`Some(ns)` → `"ns"."table"`；`None` → `"table"`）
+    ///
+    /// namespace 与连接的 search_path / 连接库 / ATTACH 库对应（见
+    /// `multi-datasource-routing-plan.md` §二）；空串按 `None` 处理。
+    pub fn qualified_table(&self, namespace: Option<&str>, table: &str) -> String {
+        match namespace.filter(|s| !s.is_empty()) {
+            Some(ns) => format!("{}.{}", self.quote_ident(ns), self.quote_ident(table)),
+            None => self.quote_ident(table),
+        }
+    }
+
     /// 占位符：SQLite/MySQL 用 `?`，PostgreSQL 用 `$n`（调用方保证按顺序传入 index）
     pub fn placeholder(&self, _index: usize) -> String {
         match self {

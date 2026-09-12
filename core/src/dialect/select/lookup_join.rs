@@ -6,7 +6,8 @@ use crate::schema::{Registry, Schema};
 pub(super) struct Join {
     pub(super) rel_name: String,
     pub(super) alias: String,
-    pub(super) from: String,
+    /// 关系目标 model 名（定位目标 schema 的唯一依据，绝不经 collection 名猜测）
+    pub(super) model: String,
     pub(super) local_col: String,
     pub(super) foreign_col: String,
 }
@@ -16,7 +17,7 @@ pub(super) fn resolve_join(schema: &Schema, registry: &Registry, alias: &str, fr
     let make = |name: &str, d: &crate::schema::RelationDef| Join {
         rel_name: name.to_string(),
         alias: alias.to_string(),
-        from: from.to_string(),
+        model: d.model.clone(),
         local_col: d.local_field.clone(),
         foreign_col: d.foreign_field.clone(),
     };

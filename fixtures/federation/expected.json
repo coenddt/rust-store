@@ -3,11 +3,17 @@
     "name": "federation-single-source-default",
     "kind": "plan",
     "result": {
-      "v": 1,
+      "v": 2,
       "kind": "federated",
       "root": "Post",
       "sources": [
-        { "key": "0", "source": "default", "model": "Post", "mode": "aggregate" }
+        {
+          "key": "0",
+          "source": "default",
+          "model": "Post",
+          "mode": "aggregate",
+          "namespace": null
+        }
       ],
       "edges": [],
       "degraded": [],
@@ -18,11 +24,17 @@
     "name": "federation-same-source-relation",
     "kind": "plan",
     "result": {
-      "v": 1,
+      "v": 2,
       "kind": "federated",
       "root": "Order",
       "sources": [
-        { "key": "0", "source": "mysql_main", "model": "Order", "mode": "aggregate" }
+        {
+          "key": "0",
+          "source": "mysql_main",
+          "model": "Order",
+          "mode": "aggregate",
+          "namespace": null
+        }
       ],
       "edges": [],
       "degraded": [],
@@ -33,15 +45,35 @@
     "name": "federation-cross-source-many",
     "kind": "plan",
     "result": {
-      "v": 1,
+      "v": 2,
       "kind": "federated",
       "root": "User",
       "sources": [
-        { "key": "0", "source": "mongodb_main", "model": "User", "mode": "find" },
-        { "key": "1", "source": "mysql_main", "model": "Order", "mode": "aggregate" }
+        {
+          "key": "0",
+          "source": "mongodb_main",
+          "model": "User",
+          "mode": "find",
+          "namespace": null
+        },
+        {
+          "key": "1",
+          "source": "mysql_main",
+          "model": "Order",
+          "mode": "aggregate",
+          "namespace": null
+        }
       ],
       "edges": [
-        { "parent": "User", "rel": "orders", "local": "_id", "foreign": "userId", "cardinality": "many", "path": [], "key": "1" }
+        {
+          "parent": "User",
+          "rel": "orders",
+          "local": "_id",
+          "foreign": "userId",
+          "cardinality": "many",
+          "path": [],
+          "key": "1"
+        }
       ],
       "degraded": [],
       "hasPostprocess": true
@@ -51,15 +83,35 @@
     "name": "federation-cross-source-one-default-child",
     "kind": "plan",
     "result": {
-      "v": 1,
+      "v": 2,
       "kind": "federated",
       "root": "Comment",
       "sources": [
-        { "key": "0", "source": "mysql_main", "model": "Comment", "mode": "find" },
-        { "key": "1", "source": "default", "model": "Post", "mode": "aggregate" }
+        {
+          "key": "0",
+          "source": "mysql_main",
+          "model": "Comment",
+          "mode": "find",
+          "namespace": null
+        },
+        {
+          "key": "1",
+          "source": "default",
+          "model": "Post",
+          "mode": "aggregate",
+          "namespace": null
+        }
       ],
       "edges": [
-        { "parent": "Comment", "rel": "post", "local": "postId", "foreign": "_id", "cardinality": "one", "path": [], "key": "1" }
+        {
+          "parent": "Comment",
+          "rel": "post",
+          "local": "postId",
+          "foreign": "_id",
+          "cardinality": "one",
+          "path": [],
+          "key": "1"
+        }
       ],
       "degraded": [],
       "hasPostprocess": true
@@ -69,15 +121,35 @@
     "name": "federation-cross-source-one-pg",
     "kind": "plan",
     "result": {
-      "v": 1,
+      "v": 2,
       "kind": "federated",
       "root": "User",
       "sources": [
-        { "key": "0", "source": "mongodb_main", "model": "User", "mode": "find" },
-        { "key": "1", "source": "pg_main", "model": "Profile", "mode": "aggregate" }
+        {
+          "key": "0",
+          "source": "mongodb_main",
+          "model": "User",
+          "mode": "find",
+          "namespace": null
+        },
+        {
+          "key": "1",
+          "source": "pg_main",
+          "model": "Profile",
+          "mode": "aggregate",
+          "namespace": null
+        }
       ],
       "edges": [
-        { "parent": "User", "rel": "profile", "local": "_id", "foreign": "userId", "cardinality": "one", "path": [], "key": "1" }
+        {
+          "parent": "User",
+          "rel": "profile",
+          "local": "_id",
+          "foreign": "userId",
+          "cardinality": "one",
+          "path": [],
+          "key": "1"
+        }
       ],
       "degraded": [],
       "hasPostprocess": true
@@ -87,17 +159,53 @@
     "name": "federation-nested-cross-source",
     "kind": "plan",
     "result": {
-      "v": 1,
+      "v": 2,
       "kind": "federated",
       "root": "Team",
       "sources": [
-        { "key": "0", "source": "mongodb_main", "model": "Team", "mode": "find" },
-        { "key": "2", "source": "mysql_main", "model": "Order", "mode": "aggregate" },
-        { "key": "1", "source": "pg_main", "model": "OrderItem", "mode": "aggregate" }
+        {
+          "key": "0",
+          "source": "mongodb_main",
+          "model": "Team",
+          "mode": "find",
+          "namespace": null
+        },
+        {
+          "key": "2",
+          "source": "mysql_main",
+          "model": "Order",
+          "mode": "aggregate",
+          "namespace": null
+        },
+        {
+          "key": "1",
+          "source": "pg_main",
+          "model": "OrderItem",
+          "mode": "aggregate",
+          "namespace": null
+        }
       ],
       "edges": [
-        { "parent": "Team", "rel": "orders", "local": "_id", "foreign": "teamId", "cardinality": "many", "path": [], "key": "2" },
-        { "parent": "Order", "rel": "items", "local": "_id", "foreign": "orderId", "cardinality": "many", "path": ["orders"], "key": "1" }
+        {
+          "parent": "Team",
+          "rel": "orders",
+          "local": "_id",
+          "foreign": "teamId",
+          "cardinality": "many",
+          "path": [],
+          "key": "2"
+        },
+        {
+          "parent": "Order",
+          "rel": "items",
+          "local": "_id",
+          "foreign": "orderId",
+          "cardinality": "many",
+          "path": [
+            "orders"
+          ],
+          "key": "1"
+        }
       ],
       "degraded": [],
       "hasPostprocess": true
@@ -107,17 +215,39 @@
     "name": "federation-child-paging-degraded",
     "kind": "plan",
     "result": {
-      "v": 1,
+      "v": 2,
       "kind": "federated",
       "root": "User",
       "sources": [
-        { "key": "0", "source": "mongodb_main", "model": "User", "mode": "find" },
-        { "key": "1", "source": "mysql_main", "model": "Order", "mode": "aggregate" }
+        {
+          "key": "0",
+          "source": "mongodb_main",
+          "model": "User",
+          "mode": "find",
+          "namespace": null
+        },
+        {
+          "key": "1",
+          "source": "mysql_main",
+          "model": "Order",
+          "mode": "aggregate",
+          "namespace": null
+        }
       ],
       "edges": [
-        { "parent": "User", "rel": "orders", "local": "_id", "foreign": "userId", "cardinality": "many", "path": [], "key": "1" }
+        {
+          "parent": "User",
+          "rel": "orders",
+          "local": "_id",
+          "foreign": "userId",
+          "cardinality": "many",
+          "path": [],
+          "key": "1"
+        }
       ],
-      "degraded": ["crossSourceChildPaging"],
+      "degraded": [
+        "crossSourceChildPaging"
+      ],
       "hasPostprocess": true
     }
   },
@@ -125,17 +255,39 @@
     "name": "federation-child-sort-degraded",
     "kind": "plan",
     "result": {
-      "v": 1,
+      "v": 2,
       "kind": "federated",
       "root": "User",
       "sources": [
-        { "key": "0", "source": "mongodb_main", "model": "User", "mode": "find" },
-        { "key": "1", "source": "mysql_main", "model": "Order", "mode": "aggregate" }
+        {
+          "key": "0",
+          "source": "mongodb_main",
+          "model": "User",
+          "mode": "find",
+          "namespace": null
+        },
+        {
+          "key": "1",
+          "source": "mysql_main",
+          "model": "Order",
+          "mode": "aggregate",
+          "namespace": null
+        }
       ],
       "edges": [
-        { "parent": "User", "rel": "orders", "local": "_id", "foreign": "userId", "cardinality": "many", "path": [], "key": "1" }
+        {
+          "parent": "User",
+          "rel": "orders",
+          "local": "_id",
+          "foreign": "userId",
+          "cardinality": "many",
+          "path": [],
+          "key": "1"
+        }
       ],
-      "degraded": ["crossSourceChildPaging"],
+      "degraded": [
+        "crossSourceChildPaging"
+      ],
       "hasPostprocess": true
     }
   },
@@ -143,17 +295,39 @@
     "name": "federation-cross-source-sort-degraded",
     "kind": "plan",
     "result": {
-      "v": 1,
+      "v": 2,
       "kind": "federated",
       "root": "User",
       "sources": [
-        { "key": "0", "source": "mongodb_main", "model": "User", "mode": "aggregate" },
-        { "key": "1", "source": "mysql_main", "model": "Order", "mode": "aggregate" }
+        {
+          "key": "0",
+          "source": "mongodb_main",
+          "model": "User",
+          "mode": "aggregate",
+          "namespace": null
+        },
+        {
+          "key": "1",
+          "source": "mysql_main",
+          "model": "Order",
+          "mode": "aggregate",
+          "namespace": null
+        }
       ],
       "edges": [
-        { "parent": "User", "rel": "orders", "local": "_id", "foreign": "userId", "cardinality": "many", "path": [], "key": "1" }
+        {
+          "parent": "User",
+          "rel": "orders",
+          "local": "_id",
+          "foreign": "userId",
+          "cardinality": "many",
+          "path": [],
+          "key": "1"
+        }
       ],
-      "degraded": ["crossSourceSort"],
+      "degraded": [
+        "crossSourceSort"
+      ],
       "hasPostprocess": true
     }
   },
@@ -171,11 +345,17 @@
     "name": "federation-pipeline-single-source",
     "kind": "plan",
     "result": {
-      "v": 1,
+      "v": 2,
       "kind": "federated",
       "root": "Post",
       "sources": [
-        { "key": "0", "source": "default", "model": "Post", "mode": "custom_pipeline" }
+        {
+          "key": "0",
+          "source": "default",
+          "model": "Post",
+          "mode": "custom_pipeline",
+          "namespace": null
+        }
       ],
       "edges": [],
       "degraded": [],
@@ -195,15 +375,27 @@
         "_id": "u1",
         "name": "A",
         "orders": [
-          { "_id": "o1", "userId": "u1", "code": "c1" },
-          { "_id": "o2", "userId": "u1", "code": "c2" }
+          {
+            "_id": "o1",
+            "userId": "u1",
+            "code": "c1"
+          },
+          {
+            "_id": "o2",
+            "userId": "u1",
+            "code": "c2"
+          }
         ]
       },
       {
         "_id": "u2",
         "name": "B",
         "orders": [
-          { "_id": "o3", "userId": "u2", "code": "c3" }
+          {
+            "_id": "o3",
+            "userId": "u2",
+            "code": "c3"
+          }
         ]
       }
     ]
@@ -214,7 +406,11 @@
     "result": [
       {
         "_id": "u1",
-        "profile": { "_id": "p1", "userId": "u1", "bio": "b1" }
+        "profile": {
+          "_id": "p1",
+          "userId": "u1",
+          "bio": "b1"
+        }
       },
       {
         "_id": "u2",
@@ -233,8 +429,16 @@
             "_id": "o1",
             "teamId": "t1",
             "items": [
-              { "_id": "i1", "orderId": "o1", "sku": "s1" },
-              { "_id": "i2", "orderId": "o1", "sku": "s2" }
+              {
+                "_id": "i1",
+                "orderId": "o1",
+                "sku": "s1"
+              },
+              {
+                "_id": "i2",
+                "orderId": "o1",
+                "sku": "s2"
+              }
             ]
           }
         ]

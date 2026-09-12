@@ -98,7 +98,7 @@ fn plan_mutation_node(
             ""
         };
         let doc = build_insert_doc(schema, ctx, &filtered_field, now, new_id)?;
-        cmd_insert_one(&schema.collection, &Value::Object(doc))
+        cmd_insert_one(schema, &Value::Object(doc))
     } else {
         // Upsert 路径（JS `_buildUpsertUpdate` 仅在无 _id 时才 `_generateId`）
         let new_id = if needs_new_id(schema, &filtered_field) {
@@ -109,7 +109,7 @@ fn plan_mutation_node(
         let update_doc = build_upsert_update(schema, &filtered_field, new_id, now);
         let fu_options = json!({ "upsert": true, "returnDocument": "after" });
         cmd_find_one_and_update(
-            &schema.collection,
+            schema,
             &json!({ "$or": or_conditions }),
             &update_doc,
             &fu_options,
@@ -140,7 +140,7 @@ fn plan_mutation_node(
             let filter = json!({ rel_def.foreign_field.clone(): parent_ph });
             let fu_options = json!({ "upsert": true, "returnDocument": "after" });
             let cmd =
-                cmd_find_one_and_update(&rel_schema.collection, &filter, &update_doc, &fu_options);
+                cmd_find_one_and_update(rel_schema, &filter, &update_doc, &fu_options);
             steps.push(json!({ "model": rel_def.model, "command": cmd }));
         } else if rel_def.rel_type == "many" {
             let arr: Vec<Value> = match rel_val {

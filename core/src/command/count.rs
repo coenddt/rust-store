@@ -70,7 +70,7 @@ pub fn plan_query_with_count(
         .unwrap_or_else(|| json!({}));
     count_filter = merge_owner_condition(schema, ctx, Some(count_filter)).unwrap_or_else(|| json!({}));
 
-    let count_command = cmd_count_documents(&schema.collection, &count_filter);
+    let count_command = cmd_count_documents(schema, &count_filter);
 
     Ok(CountQueryPlan {
         query,

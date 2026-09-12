@@ -25,7 +25,19 @@ pub fn translate_select(
 ) -> Result<Vec<SqlStmt>, String> {
     let kind = cmd.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     let collection = cmd.get("collection").and_then(|v| v.as_str()).unwrap_or("");
-    let schema = registry.get_by_collection(collection)?;
+    // 三元组定位：source 缺省 default / namespace 缺省 null（兼容无定位字段的旧命令）
+    let source = cmd
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or(crate::datasource::DEFAULT_SOURCE);
+    let namespace = cmd.get("namespace").and_then(|v| v.as_str());
+    // 结构 schema 按 (source, collection) 定位（override 回落见 `get_for_command`）；
+    // 表名限定跟随命令 namespace（§6：定位由命令决定，结构由 Registry 决定）
+    let mut schema = registry.get_for_command(source, namespace, collection)?.clone();
+    if let Some(ns) = namespace {
+        schema.namespace = Some(ns.to_string());
+    }
+    let schema = &schema;
 
     match kind {
         "countDocuments" => {
@@ -33,7 +45,7 @@ pub fn translate_select(
             let mut seq = 0usize;
             let wh = build_filter(&filter, backend, "t", &col_fn(schema), &mut seq);
             let where_sql = if wh.text.is_empty() { String::new() } else { format!(" WHERE {}", wh.text) };
-            let text = format!("SELECT COUNT(*) FROM {} t{}", q(backend, &schema.collection), where_sql);
+            let text = format!("SELECT COUNT(*) FROM {} t{}", tname(backend, schema), where_sql);
             Ok(vec![SqlStmt::select(text, wh.params, RowShape::empty())])
         }
         "find" | "findOne" => {
@@ -96,4 +108,9 @@ pub(in crate::dialect::select) fn projection_fields(schema: &Schema, projection:
 
 pub(in crate::dialect::select) fn q(backend: Backend, ident: &str) -> String {
     backend.quote_ident(ident)
+}
+
+/// 表名 SQL：带 schema.namespace 限定（区别于列/别名的 `q`）
+pub(in crate::dialect::select) fn tname(backend: Backend, schema: &Schema) -> String {
+    backend.qualified_table(schema.ns(), &schema.collection)
 }

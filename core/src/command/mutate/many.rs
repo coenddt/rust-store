@@ -50,7 +50,7 @@ pub fn plan_insert_many(
         .map(|d| apply_defaults_and_computes(d, schema, fn_registry))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(json!({
-        "command": cmd_insert_many(&schema.collection, &processed),
+        "command": cmd_insert_many(schema, &processed),
         "returns": returns,
     }))
 }
@@ -87,6 +87,6 @@ pub fn plan_update_many(
         json!({ "$set": Value::Object(set_data) })
     };
 
-    let command = cmd_update_many(&schema.collection, condition, &update_doc);
+    let command = cmd_update_many(schema, condition, &update_doc);
     Ok(json!({ "command": command }))
 }

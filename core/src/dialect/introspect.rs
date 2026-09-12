@@ -22,6 +22,10 @@ use super::Backend;
 /// }
 /// ```
 ///
+/// 行形状扩展：`tables[].namespace`（可选）— 当 Host 明确知道表所属库/schema
+/// （如 SQLite attached db、MySQL 显式 database、PG 显式 schema）时携带，
+/// 生成的 def 会带上该 `namespace`（缺省不产出该字段 = 连接默认）。
+///
 /// 输出：schemaJSON 数组（每个 `Schema` 一个 def，可直接传给 `Registry::register`）。
 pub fn schema_def_from_rows(rows: &Value) -> Result<Value, String> {
     let tables = rows.get("tables").and_then(|t| t.as_array()).cloned().unwrap_or_default();
@@ -96,14 +100,20 @@ pub fn schema_def_from_rows(rows: &Value) -> Result<Value, String> {
             );
         }
 
-        defs.push(json!({
+        let mut def = json!({
             "name": name,
             "collection": name,
             "idPrefix": "",
             "timestamps": false,
             "fields": Value::Object(fields_map),
             "relations": Value::Object(relations_map),
-        }));
+        });
+        // tables[].namespace（可选）→ def.namespace（连接内库/schema 显式定位）
+        let ns = t.get("namespace").and_then(|v| v.as_str()).unwrap_or("");
+        if !ns.is_empty() {
+            def["namespace"] = json!(ns);
+        }
+        defs.push(def);
     }
 
     // 第二轮：把反向 `__rev_<refTable>` 关系归一到被引用表的 `relations` 里
