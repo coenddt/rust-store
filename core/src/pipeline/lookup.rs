@@ -7,7 +7,7 @@ use crate::schema::{Registry, RelationDef, Schema};
 use crate::types::is_truthy;
 
 use super::ast::RelAst;
-use super::util::{append_order, is_nullish, param};
+use super::util::{append_order, is_nullish, non_nullish, param};
 use super::{MAX_DEPTH, MAX_PAGINATED_DEPTH};
 
 /// 外键匹配表达式：数组字段用 $in，否则 $eq
@@ -121,6 +121,8 @@ fn ns_lookup_stages(
     Ok(stages)
 }
 
+/// `$lookup` 翻译入口：签名与 JS 参考实现逐一对应（跨语言 parity 优先于参数个数）。
+#[allow(clippy::too_many_arguments)]
 pub fn build_lookup(
     rel_name: &str,
     rel_ast: &RelAst,
@@ -154,8 +156,8 @@ pub fn build_lookup(
 
     // $match: 外键关联 + 附加条件
     let match_expr = rel_match_expr(&foreign_key, &let_var, is_array);
-    if !is_nullish(condition.as_ref()) {
-        stages.push(json!({ "$match": { "$and": [match_expr, condition.unwrap()] } }));
+    if let Some(cond) = non_nullish(condition.as_ref()) {
+        stages.push(json!({ "$match": { "$and": [match_expr, cond] } }));
     } else {
         stages.push(json!({ "$match": match_expr }));
     }

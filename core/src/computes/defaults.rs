@@ -88,21 +88,19 @@ pub fn apply_defaults_and_computes(
     let Some(src) = doc.as_object() else {
         return Ok(doc.clone());
     };
-    let mut result = Value::Object(src.clone());
+    // 全程以 `Map` 承载（避免反复 `as_object_mut().unwrap()`：一旦 result 形状被改动即 panic）
+    let mut obj = src.clone();
 
     for (key, field) in &schema.fields {
-        {
-            let o = result.as_object_mut().unwrap();
-            let absent = o.get(key).map(|v| v.is_null()).unwrap_or(true);
-            if absent {
-                if let Some(defn) = field_default(field) {
-                    o.insert(key.clone(), defn);
-                }
+        let absent = obj.get(key).map(|v| v.is_null()).unwrap_or(true);
+        if absent {
+            if let Some(defn) = field_default(field) {
+                obj.insert(key.clone(), defn);
             }
         }
         if is_object_field(field) {
             if let Some(fd) = field.fields.clone() {
-                if let Some(sub) = result.as_object_mut().unwrap().get_mut(key) {
+                if let Some(sub) = obj.get_mut(key) {
                     if sub.is_object() {
                         fill_nested_defaults(sub, &fd);
                     }
@@ -111,6 +109,8 @@ pub fn apply_defaults_and_computes(
         }
     }
 
+    let mut result = Value::Object(obj);
+
     // 同步 fn 计算列（对应 JS `if (comp.fn) result[key] = comp.fn(result)`）
     let cache = ensure_cache(schema);
     for entry in &cache.fn_list {
@@ -118,10 +118,10 @@ pub fn apply_defaults_and_computes(
             Some(r) => r.call_sync(&entry.fn_ref, &result)?,
             None => return Err(format!("计算列 {} 未注册同步实现", entry.key)),
         };
-        result
-            .as_object_mut()
-            .unwrap()
-            .insert(entry.key.clone(), v);
+        let Some(o) = result.as_object_mut() else {
+            return Err("apply_defaults_and_computes：结果不是对象".to_string());
+        };
+        o.insert(entry.key.clone(), v);
     }
 
     Ok(result)

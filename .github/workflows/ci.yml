@@ -1,0 +1,75 @@
+name: ci
+
+# 三层流水线（对应评测报告 m-6「测试分层」）：
+#   1. core       —— 纯 Rust，无宿主依赖：clippy 零告警门禁 + cargo test（仅 core）
+#   2. node-binding —— Node 宿主：napi debug 构建 + test/*.test.js parity 对拍
+#   3. py-binding   —— Python 宿主：maturin wheel 构建 + test/parity_test.py 对拍
+#
+# 绑定 crate 已设 `[lib] test = false`（cdylib 测试二进制无宿主即 STATUS_DLL_NOT_FOUND），
+# 因此 `cargo test --workspace` 不会再误判；对拍 parity 一律由宿主侧测试承担。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: core (clippy + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy（零告警门禁）
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test（仅 core crate；绑定层 parity 见 node-binding / py-binding）
+        run: cargo test -p rust-store-core
+
+  node-binding:
+    name: node binding parity
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core-node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core-node
+      - run: npm ci
+      - name: Build binding（debug 构建，parity 不测性能）
+        run: npx napi build --platform
+      - name: Node 宿主 parity 对拍
+        run: npm test
+
+  py-binding:
+    name: python binding parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core-py
+      - name: Build wheel + install
+        working-directory: core-py
+        run: |
+          pip install maturin pytest
+          maturin build --out dist
+          pip install --force-reinstall dist/*.whl
+      - name: Python 宿主 parity 对拍
+        run: python -m pytest core-py/test/parity_test.py -v

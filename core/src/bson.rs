@@ -78,15 +78,17 @@ pub fn canonicalize(v: &Value) -> Value {
         Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
         Value::Object(o) => {
             if is_extended(v) {
-                let (k, inner) = o.iter().next().expect("is_extended 保证非空");
-                return match (k.as_str(), inner) {
-                    (KEY_OID, Value::String(s)) => object_id(s),
-                    _ => {
-                        let mut m = Map::new();
-                        m.insert(k.clone(), inner.clone());
-                        Value::Object(m)
-                    }
-                };
+                // is_extended 保证恰好一个键；仍用 checked 取值，避免不变量漂移后 panic
+                if let Some((k, inner)) = o.iter().next() {
+                    return match (k.as_str(), inner) {
+                        (KEY_OID, Value::String(s)) => object_id(s),
+                        _ => {
+                            let mut m = Map::new();
+                            m.insert(k.clone(), inner.clone());
+                            Value::Object(m)
+                        }
+                    };
+                }
             }
             Value::Object(o.iter().map(|(k, x)| (k.clone(), canonicalize(x))).collect())
         }

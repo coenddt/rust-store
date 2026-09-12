@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 use crate::command::cmd::{cmd_insert_many, cmd_update_many};
 use crate::command::write::build_insert_doc;
-use crate::command::ERR_NO_WRITE;
+use crate::command::{ensure_context, ERR_NO_BATCH_WRITE, ERR_NO_WRITE};
 use crate::computes::{apply_defaults_and_computes, FnRegistry};
 use crate::permission::{can_write_schema, Context};
 use crate::schema::Registry;
@@ -24,6 +24,7 @@ pub fn plan_insert_many(
     new_ids: &[String],
     fn_registry: Option<&dyn FnRegistry>,
 ) -> Result<Value, String> {
+    ensure_context(registry, ctx)?;
     // JS：非数组/空数组直接返回 []，不产生命令
     if docs.is_empty() {
         return Ok(json!({ "command": Value::Null, "returns": [] }));
@@ -64,6 +65,7 @@ pub fn plan_update_many(
     data: &Value,
     now: i64,
 ) -> Result<Value, String> {
+    ensure_context(registry, ctx)?;
     let schema = registry.get(schema_name)?;
     if let Some(c) = ctx {
         let guest = c
@@ -73,7 +75,7 @@ pub fn plan_update_many(
             .iter()
             .any(|r| r == "guest");
         if guest || !can_write_schema(schema, ctx) {
-            return Err("无批量写入权限".to_string());
+            return Err(ERR_NO_BATCH_WRITE.to_string());
         }
     }
 

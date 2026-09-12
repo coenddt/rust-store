@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 use serde_json::{json, Map, Value};
 
-use crate::command::{build_plan, plan_query_ast_mut, ERR_PERMISSION};
+use crate::command::{build_plan, ensure_context, plan_query_ast_mut, ERR_PERMISSION};
 use crate::computes::{merge_depends_into_ast, InjectInfo};
 use crate::datasource::{DataSource, DataSourceConfig};
 use crate::permission::{can_read_schema, merge_owner_condition, Context};
@@ -98,6 +98,9 @@ struct EdgeSpec {
 /// 递归拆源：就地剥离跨源关系，产出子取数单元与 join 边
 ///
 /// `fields` / `relations` 是**当前层**的取数 AST 片段（父模型视角）。
+/// `units` / `edges` / `degraded` 为递归累加的出参（federation 规划全程单线程），
+/// 拆散到 struct 反而模糊「就地累加」语义，保持位置参数。
+#[allow(clippy::too_many_arguments)]
 fn walk(
     parent_model: &str,
     ds_cfg: &DataSourceConfig,
@@ -269,6 +272,7 @@ pub fn plan_federated(
     let ds_cfg = DataSourceConfig::from_json(ds_config)?;
     let mut params = params.clone();
     let mut ast = parse_gql(gql)?;
+    ensure_context(registry, ctx)?;
     let root_schema = registry.get(&ast.model)?.clone();
 
     if ctx.is_some() && !can_read_schema(&root_schema, ctx) {

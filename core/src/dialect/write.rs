@@ -16,11 +16,13 @@ use super::ir::{RowCol, RowShape, SqlStmt};
 use super::Backend;
 
 /// 翻译写命令
+///
+/// 写路径不产出 `warnings`（`unsupported` 机制在 select 侧）——需要告警的翻译在此直接报错，
+/// 故不再保留占位参数（评测报告 I-2）。
 pub fn translate_write(
     backend: Backend,
     cmd: &Value,
     registry: &Registry,
-    _warnings: &mut Vec<String>,
 ) -> Result<Vec<SqlStmt>, String> {
     let kind = cmd.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     let collection = cmd.get("collection").and_then(|v| v.as_str()).unwrap_or("");
@@ -49,7 +51,8 @@ pub fn translate_write(
             if docs.is_empty() {
                 return Err("insertMany 无文档".to_string());
             }
-            build_insert_many(backend, schema, &docs)
+            let upsert_by_id = cmd.get("upsertById").and_then(|v| v.as_bool()).unwrap_or(false);
+            build_insert_many(backend, schema, &docs, upsert_by_id)
         }
         "updateMany" => {
             let filter = cmd.get("filter").cloned().unwrap_or(json!({}));
@@ -104,22 +107,9 @@ impl Binder {
 
 // ─── 字段/列白名单 ───────────────────────────────────────────
 
-/// 标量字段 → 列名（object/array 展平字段跳过；点号路径按整串处理）。
-///
-/// 与 `dialect/select` 的 `col_fn` 语义一致；此处独立实现以避免跨模块耦合。
+/// 标量字段 → 列名（写侧薄包装；语义唯一出处见 [`super::scalar_column`]）
 fn scalar_col(schema: &Schema, field: &str) -> Option<String> {
-    if field.contains('.') {
-        let (head, _) = field.split_once('.')?;
-        let head_type = schema.fields.get(head).map(|f| f.field_type.clone());
-        if matches!(head_type.as_deref(), Some("object") | Some("array")) {
-            return None;
-        }
-        return Some(field.to_string());
-    }
-    match schema.fields.get(field) {
-        Some(f) if f.field_type == "object" || f.field_type == "array" => None,
-        _ => Some(field.to_string()),
-    }
+    super::scalar_column(schema, field)
 }
 
 fn col_map(schema: &Schema) -> impl Fn(&str) -> Option<String> + '_ {
@@ -184,7 +174,16 @@ fn build_insert(backend: Backend, schema: &Schema, doc: &Value) -> SqlStmt {
 }
 
 /// 多条 insert → 一条 `INSERT ... VALUES (...), (...)`
-fn build_insert_many(backend: Backend, schema: &Schema, docs: &[Value]) -> Result<Vec<SqlStmt>, String> {
+///
+/// `upsert_by_id`（归档幂等）：`_id` 冲突时改为整行覆盖/更新 ——
+/// PostgreSQL `ON CONFLICT (_id) DO UPDATE`、MySQL `ON DUPLICATE KEY UPDATE`、
+/// SQLite `INSERT OR REPLACE`。
+fn build_insert_many(
+    backend: Backend,
+    schema: &Schema,
+    docs: &[Value],
+    upsert_by_id: bool,
+) -> Result<Vec<SqlStmt>, String> {
     let cols = scalar_cols(schema, &docs[0]);
     if cols.is_empty() {
         return Err("insertMany 无标量可写字段".to_string());
@@ -199,12 +198,43 @@ fn build_insert_many(backend: Backend, schema: &Schema, docs: &[Value]) -> Resul
             .collect();
         groups.push(format!("({})", phs.join(", ")));
     }
-    let text = format!(
+    let mut text = format!(
         "INSERT INTO {} ({}) VALUES {}",
         tname(backend, schema),
         cols_sql,
         groups.join(", "),
     );
+    if upsert_by_id {
+        let upd_cols: Vec<&String> = cols.iter().filter(|c| c.as_str() != "_id").collect();
+        text = match backend {
+            Backend::Sqlite => format!("INSERT OR REPLACE INTO {}", &text["INSERT INTO ".len()..]),
+            Backend::Postgres => {
+                if upd_cols.is_empty() {
+                    format!("{} ON CONFLICT ({}) DO NOTHING", text, q(backend, "_id"))
+                } else {
+                    let sets = upd_cols
+                        .iter()
+                        .map(|c| format!("{} = EXCLUDED.{}", q(backend, c), q(backend, c)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{} ON CONFLICT ({}) DO UPDATE SET {}", text, q(backend, "_id"), sets)
+                }
+            }
+            Backend::Mysql => {
+                let sets = if upd_cols.is_empty() {
+                    // 无可更新列时的 no-op 赋值，保证语法合法
+                    format!("{} = {}", q(backend, "_id"), q(backend, "_id"))
+                } else {
+                    upd_cols
+                        .iter()
+                        .map(|c| format!("{} = VALUES({})", q(backend, c), q(backend, c)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                format!("{} ON DUPLICATE KEY UPDATE {}", text, sets)
+            }
+        };
+    }
     Ok(vec![SqlStmt::write(text, binder.params)])
 }
 
@@ -343,7 +373,7 @@ fn translate_find_one_and_update(
         Ok(vec![stmt])
     } else {
         // MySQL：无 RETURNING → 写后按同一 filter 回读（两段编排由 Host 执行器顺序执行）
-        let stmts = vec![SqlStmt::write(update_text, binder.params)];
+        let update_stmt = SqlStmt::write(update_text, binder.params);
 
         let select_list = cols
             .iter()
@@ -361,7 +391,7 @@ fn translate_find_one_and_update(
         let mut read_stmt = SqlStmt::write(select_text, read_binder.params);
         read_stmt.is_write = false;
         read_stmt.row_shape = Some(returning_shape(&cols));
-        Ok(vec![stmts.into_iter().next().unwrap(), read_stmt])
+        Ok(vec![update_stmt, read_stmt])
     }
 }
 

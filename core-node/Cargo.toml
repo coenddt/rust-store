@@ -9,6 +9,10 @@ publish = false
 name = "rust_store_node"
 crate-type = ["cdylib"]
 path = "src/lib.rs"
+# cdylib 的 Rust 测试二进制需 Node 宿主加载运行时符号，无宿主时直接
+# STATUS_DLL_NOT_FOUND。本 crate 的对拍测试在 test/*.test.js（Node 跑），
+# Rust 侧无单测 —— 关闭 lib test，CI 只对 core 跑 `cargo test`（见 ci.yml）。
+test = false
 
 [dependencies]
 rust-store-core = { path = "../core" }

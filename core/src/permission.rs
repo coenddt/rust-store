@@ -1,6 +1,16 @@
 //! 权限引擎（对应 JS `src/permission.js`）
 //!
 //! 与 JS 版的差异：`AsyncLocalStorage` 隐式上下文改为**显式 `Context` 入参**。
+//!
+//! ## 信任模型（fail-open 契约）
+//!
+//! `ctx: None` = 「系统内部调用，跳过权限检查」——与 JS 原版 `if (ctx)` 语义对齐，
+//! **默认 fail-open**（调用方忘传 ctx 不会报错而是放行）。对安全敏感的宿主应：
+//!
+//! 1. 开启 [`crate::schema::Registry::set_require_context(true)`]：此后 `ctx` 缺失
+//!    在所有 plan 入口显式报错（fail-secure opt-in，默认关闭以保持三端 parity）；
+//! 2. 内部调用（索引创建、归档回填等）显式传 [`Context::system`]，
+//!    与「忘传 ctx」在语义上彻底分离。
 
 use std::collections::HashSet;
 
@@ -15,6 +25,21 @@ pub struct Context {
     pub roles: Option<Vec<String>>,
     pub role: Option<String>,
     pub internal: bool,
+}
+
+impl Context {
+    /// 系统内部调用上下文：`internal: true` → 权限引擎全放行、不注入 owner 条件。
+    ///
+    /// 供 Host 的内部路径（索引创建、归档回填、后台任务等）显式表达「这是系统调用」，
+    /// 与 `None`（调用方未传上下文，`require_context` 开启时会报错）区分开。
+    pub fn system() -> Self {
+        Self {
+            user_id: None,
+            roles: None,
+            role: None,
+            internal: true,
+        }
+    }
 }
 
 /// 从 fixture/请求的 JSON 上下文构建 `Context`；null/非对象 → None（等价 JS 的 undefined）
@@ -80,7 +105,8 @@ pub fn evaluate(ctx: Option<&Context>, role_list: Option<&[String]>, doc: Doc) -
     } else {
         roles
     };
-    let list = role_list.unwrap();
+    // `empty` 已早退，此处 role_list 必为 Some 且非空
+    let Some(list) = role_list else { return true };
     if list.iter().any(|r| effective.iter().any(|x| x == r)) {
         return true;
     }

@@ -8,12 +8,23 @@ use std::collections::HashSet;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
+use rust_store_core::CoreError;
 use serde_json::{Map, Value};
 
 use rust_store_core::permission::{context_from_value, Context};
 
+/// core 错误 → Python 异常（评测报告 rust m-3：结构化错误映射）。
+///
+/// core 的 `String` 错误在 FFI 边界经 [`CoreError`] 归类——哨兵前缀匹配收口在
+/// `core::error::classify`（core 内唯一匹配点），绑定层只消费枚举。
+///
+/// 三个变体统一映射 `RuntimeError` 且消息保留**完整原文**（含哨兵前缀）：
+/// py-store 侧 `crud/exec.py` 捕获 `RuntimeError` 后按 `ERR_PERMISSION:` 前缀
+/// 剥离并映射为自有 `PermissionError`（继承 `Exception`）——若权限变体映射
+/// 内建 `PermissionError`（`OSError` 子类）反而绕过该捕获链，故刻意保持。
+/// 如需原生异常类型，在此 match [`CoreError`] 变体并同步调整 py-store。
 pub(crate) fn err(msg: String) -> PyErr {
-    PyRuntimeError::new_err(msg)
+    PyRuntimeError::new_err(CoreError::from(msg).message().to_owned())
 }
 
 /// `serde_json::Value` → Python 对象（None / bool / int / float / str / list / dict）

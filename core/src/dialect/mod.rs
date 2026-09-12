@@ -28,6 +28,28 @@ pub use overlay::merge_schema;
 pub use row::restore_rows_json;
 pub use translate::translate;
 
+use crate::schema::Schema;
+
+/// 标量字段 → 列名（本表列）；object/array 展平字段跳过；点号路径按整串处理。
+///
+/// **读（[`select`]）与写（[`write`]）共用此唯一实现。** 两侧语义若各自漂移会产生
+/// 读写不对称（读得到的列写不进 / 写进去的列读不出），故收口到此，两侧只做薄包装。
+pub(crate) fn scalar_column(schema: &Schema, field: &str) -> Option<String> {
+    if field.contains('.') {
+        let (head, _) = field.split_once('.')?;
+        // 点号字段：若 head 是 object/array（其子字段展平到附属表）则跳过；否则按整串处理
+        let head_type = schema.fields.get(head).map(|f| f.field_type.as_str());
+        if matches!(head_type, Some("object") | Some("array")) {
+            return None;
+        }
+        return Some(field.to_string());
+    }
+    match schema.fields.get(field).map(|f| f.field_type.as_str()) {
+        Some("object") | Some("array") => None,
+        _ => Some(field.to_string()),
+    }
+}
+
 /// 支持的数据库后端
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {

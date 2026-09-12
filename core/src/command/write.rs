@@ -8,7 +8,7 @@ use crate::schema::{Registry, Schema};
 use crate::types::is_truthy;
 
 use super::cmd::{cmd_aggregate, cmd_count_documents, cmd_find_one, cmd_insert_one};
-use super::ERR_NO_WRITE;
+use super::{ensure_context, ERR_NO_WRITE};
 
 /// 生成插入命令（对应 JS `insert`）
 ///
@@ -22,6 +22,7 @@ pub fn plan_insert(
     new_id: &str,
     fn_registry: Option<&dyn FnRegistry>,
 ) -> Result<Value, String> {
+    ensure_context(registry, ctx)?;
     let schema = registry.get(schema_name)?;
 
     if !can_write_schema(schema, ctx) {

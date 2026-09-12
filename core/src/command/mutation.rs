@@ -22,7 +22,7 @@ use super::mutate::{
     object_of,
 };
 use super::write::build_insert_doc;
-use super::{step_id_placeholder, ERR_NO_WRITE};
+use super::{ensure_context, step_id_placeholder, ERR_NO_WRITE};
 
 /// 规划一条 mutation（对应 JS `mutation` 的单条分支 `_mutationOne`）。
 ///
@@ -36,6 +36,7 @@ pub fn plan_mutation(
     now: i64,
     new_ids: &[String],
 ) -> Result<Value, String> {
+    ensure_context(registry, ctx)?;
     let mut steps: Vec<Value> = Vec::new();
     let mut ids = IdCursor::new(new_ids);
     plan_mutation_node(schema_name, registry, ctx, data, now, &mut ids, &mut steps)?;
@@ -122,14 +123,26 @@ fn plan_mutation_node(
         if rel_val.is_null() {
             continue;
         }
-        let rel_def = &schema.relations[rel_name];
+        // checked 索引：数据键未在 relations 定义时显式报错，绝不 panic
+        let rel_def = schema.relations.get(rel_name).ok_or_else(|| {
+            format!("模型 {} 的数据含未定义关系字段 {}", schema_name, rel_name)
+        })?;
         let rel_schema = registry.get(&rel_def.model)?;
 
         if rel_def.rel_type == "one" {
-            // type:'one' 子文档强制按 foreignKey upsert（无权限过滤，对齐 JS `_upsertOne`）
+            // type:'one' 子文档强制按 foreignKey upsert（写入形态对齐 JS `_upsertOne`；
+            // 权限门禁与字段过滤与 many 路径对齐：can_write_schema + filter_writable_data，
+            // 拥有父模型写权限 ≠ 拥有子模型写权限）
+            if !can_write_schema(rel_schema, ctx) {
+                return Err(ERR_NO_WRITE.to_string());
+            }
             let mut child = object_of(rel_val);
             child.insert(rel_def.foreign_field.clone(), json!(parent_ph));
-            let child_val = Value::Object(child);
+            // 注入外键后再过滤（与 many 路径 plan_mutation_node 的过滤时机一致）
+            let child_val = match ctx {
+                Some(_) => filter_writable_data(rel_schema, ctx, &Value::Object(child)),
+                None => Value::Object(child),
+            };
             // JS `_upsertOne`：仅无 _id 时才 `_generateId`
             let new_id = if needs_new_id(rel_schema, &child_val) {
                 ids.next()?

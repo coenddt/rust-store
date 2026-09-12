@@ -53,6 +53,12 @@ impl Registry {
     }
 }
 
+impl Default for Registry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[napi]
 impl Registry {
     #[napi(constructor)]
@@ -95,4 +101,26 @@ impl Registry {
     pub fn set_allow_user_pipeline(&mut self, allow: bool) {
         self.core.set_allow_user_pipeline(allow);
     }
+
+    /// 开关「上下文强制」（默认关闭 = fail-open，保持 JS parity）。
+    /// 开启后：plan 入口遇 `ctx` 缺失抛 `ERR_NO_CONTEXT`（fail-secure），
+    /// 内部调用须显式传系统上下文 `systemContext()`。
+    #[napi]
+    pub fn set_require_context(&mut self, require: bool) {
+        self.core.set_require_context(require);
+    }
+
+    /// 「上下文强制」开关当前值
+    #[napi]
+    pub fn require_context(&self) -> bool {
+        self.core.require_context()
+    }
+}
+
+/// 系统内部调用上下文工厂：`{ internal: true }` —— 权限引擎全放行、不注入 owner
+/// 条件。供 Host 的内部路径（索引创建、归档回填、后台任务等）显式表达「系统调用」，
+/// 与 `undefined`（未传上下文，`require_context` 开启时报错）区分。
+#[napi]
+pub fn system_context() -> Value {
+    serde_json::json!({ "internal": true })
 }

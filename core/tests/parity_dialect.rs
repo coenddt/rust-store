@@ -22,9 +22,7 @@ fn registry_with(schemas: &[Value]) -> Registry {
 
 /// 归一化 SQL：去标识符引号、占位符归一为 `?`、折叠空白、小写（仅用于跨端语义对比）
 fn normalize(sql: &str) -> String {
-    let s = sql
-        .replace('`', "")
-        .replace('"', "");
+    let s = sql.replace(['`', '"'], "");
     // `$n` → `?`
     let mut out = String::with_capacity(s.len());
     let chars: Vec<char> = s.chars().collect();
@@ -303,7 +301,7 @@ fn dialect_overlay_merge_compute_and_permission() {
     let def = merged.as_array().unwrap().first().unwrap();
     // 计算列注入
     let computes = def.get("computes").expect("computes 存在");
-    assert_eq!(computes.get("slug").is_some(), true);
+    assert!(computes.get("slug").is_some());
     // 字段并集
     let fields = def.get("fields").and_then(|f| f.as_object()).expect("fields");
     assert!(fields.contains_key("title") && fields.contains_key("views"));

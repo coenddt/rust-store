@@ -84,8 +84,10 @@ pub(super) fn translate_aggregate(
             root_limit = l.as_i64();
         } else if let Some(p) = stage.get("$project") {
             project_on = Some(projection_fields(schema, Some(p)));
-        } else if let Some(_r) = stage.get("$lookup") {
-            unreachable!()
+        } else if stage.get("$lookup").is_some() {
+            // 理论不可达：$lookup 已在上方分支处理（含 childLimit 标记）。防御性收口——
+            // 本模块契约是「绝不 panic / 绝不生成错误 SQL」，收拢到 Err 而非 unreachable!()
+            return Err("SELECT 翻译不支持 $lookup 阶段（应经 JOIN 下推）".to_string());
         }
         // $unwind / $addFields / $count … 忽略或告警
     }
@@ -180,11 +182,11 @@ pub(super) fn translate_aggregate(
             }
             _ => {
                 if root_offset > 0 {
-                    limit_sql = format!(" LIMIT ? OFFSET ?");
+                    limit_sql = " LIMIT ? OFFSET ?".to_string();
                     limit_params.push(json!(lim));
                     limit_params.push(json!(root_offset));
                 } else {
-                    limit_sql = format!(" LIMIT ?");
+                    limit_sql = " LIMIT ?".to_string();
                     limit_params.push(json!(lim));
                 }
             }
@@ -197,7 +199,7 @@ pub(super) fn translate_aggregate(
                 limit_params.push(json!(root_offset));
             }
             _ => {
-                limit_sql = format!(" LIMIT -1 OFFSET ?");
+                limit_sql = " LIMIT -1 OFFSET ?".to_string();
                 limit_params.push(json!(root_offset));
             }
         }

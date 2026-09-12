@@ -9,6 +9,7 @@ use rust_store_core::command::{
     plan_count as core_plan_count, plan_exists as core_plan_exists,
     plan_insert as core_plan_insert, plan_insert_many as core_plan_insert_many,
     plan_mutation as core_plan_mutation, plan_query as core_plan_query,
+    plan_query_one as core_plan_query_one,
     plan_query_with_count as core_plan_query_with_count, plan_remove as core_plan_remove,
     plan_update as core_plan_update, plan_update_many as core_plan_update_many,
     plan_upsert as core_plan_upsert, resolve_page as core_resolve_page,
@@ -105,6 +106,28 @@ impl Registry {
         to_py(py, with_route_override(plan, ro.as_ref()))
     }
 
+    /// queryOne 计划：未显式 `$limit` 时强制下推 `$limit(1)`（`$pipeline` 全权模式不注入）
+    #[pyo3(signature = (gql, params=None, ctx=None, route_override=None))]
+    fn plan_query_one(
+        &self,
+        py: Python<'_>,
+        gql: String,
+        params: Option<&Bound<'_, PyAny>>,
+        ctx: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let params = params_from(params)?;
+        let context = ctx_from(ctx)?;
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
+        let plan = core_plan_query_one(&gql, &params, &self.core, context.as_ref())
+            .map(|p| p.to_value())
+            .map_err(err)?;
+        to_py(py, with_route_override(plan, ro.as_ref()))
+    }
+
     /// 列表 + total；`total` 由 Host 执行 `countCommand` 后回喂，用于算 `hasMore`
     #[pyo3(signature = (gql, params=None, ctx=None, total=None, route_override=None))]
     fn plan_query_with_count(
@@ -171,7 +194,10 @@ impl Registry {
     }
 
     /// 生成插入命令；`now` / `new_id` 由 Host 提供（core 无时钟与随机源）
+    ///
+    /// 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
     #[pyo3(signature = (model, data=None, now=0, new_id="", ctx=None, route_override=None))]
+    #[allow(clippy::too_many_arguments)]
     fn plan_insert(
         &self,
         py: Python<'_>,
@@ -274,7 +300,10 @@ impl Registry {
     // ─── Phase 2.5：写路径命令规划 ─────────────────────────
 
     /// 批量插入命令；`new_ids` 按需消费（仅无 `_id` 的文档取用）
+    ///
+    /// 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
     #[pyo3(signature = (model, docs=None, now=0, new_ids=None, ctx=None, route_override=None))]
+    #[allow(clippy::too_many_arguments)]
     fn plan_insert_many(
         &self,
         py: Python<'_>,
@@ -319,7 +348,10 @@ impl Registry {
     ///
     /// creator 写权限需探针时返回 `{"needsProbe": cmd}`；Host 执行探针后携
     /// `probe_found`（True/False）与 `probe_doc` 重入即得 `{"command": cmd}`。
+    ///
+    /// 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
     #[pyo3(signature = (model, condition=None, data=None, options=None, now=0, ctx=None, probe_found=None, probe_doc=None, route_override=None))]
+    #[allow(clippy::too_many_arguments)]
     fn plan_update(
         &self,
         py: Python<'_>,
@@ -369,7 +401,10 @@ impl Registry {
     }
 
     /// 批量更新（guest / 无写授权直接拒绝，不走 creator 探针）
+    ///
+    /// 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
     #[pyo3(signature = (model, condition=None, data=None, now=0, ctx=None, route_override=None))]
+    #[allow(clippy::too_many_arguments)]
     fn plan_update_many(
         &self,
         py: Python<'_>,
@@ -400,7 +435,10 @@ impl Registry {
 
     /// 删除计划：归档表存在时返回 findCommand（Host 取源文档后调 planArchiveDocs）+
     /// deleteCommand。creator 探针语义同 planUpdate。
+    ///
+    /// 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
     #[pyo3(signature = (model, condition=None, ctx=None, probe_found=None, probe_doc=None, route_override=None))]
+    #[allow(clippy::too_many_arguments)]
     fn plan_remove(
         &self,
         py: Python<'_>,
@@ -455,7 +493,10 @@ impl Registry {
     }
 
     /// 显式条件 upsert；`new_id` 仅在需生成 `_id` 时被使用
+    ///
+    /// 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
     #[pyo3(signature = (model, condition=None, data=None, options=None, now=0, new_id="", ctx=None, route_override=None))]
+    #[allow(clippy::too_many_arguments)]
     fn plan_upsert(
         &self,
         py: Python<'_>,
@@ -501,7 +542,10 @@ impl Registry {
 
     /// mutation 规划：展开为有序步骤序列 `{steps: [{model, command}]}`，
     /// 父子依赖用 `{{step.<N>._id}}` 占位符表达，由 Host 依次执行并回填
+    ///
+    /// 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
     #[pyo3(signature = (model, data=None, now=0, new_ids=None, ctx=None, route_override=None))]
+    #[allow(clippy::too_many_arguments)]
     fn plan_mutation(
         &self,
         py: Python<'_>,

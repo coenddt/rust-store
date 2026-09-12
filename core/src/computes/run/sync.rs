@@ -336,8 +336,13 @@ fn prune_dot_subfields(doc: &mut Value, dot_fields: &[(String, Vec<String>)]) {
 /// 递归处理单条文档：补默认值 → 跑 fn 计算列 → 补计算列默认值 → 递归下钻 → 裁剪 → 权限裁剪
 ///
 /// 时序严格（对应 JS `processNode`）：
-///   1. 展平 object 子字段 → 2. 收集 needed / dotFields → 3. 补字段默认值
-///   → 4. 跑 fn 计算列 + 补计算列默认值 → 5. 递归下钻 → 6. 权限裁剪 → 7. 裁剪字段
+/// 1. 展平 object 子字段
+/// 2. 收集 needed / dotFields
+/// 3. 补字段默认值
+/// 4. 跑 fn 计算列 + 补计算列默认值
+/// 5. 递归下钻
+/// 6. 权限裁剪
+/// 7. 裁剪字段
 #[allow(clippy::too_many_arguments)]
 pub fn process_node(
     doc: &mut Value,

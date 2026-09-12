@@ -234,17 +234,17 @@ fn b8_route_override_same_gql_different_tenants() {
     ]);
 
     let plan_t42 = plan_query("User{...}", &Default::default(), &registry, None)
-        .and_then(|p| {
+        .map(|p| {
             let mut v = p.to_value();
             apply_route_override(&mut v, &json!({ "namespace": "tenant_42" }));
-            Ok(v)
+            v
         })
         .expect("租户42规划失败");
     let plan_t7 = plan_query("User{...}", &Default::default(), &registry, None)
-        .and_then(|p| {
+        .map(|p| {
             let mut v = p.to_value();
             apply_route_override(&mut v, &json!({ "namespace": "tenant_7" }));
-            Ok(v)
+            v
         })
         .expect("租户7规划失败");
 
@@ -262,13 +262,13 @@ fn b8_route_override_same_gql_different_tenants() {
 
     // source + namespace 同时 override（跨连接租户）
     let plan_x = plan_query("User{...}", &Default::default(), &registry, None)
-        .and_then(|p| {
+        .map(|p| {
             let mut v = p.to_value();
             apply_route_override(
                 &mut v,
                 &json!({ "source": "pg_cluster", "namespace": "tenant_9" }),
             );
-            Ok(v)
+            v
         })
         .expect("跨连接租户规划失败");
     for c in plan_x["commands"].as_array().unwrap() {

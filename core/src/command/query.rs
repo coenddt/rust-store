@@ -12,7 +12,7 @@ use crate::schema::Registry;
 use crate::types::is_truthy;
 
 use super::cmd::{cmd_aggregate, cmd_find, num_value, to_number};
-use super::{ERR_PERMISSION, MAX_PAGE_SIZE, PHASE1_IDS};
+use super::{ensure_context, ERR_PERMISSION, MAX_PAGE_SIZE, PHASE1_IDS};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Page {
@@ -149,6 +149,28 @@ pub fn plan_query_mut(
     plan_query_ast_mut(ast, params, registry, ctx)
 }
 
+/// queryOne：语义为「取第一条」——用户 GQL 未显式给 `$limit` 时强制下推 `$limit(1)`，
+/// 大集合不再全量取回后丢弃（对齐 MongoDB `findOne` 的 limit-1 语义）。
+///
+/// - GQL 已有 `$limit` 时不改写用户意图（取其结果首条）；
+/// - `$pipeline` 全权模式不注入（用户自控的 pipeline 不做二次改写）；
+/// - 注入键名固定 `__core_one_limit__`（覆盖式写入，防用户 params 键名碰撞）。
+pub fn plan_query_one(
+    gql: &str,
+    params: &Map<String, Value>,
+    registry: &Registry,
+    ctx: Option<&Context>,
+) -> Result<QueryPlan, String> {
+    let mut params = params.clone();
+    let mut ast = parse_gql(gql)?;
+    if !ast.params.contains_key("limit") && !ast.params.contains_key("pipeline") {
+        ast.params
+            .insert("limit".to_string(), "@__core_one_limit__".to_string());
+        params.insert("__core_one_limit__".to_string(), json!(1));
+    }
+    plan_query_ast_mut(ast, &mut params, registry, ctx)
+}
+
 /// 由**已解析的 AST** 规划读路径（[`plan_query_mut`] 与联邦计划共用同一套语义）
 ///
 /// 含：schema 读权限校验 → owner 条件注入 → asyncFn 依赖注入 → pipeline 构建 → 形态选择。
@@ -160,6 +182,7 @@ pub fn plan_query_ast_mut(
     registry: &Registry,
     ctx: Option<&Context>,
 ) -> Result<QueryPlan, String> {
+    ensure_context(registry, ctx)?;
     let schema = registry.get(&ast.model)?;
 
     if ctx.is_some() && !can_read_schema(schema, ctx) {
@@ -220,6 +243,7 @@ pub fn build_plan(
     registry: &Registry,
     ctx: Option<&Context>,
 ) -> Result<QueryPlan, String> {
+    ensure_context(registry, ctx)?;
     let schema = registry.get(&fetch_ast.model)?;
 
     let pipeline_ref = fetch_ast.params.get("pipeline").cloned();
@@ -333,14 +357,18 @@ pub fn restore_sort_order(items: &mut [Value], ids: &[Value], sort_stage: Option
     if sort_stage.is_none() || ids.len() <= 1 {
         return;
     }
+    // 阶段一 id → 位次索引（首个命中优先，保留 `position` 的重复 id 语义）；
+    // O(n+m) 替代逐项线性扫描的 O(n·m)
+    let mut index: std::collections::HashMap<_, usize> =
+        std::collections::HashMap::with_capacity(ids.len());
+    for (i, id) in ids.iter().enumerate() {
+        index.entry(id_key(id)).or_insert(i);
+    }
     let keyed: Vec<(usize, Value)> = items
         .iter()
         .map(|it| {
             let k = id_key(it.get("_id").unwrap_or(&Value::Null));
-            let pos = ids
-                .iter()
-                .position(|id| id_key(id) == k)
-                .unwrap_or(ids.len());
+            let pos = index.get(&k).copied().unwrap_or(ids.len());
             (pos, it.clone())
         })
         .collect();

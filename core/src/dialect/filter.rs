@@ -68,7 +68,7 @@ pub fn build_filter(
                 }
                 let Some(col) = column(field) else { continue };
                 let qualified = format!("{}.{}", alias, backend.quote_ident(&col));
-                clauses.push(cond_clause(cond, &qualified, backend, column, param_seq));
+                clauses.push(cond_clause(cond, &qualified, backend, param_seq));
             }
             and_group(clauses, "AND", backend, param_seq)
         }
@@ -82,7 +82,9 @@ fn and_group(clauses: Vec<WhereClause>, op: &str, _backend: Backend, _param_seq:
         return WhereClause::new(String::new(), Vec::new());
     }
     let mut it = active.drain(..);
-    let mut acc = it.next().unwrap();
+    let Some(mut acc) = it.next() else {
+        return WhereClause::new(String::new(), Vec::new());
+    };
     for c in it {
         let text = format!("({} {} {})", acc.text, op, c.text);
         acc.params.extend(c.params);
@@ -92,11 +94,13 @@ fn and_group(clauses: Vec<WhereClause>, op: &str, _backend: Backend, _param_seq:
 }
 
 /// 单个字段 = 条件的 WHERE 片段
+///
+/// （`column` 映射在 `build_filter` 层已解析为限定列名 `col`，此处不再需要 ——
+/// `$not` 递归仅传递已解析的 `col`。）
 fn cond_clause(
     cond: &Value,
     col: &str,
     backend: Backend,
-    column: &dyn Fn(&str) -> Option<String>,
     param_seq: &mut usize,
 ) -> WhereClause {
     // 运算符对象
@@ -114,7 +118,7 @@ fn cond_clause(
                 "$nin" => in_list(col, v, true, backend, param_seq),
                 "$exists" => exists_expr(col, v, backend),
                 "$not" => {
-                    let inner = cond_clause(v, col, backend, column, param_seq);
+                    let inner = cond_clause(v, col, backend, param_seq);
                     let text = if inner.text.is_empty() { String::new() } else { format!("NOT {}", inner.text) };
                     WhereClause { text, params: inner.params }
                 }

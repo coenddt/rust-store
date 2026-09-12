@@ -1288,6 +1288,7 @@
               "deletedAt": 1700000000000
             }
           ],
+          "upsertById": true,
           "source": "default",
           "namespace": null
         },

@@ -8,7 +8,7 @@ use crate::types::is_truthy;
 
 use super::ast::{Ast, RelAst};
 use super::lookup::{build_add_fields, build_compute_lookup_stages, build_lookup};
-use super::util::{append_order, find_stage_idx, is_nullish, param};
+use super::util::{append_order, find_stage_idx, non_nullish, param};
 
 /// 归一化 AST：将 type=object 的花括号子字段展平为点号字段（原地修改）
 pub fn flatten_object_fields(ast: &mut Ast, schema: &Schema) {
@@ -63,17 +63,17 @@ fn custom_pipeline_branch(
     if let Some(arr) = root_pipeline.as_array() {
         stages.extend(arr.iter().cloned());
     }
-    if !is_nullish(root_condition) {
-        override_or_append(stages, "$match", root_condition.unwrap().clone());
+    if let Some(v) = non_nullish(root_condition) {
+        override_or_append(stages, "$match", v.clone());
     }
-    if !is_nullish(root_sort) {
-        override_or_append(stages, "$sort", root_sort.unwrap().clone());
+    if let Some(v) = non_nullish(root_sort) {
+        override_or_append(stages, "$sort", v.clone());
     }
-    if !is_nullish(root_skip) {
-        override_or_append(stages, "$skip", root_skip.unwrap().clone());
+    if let Some(v) = non_nullish(root_skip) {
+        override_or_append(stages, "$skip", v.clone());
     }
-    if !is_nullish(root_limit) {
-        override_or_append(stages, "$limit", root_limit.unwrap().clone());
+    if let Some(v) = non_nullish(root_limit) {
+        override_or_append(stages, "$limit", v.clone());
     }
     Value::Array(std::mem::take(stages))
 }
@@ -120,12 +120,10 @@ pub fn build_pipeline(
     let root_limit = param(params, ast.params.get("limit")).cloned();
     let root_pipeline = param(params, ast.params.get("pipeline")).cloned();
 
-    if !is_nullish(root_pipeline.as_ref())
-        && root_pipeline.as_ref().map(|v| v.is_array()).unwrap_or(false)
-    {
+    if let Some(pipe) = non_nullish(root_pipeline.as_ref()).filter(|v| v.is_array()) {
         return Ok(custom_pipeline_branch(
             &mut stages,
-            root_pipeline.as_ref().unwrap(),
+            pipe,
             root_condition.as_ref(),
             root_sort.as_ref(),
             root_skip.as_ref(),
@@ -137,8 +135,8 @@ pub fn build_pipeline(
     // 展平 object 子字段花括号语法 → dot-notation
     flatten_object_fields(ast, schema);
 
-    if !is_nullish(root_condition.as_ref()) {
-        stages.push(json!({ "$match": root_condition.unwrap() }));
+    if let Some(cond) = non_nullish(root_condition.as_ref()) {
+        stages.push(json!({ "$match": cond }));
     }
 
     // $lookup: 逐层展开 relations

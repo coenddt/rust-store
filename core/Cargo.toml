@@ -11,6 +11,8 @@ path = "src/lib.rs"
 
 [dependencies]
 serde_json = "1"
+# CoreError 结构化错误（FFI 边界可程序化穷举，见 src/error.rs）
+thiserror = "2"
 
 [[test]]
 name = "parity"

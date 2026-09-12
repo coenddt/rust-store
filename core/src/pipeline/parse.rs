@@ -10,6 +10,9 @@ struct Parser {
     pos: usize,
 }
 
+/// `parse_body` 产出：`(字段列表, 关系列表)`
+type BodyParts = (Vec<String>, Vec<(String, RelAst)>);
+
 impl Parser {
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.pos)
@@ -72,7 +75,7 @@ impl Parser {
         Ok(p)
     }
 
-    fn parse_body(&mut self) -> Result<(Vec<String>, Vec<(String, RelAst)>), String> {
+    fn parse_body(&mut self) -> Result<BodyParts, String> {
         let mut fields = Vec::new();
         let mut relations = Vec::new();
         let has_brace = matches!(self.peek(), Some(t) if t.kind == "p" && t.value == "{");

@@ -11,6 +11,7 @@ use rust_store_core::command::{
     plan_count as core_plan_count, plan_exists as core_plan_exists,
     plan_insert as core_plan_insert, plan_insert_many as core_plan_insert_many,
     plan_mutation as core_plan_mutation, plan_query as core_plan_query,
+    plan_query_one as core_plan_query_one,
     plan_query_with_count as core_plan_query_with_count, plan_remove as core_plan_remove,
     plan_update as core_plan_update, plan_update_many as core_plan_update_many,
     plan_upsert as core_plan_upsert, resolve_page as core_resolve_page,
@@ -91,6 +92,23 @@ impl Registry {
         Ok(with_route_override(plan, &route_override))
     }
 
+    /// queryOne 计划：未显式 `$limit` 时强制下推 `$limit(1)`（`$pipeline` 全权模式不注入）
+    #[napi]
+    pub fn plan_query_one(
+        &self,
+        gql: String,
+        params: Value,
+        ctx: Option<Value>,
+        route_override: Option<Value>,
+    ) -> Result<Value> {
+        let params = Self::params_map(&params);
+        let context = ctx.as_ref().and_then(context_from_value);
+        let plan = core_plan_query_one(&gql, &params, &self.core, context.as_ref())
+            .map(|p| p.to_value())
+            .map_err(err)?;
+        Ok(with_route_override(plan, &route_override))
+    }
+
     /// 列表 + total；`total` 由 Host 执行 `countCommand` 后回喂，用于算 `hasMore`
     #[napi]
     pub fn plan_query_with_count(
@@ -136,7 +154,10 @@ impl Registry {
     }
 
     /// 生成插入命令；`now` / `newId` 由 Host 提供（core 无时钟与随机源）
+    ///
+    /// 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
     #[napi]
+    #[allow(clippy::too_many_arguments)]
     pub fn plan_insert(
         &self,
         env: Env,
@@ -199,7 +220,10 @@ impl Registry {
     // ─── Phase 2.5：写路径命令规划 ─────────────────────────
 
     /// 批量插入命令；`newIds` 按需消费（仅无 `_id` 的文档取用）
+    ///
+    /// 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
     #[napi]
+    #[allow(clippy::too_many_arguments)]
     pub fn plan_insert_many(
         &self,
         env: Env,
@@ -229,7 +253,10 @@ impl Registry {
     ///
     /// creator 写权限需探针时返回 `{"needsProbe": cmd}`；Host 执行探针后携
     /// `probeFound`（true/false）与 `probeDoc` 重入即得 `{"command": cmd}`。
+    ///
+    /// 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
     #[napi]
+    #[allow(clippy::too_many_arguments)]
     pub fn plan_update(
         &self,
         model: String,
@@ -313,7 +340,10 @@ impl Registry {
     }
 
     /// 显式条件 upsert；`newId` 仅在需生成 `_id` 时被使用
+    ///
+    /// 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
     #[napi]
+    #[allow(clippy::too_many_arguments)]
     pub fn plan_upsert(
         &self,
         model: String,

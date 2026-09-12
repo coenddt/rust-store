@@ -4,13 +4,13 @@
 //! （JS 黄金基准）里 kind 为写路径的用例，按 JS 侧的「Host 执行语义」模拟驱动回放：
 //!   - insert_many  : `plan_insert_many` → `{command, returns}` 直接对拍
 //!   - update       : `plan_update` → 命令 + 模拟执行结果（fx.updatedDoc）回喂
-//!                    `apply_defaults_and_computes` 得 returns
+//!     `apply_defaults_and_computes` 得 returns
 //!   - update_many  : `plan_update_many` → 命令 + `{modifiedCount}` returns
 //!   - remove       : `plan_remove` +（有归档结果时）`plan_archive_docs` → 命令序列
 //!   - upsert       : `plan_upsert` → 命令 + 结果回喂
 //!   - mutation     : `plan_mutation` 步骤序列 → Host 依次「执行」并回填
-//!                    `{{step.<N>._id}}` 占位符（insertOne 步结果 = doc 本身；
-//!                    findOneAndUpdate 步结果 = fx.updatedDoc）
+//!     `{{step.<N>._id}}` 占位符（insertOne 步结果 = doc 本身；
+//!     findOneAndUpdate 步结果 = fx.updatedDoc）
 //!
 //! 黄金基准为**冻结快照**（原单体 JS 参考实现已随重构退役，快照无源可再生）。
 //! 复算校验：`node tools/verify-fixtures.js`。

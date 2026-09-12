@@ -74,10 +74,33 @@ impl Registry {
     fn set_allow_user_pipeline(&mut self, allow: bool) {
         self.core.set_allow_user_pipeline(allow);
     }
+
+    /// 开关「上下文强制」（默认关闭 = fail-open，保持 JS parity）。
+    /// 开启后：plan 入口遇 `ctx=None` 报 `ERR_NO_CONTEXT`（fail-secure），
+    /// 内部调用须显式传系统上下文 `system_context()`。
+    fn set_require_context(&mut self, require: bool) {
+        self.core.set_require_context(require);
+    }
+
+    /// 「上下文强制」开关当前值
+    fn require_context(&self) -> bool {
+        self.core.require_context()
+    }
+}
+
+/// 系统内部调用上下文工厂：`{"internal": true}` —— 权限引擎全放行、不注入 owner
+/// 条件。供 Host 的内部路径（索引创建、归档回填、后台任务等）显式表达「系统调用」，
+/// 与 `None`（未传上下文，`require_context` 开启时报错）区分。
+#[pyfunction]
+fn system_context(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyDict>> {
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("internal", true)?;
+    Ok(dict)
 }
 
 #[pymodule]
 fn rust_store_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Registry>()?;
+    m.add_function(wrap_pyfunction!(system_context, m)?)?;
     Ok(())
 }

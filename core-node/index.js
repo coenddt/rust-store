@@ -310,6 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { Registry } = nativeBinding
+const { Registry, systemContext } = nativeBinding
 
 module.exports.Registry = Registry
+module.exports.systemContext = systemContext

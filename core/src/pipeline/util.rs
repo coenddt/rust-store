@@ -22,6 +22,15 @@ pub(crate) fn is_nullish(v: Option<&Value>) -> bool {
     }
 }
 
+/// [`is_nullish`] 的 checked 版：nullish（None / `null`）→ None，否则原值返回。
+///
+/// 用于替换 `if !is_nullish(x) { … x.unwrap() … }` 这类**条件与取值重复求值**的
+/// 脆弱模式 —— 条件若被重构而 guard 漂移，`unwrap()` 立即 panic；改为一次判定后
+/// 由 `Option` 携带值，前提不再靠人工维护。
+pub(crate) fn non_nullish(v: Option<&Value>) -> Option<&Value> {
+    v.filter(|x| !x.is_null())
+}
+
 pub(super) fn find_stage_idx(stages: &[Value], key: &str) -> Option<usize> {
     stages
         .iter()
@@ -35,13 +44,13 @@ pub(super) fn append_order(
     skip_val: Option<&Value>,
     limit_val: Option<&Value>,
 ) {
-    if !is_nullish(sort) {
-        stages.push(json!({ "$sort": sort.unwrap().clone() }));
+    if let Some(v) = non_nullish(sort) {
+        stages.push(json!({ "$sort": v.clone() }));
     }
-    if !is_nullish(skip_val) {
-        stages.push(json!({ "$skip": skip_val.unwrap().clone() }));
+    if let Some(v) = non_nullish(skip_val) {
+        stages.push(json!({ "$skip": v.clone() }));
     }
-    if !is_nullish(limit_val) {
-        stages.push(json!({ "$limit": limit_val.unwrap().clone() }));
+    if let Some(v) = non_nullish(limit_val) {
+        stages.push(json!({ "$limit": v.clone() }));
     }
 }

@@ -84,6 +84,10 @@ pub struct Registry {
     order: Vec<String>,
     /// 用户 `$pipeline` 直通开关（默认允许；AI 查询宿主可关闭作纵深防御）
     pub allow_user_pipeline: bool,
+    /// 上下文强制开关（默认关闭 = fail-open，与 JS 原版 parity）；
+    /// 开启后所有 plan 入口对 `ctx: None` 显式报错（fail-secure，见 `permission` 模块文档）。
+    /// 内部调用请传显式系统上下文（JSON `{"internal": true}` / `Context::system()`）。
+    require_context: bool,
 }
 
 impl Default for Registry {
@@ -92,6 +96,7 @@ impl Default for Registry {
             schemas: HashMap::new(),
             order: Vec::new(),
             allow_user_pipeline: true,
+            require_context: false,
         }
     }
 }
@@ -130,7 +135,7 @@ impl Registry {
             }
         };
 
-        let mut fields = normalize_fields(obj.get("fields"));
+        let mut fields = normalize_fields(obj.get("fields"))?;
         // 自动补时间戳字段（timestamps !== false 时）
         if timestamps_enabled {
             fields
@@ -288,6 +293,18 @@ impl Registry {
         self.allow_user_pipeline = allow;
     }
 
+    /// 开关「上下文强制」（默认关闭 = fail-open，保持 JS parity）。
+    /// 开启后：plan 入口遇 `ctx: None` 报 `ERR_NO_CONTEXT`（fail-secure），
+    /// 内部调用须显式传系统上下文（`{"internal": true}`）。
+    pub fn set_require_context(&mut self, require: bool) {
+        self.require_context = require;
+    }
+
+    /// 「上下文强制」开关当前值
+    pub fn require_context(&self) -> bool {
+        self.require_context
+    }
+
     /// 按定位三元组精确获取 schema（命令路由的唯一定位入口）
     ///
     /// `(source, namespace, collection)` 三元组在 Registry 内唯一（注册期校验），
@@ -398,10 +415,10 @@ impl Registry {
 }
 
 /// 规范化 fields 定义（字符串简写 → `{type, required:false}`）
-fn normalize_fields(v: Option<&Value>) -> HashMap<String, FieldDef> {
+fn normalize_fields(v: Option<&Value>) -> Result<HashMap<String, FieldDef>, String> {
     let mut out = HashMap::new();
     let Some(Value::Object(map)) = v else {
-        return out;
+        return Ok(out);
     };
     for (key, val) in map {
         let fd = if let Some(s) = val.as_str() {
@@ -427,18 +444,14 @@ fn normalize_fields(v: Option<&Value>) -> HashMap<String, FieldDef> {
                 fields: o.get("fields").filter(|v| is_truthy(v)).cloned(),
             }
         } else {
-            FieldDef {
-                field_type: String::new(),
-                required: false,
-                default: None,
-                read: None,
-                write: None,
-                fields: None,
-            }
+            // 非字符串、非对象的定义（如 `fields: { price: 123 }`）= 脏 schema，
+            // fail-fast 报错而非静默产出空 field_type（后续 object/array 展平、
+            // 标量列判定都会走错且无信号）
+            return Err(format!("字段 {} 定义类型非法（须为类型字符串或对象）", key));
         };
         out.insert(key.clone(), fd);
     }
-    out
+    Ok(out)
 }
 
 /// 便捷构造：`Map` from `[(&str, Value)]`

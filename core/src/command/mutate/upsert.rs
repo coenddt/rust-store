@@ -4,7 +4,7 @@ use serde_json::{json, Map, Value};
 
 use crate::command::cmd::cmd_find_one_and_update;
 use crate::command::write::has_creator_permission;
-use crate::command::ERR_NO_WRITE;
+use crate::command::{ensure_context, ERR_NO_WRITE};
 use crate::permission::{can_write_schema, filter_writable_data, Context};
 use crate::schema::{Registry, Schema};
 use crate::types::is_truthy;
@@ -137,6 +137,9 @@ fn upsert_update_doc(set_data: Map<String, Value>, set_on_insert: Map<String, Va
 /// 显式条件 upsert（对应 JS `upsert`）。
 ///
 /// `_id` 需要生成时使用 `new_id`（Host 供给，core 无随机源）。
+///
+/// 签名与 JS 参考实现逐一对应（跨语言 parity 优先于参数个数），保持位置参数。
+#[allow(clippy::too_many_arguments)]
 pub fn plan_upsert(
     schema_name: &str,
     registry: &Registry,
@@ -147,6 +150,7 @@ pub fn plan_upsert(
     now: i64,
     new_id: &str,
 ) -> Result<Value, String> {
+    ensure_context(registry, ctx)?;
     let schema = registry.get(schema_name)?;
     if !can_write_schema(schema, ctx) {
         return Err(ERR_NO_WRITE.to_string());

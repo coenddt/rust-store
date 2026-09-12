@@ -5,6 +5,7 @@
 //!   - process_node   : `computes::process_node` 后处理后的文档
 //!   - inject_depends : `collect_rel_deps` / `merge_depends_into_ast` / `strip_dep_injected`
 //!   - permission     : `permission::*` 的读写过滤与 owner 条件注入
+//!
 //! 黄金基准为**冻结快照**（原单体 JS 参考实现已随重构退役，快照无源可再生）。
 //! 复算校验：`node tools/verify-fixtures.js`。
 

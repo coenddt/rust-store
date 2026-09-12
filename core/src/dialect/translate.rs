@@ -35,7 +35,7 @@ pub fn translate(
             translate_select(backend, cmd, registry, &mut warnings, &mut unsupported)?
         }
         "insertOne" | "insertMany" | "deleteMany" | "updateMany" | "findOneAndUpdate" => {
-            translate_write(backend, cmd, registry, &mut warnings)?
+            translate_write(backend, cmd, registry)?
         }
         _ => return Err(format!("translate: 未支持的命令 kind = {}", kind)),
     };

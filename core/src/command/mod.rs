@@ -53,6 +53,9 @@ mod mutation;
 mod query;
 mod write;
 
+use crate::permission::Context;
+use crate::schema::Registry;
+
 pub use cmd::{
     apply_route_override, cmd_aggregate, cmd_count_documents, cmd_delete_many, cmd_find,
     cmd_find_one, cmd_find_one_and_update, cmd_insert_many, cmd_insert_one, cmd_update_many,
@@ -64,14 +67,37 @@ pub use mutate::{
 };
 pub use mutation::plan_mutation;
 pub use query::{
-    build_plan, plan_query, plan_query_ast_mut, plan_query_mut, resolve_page, restore_sort_order,
+    build_plan, plan_query, plan_query_ast_mut, plan_query_mut, plan_query_one, resolve_page,
+    restore_sort_order,
     sorts_by_relation, Mode, Page, QueryPlan,
 };
 pub use write::{check_write_perm, plan_aggregate, plan_count, plan_exists, plan_insert, Probe};
 
-/// 权限拒绝哨兵：Host 需映射为各自的 PermissionError
-pub const ERR_PERMISSION: &str = "无访问权限";
-pub const ERR_NO_WRITE: &str = "无写入权限";
+/// 权限拒绝哨兵：Host 需映射为各自的 PermissionError。
+///
+/// 所有权限类错误统一携带 `ERR_PERMISSION:` 稳定前缀 —— Host 按**前缀**识别
+/// 权限错误（构造后剥离前缀），不再对具体中文文案做脆弱匹配（core 文案可自由调整）。
+pub const ERR_PERM_PREFIX: &str = "ERR_PERMISSION:";
+pub const ERR_PERMISSION: &str = "ERR_PERMISSION:无访问权限";
+pub const ERR_NO_WRITE: &str = "ERR_PERMISSION:无写入权限";
+pub const ERR_NO_DELETE: &str = "ERR_PERMISSION:无删除权限";
+pub const ERR_NO_BATCH_WRITE: &str = "ERR_PERMISSION:无批量写入权限";
+
+/// `require_context` 开启时 ctx 缺失的拒绝哨兵（fail-secure；Host 按前缀识别，
+/// 一般映射为 500 配置/契约错误而非 403 —— 这是调用方合约违反，不是用户无权限）。
+pub const ERR_NO_CONTEXT: &str =
+    "ERR_NO_CONTEXT:require_context 已开启，调用必须携带用户上下文（内部调用请传 {\"internal\": true}）";
+
+/// fail-secure 门禁：`require_context` 开启时拒绝 `ctx: None`（默认关闭时零开销放行）。
+///
+/// 挂在所有含 ctx 的 plan 公开入口顶部（读/写/联邦），保证「绑定层无论怎么调，
+/// 只要开关开着，缺上下文一律显式报错」——而非静默按系统调用放行。
+pub fn ensure_context(registry: &Registry, ctx: Option<&Context>) -> Result<(), String> {
+    if registry.require_context() && ctx.is_none() {
+        return Err(ERR_NO_CONTEXT.to_string());
+    }
+    Ok(())
+}
 
 /// 两阶段查询中由 Host 替换的阶段一 `_id` 顺序数组
 pub const PHASE1_IDS: &str = "{{phase1.ids}}";

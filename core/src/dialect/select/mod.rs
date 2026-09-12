@@ -62,28 +62,11 @@ pub fn translate_select(
 }
 
 /// 字段 → 列名：标量字段在本表；object/array 附属表字段跳过（标量字段原样）
-pub(in crate::dialect::select) fn col_fn(schema: &Schema) -> impl Fn(&str) -> Option<String> {
-    let field_types: Vec<(String, String)> = schema
-        .fields
-        .iter()
-        .map(|(k, v)| (k.clone(), v.field_type.clone()))
-        .collect();
-    move |field: &str| {
-        if field.contains('.') {
-            let (head, _) = field.split_once('.')?;
-            // 点号字段：若 head 是 object 字段则跳过（附属表）；否则按整串处理
-            let head_type = field_types.iter().find(|(k, _)| k == head).map(|(_, t)| t.clone());
-            if matches!(head_type.as_deref(), Some("object") | Some("array")) {
-                return None;
-            }
-            return Some(field.to_string());
-        }
-        let t = field_types.iter().find(|(k, _)| k == field).map(|(_, t)| t.clone());
-        match t {
-            Some(t) if t == "object" || t == "array" => None,
-            _ => Some(field.to_string()),
-        }
-    }
+///
+/// 读侧薄包装；语义唯一出处见 [`super::scalar_column`]（与写侧共用同一实现，
+/// 避免读写列映射语义漂移）。
+pub(in crate::dialect::select) fn col_fn(schema: &Schema) -> impl Fn(&str) -> Option<String> + '_ {
+    move |field: &str| super::scalar_column(schema, field)
 }
 
 /// 投影字段：null / 全 1 → 所有标量字段；否则取值为「非 0」的字段
