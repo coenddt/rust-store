@@ -85,7 +85,7 @@ jobs:
         with:
           path: core-node/artifacts
       - name: Create npm dirs
-        run: npx napi create-npm-dir
+        run: npx napi create-npm-dir -t .
       - name: Stage platform binaries
         run: npx napi artifacts
       - name: Pack & inspect (must not contain target/ node_modules/ logs)

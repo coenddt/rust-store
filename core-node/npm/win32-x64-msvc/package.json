@@ -1,0 +1,35 @@
+{
+  "name": "rust-store-node-win32-x64-msvc",
+  "version": "1.0.0",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "rust-store-node.win32-x64-msvc.node",
+  "files": [
+    "rust-store-node.win32-x64-msvc.node"
+  ],
+  "description": "rust-store 的 Node 绑定（napi-rs）：把 core 的 Command 契约暴露给 JS Host",
+  "keywords": [
+    "rust-store",
+    "napi-rs",
+    "binding",
+    "gql",
+    "data-layer"
+  ],
+  "author": "leo <coen_ddt@qq.com>",
+  "homepage": "https://github.com/coenddt/rust-store#readme",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coenddt/rust-store.git"
+  },
+  "bugs": {
+    "url": "https://github.com/coenddt/rust-store/issues"
+  }
+}
