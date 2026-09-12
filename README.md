@@ -37,6 +37,18 @@ Node/Python 的薄 Host 适配层（`src/nodejs-store`、`py-store`）通过各�
 
 `core/tests/parity*.rs` 与 `core-node/test/parity.test.js` 覆盖 schema/pipeline/permission/computes 在 Rust core 与绑定层的一致性。
 
+## 宿主接入守卫
+
+面向 AI 查询宿主（text-to-query 等）的纵深防御能力：
+
+| 能力 | 说明 | 接口 |
+| --- | --- | --- |
+| timestamps 值校验 | schema 仅接受 `true/false/'ms'/'s'`（缺省毫秒），非法值注册即报错；单位换算由 Host 时钟负责（core 无时钟） | `register` |
+| 用户 `$pipeline` 直通开关 | Registry 级开关（默认允许）；关闭后 `plan_query` / `plan_query_with_count` / `plan_federated` 遇 `$pipeline` 显式报错，重新打开即恢复 | `setAllowUserPipeline(false)`（双绑定同名） |
+| 联邦 degraded 事件 | 无法下推的跨源分页/排序不阻断查询，产出结构化事件 `{code, layer, message, hint}`，Host 应接入自动反馈闭环 | `plan_federated` 返回值 `plan.degraded` |
+
+守卫测试见 `core/tests/guards.rs`。
+
 ## License
 
 [MIT](LICENSE)

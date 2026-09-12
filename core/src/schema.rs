@@ -64,10 +64,22 @@ impl Schema {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Registry {
     schemas: HashMap<String, Schema>,
     order: Vec<String>,
+    /// 用户 `$pipeline` 直通开关（默认允许；AI 查询宿主可关闭作纵深防御）
+    pub allow_user_pipeline: bool,
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self {
+            schemas: HashMap::new(),
+            order: Vec::new(),
+            allow_user_pipeline: true,
+        }
+    }
 }
 
 impl Registry {
@@ -91,10 +103,18 @@ impl Registry {
             .filter(|s| !s.is_empty())
             .map(String::from)
             .unwrap_or_else(|| name.clone());
-        let timestamps_enabled = obj
-            .get("timestamps")
-            .map(|v| v != &Value::Bool(false))
-            .unwrap_or(true);
+        // timestamps 仅接受 true/false/'ms'/'s'；单位换算在 Host（core 无时钟，now 由 Host 传入）
+        let timestamps_enabled = match obj.get("timestamps") {
+            None | Some(Value::Null) | Some(Value::Bool(true)) => true,
+            Some(Value::Bool(false)) => false,
+            Some(Value::String(s)) if s == "ms" || s == "s" => true,
+            Some(Value::String(s)) => {
+                return Err(format!("timestamps 仅支持 true/false/'ms'/'s'，实际 {:?}", s))
+            }
+            Some(other) => {
+                return Err(format!("timestamps 仅支持 true/false/'ms'/'s'，实际 {}", other))
+            }
+        };
 
         let mut fields = normalize_fields(obj.get("fields"));
         // 自动补时间戳字段（timestamps !== false 时）
@@ -236,6 +256,11 @@ impl Registry {
 
     pub fn has(&self, name: &str) -> bool {
         self.schemas.contains_key(name)
+    }
+
+    /// 开关用户 `$pipeline` 直通（默认允许；AI 查询宿主建议关闭作纵深防御）
+    pub fn set_allow_user_pipeline(&mut self, allow: bool) {
+        self.allow_user_pipeline = allow;
     }
 
     /// 按 collection 名获取 schema（翻译器等按命令里的 `collection` 反向定位）

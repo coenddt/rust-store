@@ -187,6 +187,11 @@ pub fn plan_query_ast_mut(
         .map(|r| !is_nullish(param(params, Some(r))))
         .unwrap_or(false);
 
+    // Registry 级守卫：用户 $pipeline 被禁用时显式报错（AI 查询宿主的纵深防御）
+    if has_pipeline && !registry.allow_user_pipeline {
+        return Err("用户 $pipeline 已被禁用（allow_user_pipeline = false）".to_string());
+    }
+
     let inject = if has_pipeline {
         InjectInfo::default()
     } else {

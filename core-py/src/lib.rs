@@ -69,6 +69,11 @@ impl Registry {
     fn clear_fns(&mut self) {
         self.sync_fns.clear();
     }
+
+    /// 开关用户 $pipeline 直通（默认允许；AI 查询宿主建议关闭作纵深防御）
+    fn set_allow_user_pipeline(&mut self, allow: bool) {
+        self.core.set_allow_user_pipeline(allow);
+    }
 }
 
 #[pymodule]

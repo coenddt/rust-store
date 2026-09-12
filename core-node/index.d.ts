@@ -103,4 +103,6 @@ export declare class Registry {
   /** 注册同步计算列回调（schema 里 `fn: true` 的 `fnRef`，缺省为计算列名） */
   setFn(fnRef: string, callback: (arg: any) => any): void
   clearFns(): void
+  /** 开关用户 $pipeline 直通（默认允许；AI 查询宿主建议关闭作纵深防御） */
+  setAllowUserPipeline(allow: boolean): void
 }

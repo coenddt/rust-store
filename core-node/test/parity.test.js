@@ -528,3 +528,35 @@ test('core-node: 非法 GQL / 未注册 model 以异常抛出', () => {
     (e) => e instanceof Error && /位置 0/.test(e.message),
   );
 });
+
+// ─── 用户 $pipeline 开关（Registry 级守卫） ─────────────────
+
+test('core-node: setAllowUserPipeline 禁用后 planQuery/planFederated 报错，重开恢复', () => {
+  const make = () => {
+    const reg = new Registry();
+    reg.register({
+      name: 'Post',
+      collection: 'posts',
+      timestamps: false,
+      fields: { title: { type: 'string' } },
+      relations: {},
+    });
+    return reg;
+  };
+  const gql = 'Post($pipeline:@p){ title }';
+  const params = { p: [{ $match: {} }] };
+
+  // 默认放行
+  const reg0 = make();
+  assert.doesNotThrow(() => reg0.planQuery(gql, params, null));
+
+  // 关闭后：单库 + 联邦均显式报错
+  const reg = make();
+  reg.setAllowUserPipeline(false);
+  assert.throws(() => reg.planQuery(gql, params, null), /已被禁用/);
+  assert.throws(() => reg.planFederated(gql, params, null), /已被禁用/);
+
+  // 重新打开恢复
+  reg.setAllowUserPipeline(true);
+  assert.doesNotThrow(() => reg.planQuery(gql, params, null));
+});

@@ -156,10 +156,12 @@ fn walk(
                 if !is_nullish(param(params, Some(r))) {
                     degraded.push(json!({
                         "code": "crossSourceChildPaging",
+                        "layer": "federation",
                         "message": format!(
                             "跨源关系 {}.{} 的 ${} 无法按父下推",
                             parent_model, name, key
                         ),
+                        "hint": "把该关系的 $sort/$skip/$limit 上移到根查询，或由 Host 在内存 join 后自行分页",
                     }));
                 }
             }
@@ -216,7 +218,9 @@ fn detect_cross_source_sort(
         if cross_root_rels.contains(&prefix) {
             degraded.push(json!({
                 "code": "crossSourceSort",
+                "layer": "federation",
                 "message": format!("跨源排序无法下推: {}", k),
+                "hint": "排序改用本源字段，或由 Host 在内存 join 后自行排序",
             }));
         }
     }
@@ -260,6 +264,11 @@ pub fn plan_federated(
         .get("pipeline")
         .map(|r| !is_nullish(param(&params, Some(r))))
         .unwrap_or(false);
+
+    // Registry 级守卫：与单库 plan_query_ast_mut 同款（联邦含单源场景）
+    if has_pipeline && !registry.allow_user_pipeline {
+        return Err("用户 $pipeline 已被禁用（allow_user_pipeline = false）".to_string());
+    }
 
     // asyncFn 依赖注入在**完整 AST** 上做：postprocess 才能带全注入信息
     let inject = if has_pipeline {
