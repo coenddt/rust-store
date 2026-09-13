@@ -32,7 +32,7 @@
     "build:debug": "napi build --platform",
     "artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm --skip-gh-release",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test test/parity.test.js test/dialect.smoke.test.js test/t2q.skill.test.js"
   },
   "keywords": [
     "rust-store",

@@ -62,7 +62,10 @@ pub(crate) fn field_is_bool(schema: &Schema, field: &str) -> bool {
     schema
         .fields
         .get(field)
-        .map(|f| f.field_type.eq_ignore_ascii_case("bool") || f.field_type.eq_ignore_ascii_case("boolean"))
+        .map(|f| {
+            f.field_type.eq_ignore_ascii_case("bool")
+                || f.field_type.eq_ignore_ascii_case("boolean")
+        })
         .unwrap_or(false)
 }
 

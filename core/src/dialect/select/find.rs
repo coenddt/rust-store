@@ -42,7 +42,11 @@ pub(super) fn translate_find(
         if let Some(c) = col_fn(schema)(f) {
             cols_sql.push(format!("t.{}", q(backend, &c)));
             // §9.7 布尔归一：schema `boolean` 字段的列值 0/1 → JSON bool
-            columns.push(RowCol::scalar_bool(&c, &[f.as_str()], field_is_bool(schema, f)));
+            columns.push(RowCol::scalar_bool(
+                &c,
+                &[f.as_str()],
+                field_is_bool(schema, f),
+            ));
         }
     }
     // 缺失 vs null 三态（F-07/H-01）：额外查出 `__present` 哨兵列，供行还原时区分

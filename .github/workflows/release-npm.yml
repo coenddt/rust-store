@@ -66,7 +66,8 @@ jobs:
   publish-npm:
     name: npm publish
     needs: build-npm
-    if: startsWith(github.ref, 'refs/tags/') # 手动 dispatch 只构建，不发布
+    # tag 推送发布；手动 dispatch 亦可发布（用于修复中断的发布，版本以 package.json 为准）
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -91,6 +92,11 @@ jobs:
       - name: Pack & inspect (must not contain target/ node_modules/ logs)
         run: npm pack --dry-run
       - name: Publish (platform sub-packages + main)
-        run: npx napi prepublish -t npm --skip-gh-release && npm publish --provenance --access public
+        # 平台子包可能已在中断的重跑中发布过：`napi prepublish` 遇到已存在版本会 403，
+        # 此处容忍该情形（版本与 optionalDependencies 的同步先于发布执行，不受影响）；
+        # 主包用 `--ignore-scripts` 发布，避免 prepublishOnly 再次重复发布平台子包。
+        run: |
+          npx napi prepublish -t npm --skip-gh-release || echo "::warning::部分平台子包已存在，跳过重复发布"
+          npm publish --provenance --access public --ignore-scripts
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

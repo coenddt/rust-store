@@ -1057,8 +1057,8 @@ fn dialect_boolean_column_restores_as_json_bool() {
     }
 
     // 还原：MySQL/SQLite 的 0/1 → true/false；非布尔列原样透传（不误伤）
-    let shape = &translate(Backend::Sqlite, &cmd, &registry).expect("translate")["stmts"][0]
-        ["rowShape"];
+    let shape =
+        &translate(Backend::Sqlite, &cmd, &registry).expect("translate")["stmts"][0]["rowShape"];
     let rows = json!([
         { "_id": "e1", "paid": 1,    "free": 0,    "amount": 3.5, "__present": ",paid,free,amount," },
         { "_id": "e2", "paid": 0,    "free": 1,    "amount": 4,   "__present": ",paid,free,amount," },
@@ -1076,8 +1076,8 @@ fn dialect_boolean_column_restores_as_json_bool() {
     );
 
     // PG 原生 BOOLEAN → 已是 bool，归一为 no-op
-    let pg_shape = &translate(Backend::Postgres, &cmd, &registry).expect("translate")["stmts"][0]
-        ["rowShape"];
+    let pg_shape =
+        &translate(Backend::Postgres, &cmd, &registry).expect("translate")["stmts"][0]["rowShape"];
     let pg_rows = json!([{ "_id": "e1", "paid": true, "free": false, "amount": 3.5 }]);
     let pg_restored = restore_rows_json(pg_shape, &pg_rows).expect("restore");
     assert_eq!(
@@ -1108,7 +1108,10 @@ fn dialect_postgres_float_literal_gets_explicit_double_cast() {
                           "filter": { "views": { "$gte": 10 } }, "projection": { "_id": 1 } });
     let pg_int = translate(Backend::Postgres, &int_cmd, &registry).expect("translate");
     assert!(
-        !pg_int["stmts"][0]["text"].as_str().unwrap_or("").contains("CAST("),
+        !pg_int["stmts"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("CAST("),
         "整数字面量不应加 CAST: {}",
         pg_int["stmts"][0]["text"]
     );
@@ -1117,7 +1120,10 @@ fn dialect_postgres_float_literal_gets_explicit_double_cast() {
     for backend in [Backend::Mysql, Backend::Sqlite] {
         let out = translate(backend, &float_cmd, &registry).expect("translate");
         assert!(
-            !out["stmts"][0]["text"].as_str().unwrap_or("").contains("CAST("),
+            !out["stmts"][0]["text"]
+                .as_str()
+                .unwrap_or("")
+                .contains("CAST("),
             "[{backend:?}] 不应引入 CAST: {}",
             out["stmts"][0]["text"]
         );

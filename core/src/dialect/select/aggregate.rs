@@ -488,7 +488,11 @@ pub(super) fn translate_aggregate(
         if let Some(c) = col_fn(schema)(f) {
             cols_sql.push(format!("t.{}", q(backend, &c)));
             // §9.7 布尔归一：schema `boolean` 字段的列值 0/1 → JSON bool
-            columns.push(RowCol::scalar_bool(&c, &[f.as_str()], field_is_bool(schema, f)));
+            columns.push(RowCol::scalar_bool(
+                &c,
+                &[f.as_str()],
+                field_is_bool(schema, f),
+            ));
         }
     }
     if cols_sql.is_empty() && !selected.is_empty() {
