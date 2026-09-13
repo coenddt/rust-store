@@ -3,9 +3,12 @@
 use serde_json::{json, Map, Value};
 
 use crate::computes::{apply_defaults_and_computes, FnRegistry};
-use crate::permission::{can_write_schema, evaluate, filter_writable_data, Context, Doc};
+use crate::permission::{
+    can_write_schema, evaluate, filter_writable_data, merge_owner_condition, should_inject_owner_condition,
+    Context, Doc,
+};
 use crate::schema::{Registry, Schema};
-use crate::types::{is_truthy, validate_condition};
+use crate::types::{is_truthy, validate_condition, validate_pipeline_stages};
 
 use super::cmd::{cmd_aggregate, cmd_count_documents, cmd_find_one, cmd_insert_one};
 use super::{ensure_context, ERR_NO_WRITE};
@@ -38,7 +41,7 @@ pub fn plan_insert(
 }
 
 /// insert 文档规范化（对应 JS `insert` 主体）：
-/// 权限过滤 → 剔除 null → 自动 _id / createdBy / 时间戳
+/// 权限过滤 → 保留显式 null → 自动 _id / createdBy / 时间戳
 pub(super) fn build_insert_doc(
     schema: &Schema,
     ctx: Option<&Context>,
@@ -51,15 +54,9 @@ pub(super) fn build_insert_doc(
         None => data.clone(),
     };
 
-    let mut doc: Map<String, Value> = filtered
-        .as_object()
-        .map(|o| {
-            o.iter()
-                .filter(|(_, v)| !v.is_null())
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
+    // 保留显式 null：历史实现把 null 一律剔除（当成缺失），导致「空串/NULL/缺失」三态
+    // 无法区分（F-07），null 字段读回也被吞（H-01）。显式 `null` 应原样落库，SQL 落 NULL。
+    let mut doc: Map<String, Value> = filtered.as_object().cloned().unwrap_or_default();
 
     // 自动生成 ID（仅在 schema 配了 idPrefix 且未提供有效 _id 时）；
     // 无 idPrefix 且无 _id → 显式报错（缺陷 D-03）：静默产出「无 _id 文档」会让
@@ -105,31 +102,71 @@ pub fn plan_exists(
 }
 
 /// 统计数量（对应 JS `count`）：filter 为 nullish 时用 `{}`
+///
+/// R1：owner(read=creator) 场景下，count 必须注入 `createdBy = ctx.userId`，
+/// 否则非 admin 用户 count 会越权统计全表（E-08）。
 pub fn plan_count(
     schema_name: &str,
     registry: &Registry,
     filter: Option<&Value>,
+    ctx: Option<&Context>,
 ) -> Result<Value, String> {
     if let Some(f) = filter {
         // 条件拒绝名单（缺陷 D-02）
         validate_condition(f)?;
     }
     let schema = registry.get(schema_name)?;
-    let filter = match filter {
+    let base = match filter {
         None | Some(Value::Null) => json!({}),
         Some(v) => v.clone(),
     };
+    let filter = merge_owner_condition(schema, ctx, Some(base)).unwrap_or_else(|| json!({}));
     Ok(cmd_count_documents(schema, &filter))
 }
 
 /// 原生聚合（对应 JS `aggregate`）
+///
+/// R1：owner(read=creator) 场景下，把 `createdBy = ctx.userId` 注入 `$match`，
+/// 否则 aggregate 会越权读全表（E-09）。
 pub fn plan_aggregate(
     schema_name: &str,
     registry: &Registry,
     pipeline: &[Value],
+    ctx: Option<&Context>,
 ) -> Result<Value, String> {
     let schema = registry.get(schema_name)?;
-    Ok(cmd_aggregate(schema, pipeline))
+    let stages = inject_owner_into_pipeline(schema, ctx, pipeline);
+    // R3：拒绝 $out/$merge 写副作用阶段、危险执行算子与 $expr 未声明字段
+    validate_pipeline_stages(schema, &stages)?;
+    Ok(cmd_aggregate(schema, &stages))
+}
+
+/// 把 owner 条件合并进聚合 pipeline 的 `$match`（无 `$match` 时前置）：
+/// 已有 `$match` 字段不覆盖用户显式条件（`or_insert`）。
+fn inject_owner_into_pipeline(schema: &Schema, ctx: Option<&Context>, pipeline: &[Value]) -> Vec<Value> {
+    if !should_inject_owner_condition(schema, ctx) {
+        return pipeline.to_vec();
+    }
+    let owner = json!({ "createdBy": ctx.and_then(|c| c.user_id.clone()) });
+    let owner_obj = owner
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let mut stages = pipeline.to_vec();
+    let mut injected = false;
+    for s in stages.iter_mut() {
+        if let Some(m) = s.get_mut("$match").and_then(|v| v.as_object_mut()) {
+            for (k, v) in &owner_obj {
+                m.entry(k.clone()).or_insert(v.clone());
+            }
+            injected = true;
+            break;
+        }
+    }
+    if !injected {
+        stages.insert(0, json!({ "$match": owner }));
+    }
+    stages
 }
 
 pub(super) fn has_creator_permission(schema: &Schema) -> bool {

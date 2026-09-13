@@ -56,6 +56,25 @@ pub(in crate::command) fn needs_new_id(schema: &Schema, data: &Value) -> bool {
     !data.get("_id").map(is_truthy).unwrap_or(false) && !schema.id_prefix.is_empty()
 }
 
+/// 空条件判断（R4 / B-10/B-12）：`{}`、`null`、以及空逻辑组（`{"$and":[]}` 等）
+/// 一律视为无条件 → 批量写（updateMany / remove）不得落全表，必须显式拒绝。
+pub(in crate::command) fn is_blank_condition(v: &Value) -> bool {
+    match v {
+        Value::Null => true,
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) if o.is_empty() => true,
+        Value::Object(o) => {
+            // 空态 = 每一个值都是空数组逻辑组（"$and":[] 等）；出现任一非空数组
+            // 或标量/对象谓词即为非空
+            !o.iter().any(|(_, v)| match v {
+                Value::Array(a) => !a.is_empty(),
+                _ => true,
+            })
+        }
+        _ => false,
+    }
+}
+
 /// JS `_removeUndefined`：剔除对象中的 null 值（JSON 无 undefined），返回新对象
 pub(in crate::command) fn remove_undefined(obj: &Value) -> Value {
     match obj.as_object() {

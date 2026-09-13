@@ -1,8 +1,10 @@
 //! $lookup / $addFields 阶段构建
 
+use std::collections::HashSet;
+
 use serde_json::{json, Map, Value};
 
-use crate::permission::{get_readable_computes, Context};
+use crate::permission::{get_readable_computes, merge_owner_condition, Context};
 use crate::schema::{Registry, RelationDef, Schema};
 use crate::types::{is_truthy, validate_condition};
 
@@ -73,6 +75,11 @@ fn build_rel_projection(rel_ast: &RelAst, rel_schema: &Schema) -> Option<Value> 
     for f in &rel_ast.fields {
         proj.insert(f.clone(), json!(1));
     }
+    // 保留嵌套关系名（其值已由嵌套 $lookup + $unwind 落为本层 object/数组），
+    // 否则最终 $project 会把已解析的嵌套关系投影丢弃（C-05：lessons 内 parent）
+    for (n_name, _) in &rel_ast.relations {
+        proj.insert(n_name.clone(), json!(1));
+    }
     // 补充 fn 计算列的 depends 字段
     for f in &rel_ast.fields {
         if let Some(comp) = rel_schema.compute(f) {
@@ -94,6 +101,7 @@ fn ns_lookup_stages(
     depth: usize,
     next_paginated: usize,
     registry: &Registry,
+    ctx: Option<&Context>,
 ) -> Result<Vec<Value>, String> {
     let mut stages = Vec::new();
     for (n_name, n_ast) in &rel_ast.relations {
@@ -114,6 +122,7 @@ fn ns_lookup_stages(
             depth + 1,
             next_paginated,
             registry,
+            ctx,
         )?);
         if n_def.rel_type == "one" {
             stages.push(json!({
@@ -136,6 +145,7 @@ pub fn build_lookup(
     depth: usize,
     paginated: usize,
     registry: &Registry,
+    ctx: Option<&Context>,
 ) -> Result<Value, String> {
     let local_key = rel_def.local_field.clone();
     let foreign_key = rel_def.foreign_field.clone();
@@ -166,15 +176,24 @@ pub fn build_lookup(
     let is_array = is_array_local_field(source_schema, &local_key);
     let mut stages: Vec<Value> = Vec::new();
 
-    // $match: 外键关联 + 附加条件
+    // $match: 外键关联 + 附加条件 + 关系目标 owner 注入（R1：关系 read=creator 时
+    // 只挂属于当前用户的行，防关系越权）
     let match_expr = rel_match_expr(&foreign_key, &let_var, is_array);
+    let mut ands: Vec<Value> = vec![match_expr];
     if let Some(cond) = non_nullish(condition.as_ref()) {
         // 关系附加条件同样过拒绝名单（缺陷 D-02）
         validate_condition(cond)?;
-        stages.push(json!({ "$match": { "$and": [match_expr, cond] } }));
-    } else {
-        stages.push(json!({ "$match": match_expr }));
+        ands.push(cond.clone());
     }
+    if let Some(owner) = merge_owner_condition(rel_schema, ctx, None) {
+        ands.push(owner);
+    }
+    let match_doc = if ands.len() == 1 {
+        ands.remove(0)
+    } else {
+        json!({ "$and": ands })
+    };
+    stages.push(json!({ "$match": match_doc }));
 
     // sort / skip / limit（优先执行，避免全量数据流入后续嵌套 $lookup）
     // 当 sort 依赖嵌套关联字段时，嵌套 $lookup 必须优先于 sort
@@ -200,6 +219,7 @@ pub fn build_lookup(
         depth,
         next_paginated,
         registry,
+        ctx,
     )?);
 
     // sort / skip / limit（兜底：仅在嵌套 $lookup 未提前执行时追加）
@@ -232,10 +252,14 @@ pub fn build_lookup(
     Ok(json!({ "$lookup": Value::Object(lookup) }))
 }
 
-/// 构建 compute 的独立 $lookup 阶段
-pub fn build_compute_lookup_stages(schema: &Schema) -> Vec<Value> {
+/// 构建 compute 的独立 $lookup 阶段（仅发射「字段被请求」的 lookup 计算列，
+/// 避免无谓 $lookup 拖慢查询、且不给 SQL 方言制造无法翻译的 $addFields）
+pub fn build_compute_lookup_stages(schema: &Schema, requested: &HashSet<String>) -> Vec<Value> {
     let mut stages = Vec::new();
     for (key, comp) in &schema.computes {
+        if !requested.contains(key) {
+            continue;
+        }
         let Some(lookup) = &comp.lookup else { continue };
         let Some(lo) = lookup.as_object() else {
             continue;
@@ -265,7 +289,11 @@ pub fn build_compute_lookup_stages(schema: &Schema) -> Vec<Value> {
 }
 
 /// 构建 $addFields 阶段（lookup 类型计算列）
-pub fn build_add_fields(schema: &Schema, ctx: Option<&Context>) -> Option<Value> {
+pub fn build_add_fields(
+    schema: &Schema,
+    ctx: Option<&Context>,
+    requested: &HashSet<String>,
+) -> Option<Value> {
     let readable_computes = if ctx.is_some() {
         get_readable_computes(schema, ctx)
     } else {
@@ -274,6 +302,9 @@ pub fn build_add_fields(schema: &Schema, ctx: Option<&Context>) -> Option<Value>
 
     let mut add_fields = Map::new();
     for (key, comp) in &schema.computes {
+        if !requested.contains(key) {
+            continue;
+        }
         // 权限裁剪：跳过不可读的计算列
         if let Some(set) = &readable_computes {
             if !set.contains(key) {

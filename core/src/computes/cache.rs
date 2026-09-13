@@ -28,8 +28,14 @@ pub struct Cache {
 pub fn ensure_cache(schema: &Schema) -> Cache {
     let mut field_defaults = Map::new();
     for (key, field) in &schema.fields {
-        if let Some(defn) = super::defaults::field_default(field) {
-            field_defaults.insert(key.clone(), defn);
+        // read 后处理 `fill_defaults` 只应补「schema 显式 `default`」的字段；
+        // 不按类型派生零值注入，否则存储 null/缺失 的标量被覆盖为 ""/0
+        // （H-01：summary/categoryId 无显式 default，null→null、缺失→缺失）。
+        // 写入路径的 `apply_defaults_and_computes` 仍走 `field_default` 保留类型默认。
+        if let Some(d) = field.default.as_ref() {
+            if !d.is_null() {
+                field_defaults.insert(key.clone(), d.clone());
+            }
         }
     }
 

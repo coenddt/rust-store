@@ -160,7 +160,7 @@ fn run_exists(fx: &Value) -> Result<Value, String> {
 fn run_count(fx: &Value) -> Result<Value, String> {
     let registry = build_registry(fx)?;
     let filter = fx.get("filter").filter(|v| !v.is_null()).cloned();
-    let command = plan_count(model_of(fx), &registry, filter.as_ref())?;
+    let command = plan_count(model_of(fx), &registry, filter.as_ref(), None)?;
     Ok(json!({ "command": command }))
 }
 
@@ -171,7 +171,7 @@ fn run_aggregate(fx: &Value) -> Result<Value, String> {
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let command = plan_aggregate(model_of(fx), &registry, &pipeline)?;
+    let command = plan_aggregate(model_of(fx), &registry, &pipeline, None)?;
     Ok(json!({ "command": command }))
 }
 

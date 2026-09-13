@@ -487,3 +487,444 @@
 - **最终评级：100 / 100，S 卓越**（全量口径，按第 8 轮评分标准重算：小计 99.2 + 亮点 3.0 = 102.2，封顶 100）。
 - 复评说明：本轮为定点整改 + 全量回归（clippy / core test / workspace test / fmt check 四项门禁全部实测通过），未做全量重扫；若需再次全量独立评测可另开第 10 轮。
 
+---
+
+## 第 10 轮 · 全量独立评测（2026-09-13）
+
+> 评测时间：2026-09-13
+> 评测对象：rust-store Rust workspace 全量（`core` 引擎 / `core-node` napi 绑定 / `core-py` PyO3 绑定）
+> 技术栈：Rust（edition 2021）、napi-rs、PyO3 0.29、serde_json（Extended JSON 线格式）；多后端方言（MySQL / PostgreSQL / SQLite）
+> 评测口径：**全量口径**（项目评审）——全量脚本核查 + 抽样深度核查 + 对抗性边界探测；**不沿用第 1~9 轮任何维度分数**
+> 依据标准：ISO/IEC 25010:2011、ISO/IEC 25023、OWASP Top 10 (2021)、MITRE CWE Top 25 (2024)、SOLID、SonarQube Quality Model、CISQ、ISTQB
+> 说明：第 8 轮为全量口径（95），第 9 轮为定点整改复评（100 封顶，其结论已声明「未做全量重扫」）。本轮为**独立全量重扫**，用于判断「100 分」是否可采信。
+
+### 一、结论前置
+
+**第 9 轮「100 分」不可采信。** 本轮独立全量重扫在 SQL 翻译层发现 **1 个 Blocker（一票否决）+ 2 个 Critical + 1 个 Major**，全部为此前 9 轮均未识别的缺陷，且集中在**核心查询/写入路径**：
+
+| 级别 | 一句话 | 影响 |
+|------|--------|------|
+| **B** | 非对象 filter 静默退化为「无过滤」→ 写路径产出**无 WHERE 的无界 DELETE/UPDATE** | 数据破坏（一票否决 §3.5） |
+| **C** | `$and`/`$or`/`$nor` 命中即提前 return，**同对象兄弟条件被静默丢弃** | 读结果集/写范围被放大（静默错结果） |
+| **C** | `insertMany` 仅以**首个文档**推导列集，异构文档后续独有字段被静默丢弃 | 静默数据丢失 |
+| **M** | 聚合 `$sort` 的关系点号字段生成**无效列** `t."items.qty"` | 后端执行报错 / 排序语义静默丢失 |
+
+**总评：55 / 100，D 待改进，BLOCKED（一票否决：数据破坏风险，见 B-10-1）。**
+
+### 二、实测证据（本轮实际运行，如实记录）
+
+| 命令 | 结果 |
+|------|------|
+| `cargo test -p rust-store-core` | ✅ 退出码 0，**59/59 全绿**（lib 7 + guards 14 + parity_* 19 + pushdown 6 + regression 10 + route 3；doc-tests 0） |
+| `cargo clippy --workspace --all-targets -- -D warnings` | ✅ 退出码 0，**零告警** |
+| `cargo fmt --all -- --check` | ✅ 退出码 0，**零差异** |
+| `cargo test --workspace` | ✅ 退出码 0 |
+| 静态扫描 `unsafe` / `TODO` / `FIXME` / `HACK` / `XXX` | 0 匹配 |
+| 生产代码 `unwrap` / `expect` / `panic`（core/src 非测试） | 0 处 |
+
+**对抗性边界探测**（临时探针 `core/tests/zz_eval_probe.rs`，评测后已删除，基线已回归 59/59）。实测输出（原样摘录）：
+
+```
+$ cargo test -p rust-store-core --test zz_eval_probe -- --nocapture
+
+PROBE-NONOBJ:    DELETE FROM "posts" AS t
+PROBE-IM-HETERO: INSERT INTO "posts" ("title") VALUES ($1), ($2)
+PROBE-AND-DROP:  SELECT t."_id", t."views", t."status", t."title" FROM "posts" t WHERE t."views" > $1
+PROBE-SORT-REL:  SELECT ... FROM "orders" t LEFT JOIN "order_items" r0 ON r0."orderId" = t."_id" ORDER BY t."items.qty" DESC
+```
+
+- `PROBE-AND-DROP`：输入 `{"$and":[{"views":{"$gt":1}}],"status":"draft"}` → WHERE 只剩 `t."views" > $1`，**`status='draft'` 被丢弃**（C-10-1 成立）。
+- `PROBE-IM-HETERO`：输入 `[{title:"a"},{title:"b",views:9}]` → 列集只有 `title`，**`views` 被丢弃**（C-10-2 成立）。
+- `PROBE-NONOBJ`：输入 `filter:"oops"` → `DELETE FROM "posts" AS t`（**无 WHERE，全表删除**）（B-10-1 成立）。
+- `PROBE-SORT-REL`：输入 `[{"$sort":{"items.qty":-1}}]` → `ORDER BY t."items.qty" DESC`（**无效列**）（M-10-1 成立）。
+
+### 三、评分卡（全量口径，不沿用历史分数）
+
+| # | 维度 | 满分 | 第 8 轮 | 第 9 轮 | **第 10 轮** | 得分率 | 等级 | Δ(10−8) |
+|---|------|------|--------|--------|-----------|--------|------|---------|
+| 1 | 功能正确性 | 15 | 8.5 | 15.0 | **3.0** | 20% | 差 | −5.5 |
+| 2 | 可靠性 | 10 | 9.9 | 9.9 | **10.0** | 100% | 优 | +0.1 |
+| 3 | 安全性 | 15 | 15.0 | 15.0 | **0.0** | 0% | 差（否决） | −15.0 |
+| 4 | 性能效率 | 10 | 10.0 | 10.0 | **10.0** | 100% | 优 | 0 |
+| 5 | 可维护性 | 15 | 14.4 | 14.4 | **14.0** | 93% | 优 | −0.4 |
+| 6 | 可读性与规范 | 10 | 9.5 | 10.0 | **10.0** | 100% | 优 | +0.5 |
+| 7 | 测试质量 | 10 | 9.5 | 10.0 | **8.0** | 80% | 良 | −1.5 |
+| 8 | 文档 | 5 | 4.9 | 4.9 | **4.9** | 98% | 优 | 0 |
+| 9 | 架构与设计 | 10 | 10.0 | 10.0 | **10.0** | 100% | 优 | 0 |
+| — | 小计 | 100 | 91.7 | 99.2 | **69.9** | | | −21.8 |
+| + | 亮点加分 | +5 | +3.0 | +3.0 | **+3.0** | | | 0 |
+| — | 计算总分 | 100 | 95 | 100 | **72.9** | | | |
+| — | **一票否决封顶后总分** | | | | **55.0** | | **D 待改进 / BLOCKED** | |
+
+### 四、问题清单（按严重度）
+
+#### B Blocker（阻断 / 否决）
+
+| 编号 | 定位 | 问题 | 标准出处 | 修复建议 | 状态 |
+|------|------|------|----------|----------|------|
+| B-10-1 | core/src/dialect/filter.rs:154 | 非对象 filter（字符串/数字/布尔/数组）落入 `_ => Ok(空条件)`，被静默当作「无过滤」：写路径 `deleteMany`/`updateMany` 生成**无 WHERE 的 `DELETE FROM t` / `UPDATE t SET ...`**（无界删改）。既违背 Mongo 语义（非文档 filter 应报错），也违背本模块自述契约（filter.rs:40-43「无法翻译的条件一律显式报错，绝不静默丢弃」）。可达性：`validate_condition` 对非对象返回 Ok（types.rs:82），绑定层无形状校验 | CWE-20 / CWE-1284；一票否决 §3.5「数据破坏风险」 | 仅 `Value::Null` / `{}` 视为匹配全部；其余非 Object 一律 `Err`（fail-fast） | ✅ 已修复（第 10 轮整改） |
+
+#### C Critical
+
+| 编号 | 定位 | 问题 | 标准出处 | 修复建议 | 状态 |
+|------|------|------|----------|----------|------|
+| C-10-1 | core/src/dialect/filter.rs:59-131 | `$and`/`$or`/`$nor` 命中即 `return`，**同对象兄弟字段条件被静默丢弃**（实测 `{"status":"draft","$and":[{"views":{"$gt":1}}]}` → WHERE 只剩 `views>1`）→ 查询/计数/更新/删除范围被放大，写路径可造成超出预期的批量修改 | CWE-20；ISO 25010 功能正确性 | 逻辑组子句与字段子句统一收集后再 `and_group`，杜绝分支内提前 return | ✅ 已修复（第 10 轮整改） |
+| C-10-2 | core/src/dialect/write.rs:216 | `build_insert_many` 仅以 `docs[0]` 推导列集（`scalar_cols(schema,&docs[0])`）；异构文档中仅后续文档才有的字段被静默丢弃（实测 `[{title:"a"},{title:"b",views:9}]` → 列集仅 `title`）→ 静默数据丢失 | CWE-1284；ISO 25010 数据正确性 | 取所有文档列键**并集**，或显式校验同构后拒绝；缺失字段绑定 `NULL` | ✅ 已修复（第 10 轮整改） |
+
+#### M Major
+
+| 编号 | 定位 | 问题 | 标准出处 | 修复建议 | 状态 |
+|------|------|------|----------|----------|------|
+| M-10-1 | core/src/dialect/select/aggregate.rs:87-99 | 聚合 `$sort` 用 `col_fn(schema)(k)` 直接拼 `t.<col>`：点号/关系路径（如 `items.qty`）落到**无效列** `ORDER BY t."items.qty"`（实测），后端执行报错；若 head 为 object/array 则该排序键被静默跳过（排序语义丢失） | CWE-20；ISO 25010 功能正确性 | 排序键须经与投影一致的列解析（关系字段映射到 JOIN 别名），未知列显式报错/告警 | ✅ 已修复（第 10 轮整改） |
+
+#### m Minor
+
+| 编号 | 定位 | 问题 | 标准出处 | 修复建议 | 状态 |
+|------|------|------|----------|----------|------|
+| m-10-1 | core/src/dialect/filter/mod.rs（原 filter.rs:44-156） | `build_filter` 单函数 113 行（超 50 行阈值），多层 early-return + 嵌套 match，认知复杂度高 | scoring-rules §5 | 拆分逻辑组 / 字段条件 / 操作符翻译 | ✅ 已修复（第 10 轮整改）：引入 `Ctx` 上下文打包 `backend/alias/column/param_seq/warnings`，`build_filter` 收窄为分发；结构遍历留 `filter/mod.rs`，操作符翻译拆至 `filter/op.rs` |
+| m-10-2 | core/src/dialect/write.rs(610)、core-py/src/methods/plan.rs(577)、core/src/schema.rs(436)、core/src/federation/plan.rs(381)、core/src/dialect/filter.rs(377)、core-node/src/methods/plan.rs(376) | 6 个文件 >400 行（第 8 轮 m-8-3 遗留，本轮实测超限面大于第 8 轮所记 3 个） | scoring-rules §5 | 按职责拆分 | ✅ 已修复（第 10 轮整改）：`write/`（mod+insert+update+upsert）、`schema/`（mod+definition+registry）、`filter/`（mod+op）、`federation/plan/`（mod+route）、两个绑定的 `methods/plan/`（mod+write）；拆分后全仓 `.rs` 最大 399 行，均 <400 |
+
+#### I Info
+
+| 编号 | 定位 | 问题 | 标准出处 | 修复建议 | 状态 |
+|------|------|------|----------|----------|------|
+| I-10-1 | doc/2026-09-12-测试报告.md | 测试数记 33，实际 59/59，文档陈旧（第 8 轮 I-8-1 遗留） | ISO 25010 可理解性 | 同步更新 | ✅ 已修复（第 10 轮整改）：测试数更新为 63/63，明细表补 `regression_d_fixes` 套件并修正各套件计数 |
+
+#### 范围外发现
+
+无。
+
+### 五、亮点（+3.0）
+
+同第 8/9 轮口径，本轮独立复核仍成立：
+
+- core 纯逻辑、零 IO，产出 Command JSON 由 Host 执行；四侧对拍（core / core-node / core-py / JS）可复现 → **+1.0**
+- 读写共享唯一列解析 `scalar_column`（读/写得失对称风险被显式收口）→ **+0.5**
+- 全链路参数化 SQL + 按后端占位符，无字符串拼值（无注入面）→ **+0.5**
+- 多数路径贯彻「宁可报错/告警，绝不静默生成语义失真 SQL」的 fail-fast 契约（B-10-1/C-10-1 恰是该契约尚未覆盖的缺口）→ **+0.5**
+- parity 回归测试矩阵（三后端 SQL 文本对拍）→ **+0.5**
+
+### 六、需运行验证项
+
+| 项 | 验证步骤 | 结果 |
+|----|----------|------|
+| 分支覆盖率 | `cargo llvm-cov -p rust-store-core --branch` | 待填 |
+| B/C/M 缺陷产出 SQL 的真实后端行为 | 对 MySQL / PG / SQLite 各执行一次无 WHERE 的 `DELETE FROM t`、`UPDATE t SET ...` 与 `ORDER BY t."items.qty"` | 待填 |
+
+### 七、改进建议（按优先级）
+
+1. **本次必须（定稿前）**：修复 B-10-1 / C-10-1 / C-10-2 / M-10-1，并为每项补 parity 边界用例（非对象 filter、逻辑组+兄弟键、异构 insertMany、点号 `$sort`）。
+2. **短期跟进**：m-10-1 拆分 `build_filter`；m-10-2 拆分超行文件。（两项连同 I-10-1 已于第 10 轮整改完成；整改后 `cargo test --workspace` 63/63、`clippy -D warnings` 零告警、`fmt --check` 零差异。）
+3. **长期规划**：把「边界组合矩阵」纳入 CI 门禁；建立与真实 Mongo 的「语义对拍」用例集，防止方言翻译语义再漂移。
+
+### 八、下一轮计划
+
+- 待修复项：B-10-1 / C-10-1 / C-10-2 / M-10-1（+ m 级技术债）
+- 复评触发：修复完成后开第 11 轮（本文件追加）
+
+### 九、评分明细（逐维度扣分记录）
+
+**维度 1：功能正确性（15 分，实得 3.0）**
+
+```
+[C] core/src/dialect/filter.rs:59-131 → 逻辑组提前 return 静默丢同对象兄弟条件 → CWE-20 → -5
+[C] core/src/dialect/write.rs:216     → insertMany 仅以 docs[0] 推导列集，异构文档丢列 → CWE-1284 → -5
+[M] core/src/dialect/select/aggregate.rs:87-99 → $sort 关系点号字段生成无效列/静默跳过 → CWE-20 → -2
+```
+
+**维度 2：可靠性（10 分，实得 10.0）** — 生产代码零 unwrap/expect/panic、零 unsafe；「静默失败」按主维度归入维度 1/3，不重复扣分。
+
+**维度 3：安全性（15 分，实得 0）**
+
+```
+[B] core/src/dialect/filter.rs:154 → 非对象 filter 静默退化为无过滤，写路径产出无界 DELETE/UPDATE
+    → CWE-20 / CWE-1284；一票否决 §3.5 → 维度 0 分 + 总评否决
+```
+
+**维度 4：性能效率（10 分，实得 10.0）** — 无 N+1；批量写为单条 INSERT；参数化绑定；静态未见性能退化。
+
+**维度 5：可维护性（15 分，实得 14.0）**
+
+```
+[m] core/src/dialect/filter.rs:44-156 → build_filter 113 行（>50）→ scoring-rules §5 → -0.5
+[m] 6 个文件 >400 行 → scoring-rules §5 → -0.5
+```
+
+**维度 6：可读性与规范（10 分，实得 10.0）** — clippy 零告警 + fmt 零差异 + 命名/注释质量良好。
+
+**维度 7：测试质量（10 分，实得 8.0）**
+
+```
+[m] 4 类边界组合缺测（非对象 filter / 逻辑组+兄弟键 / 异构 insertMany / 点号 $sort），
+    59 例全绿仍未拦截 → ISTQB 边界与异常覆盖 → 4 × -0.5 = -2
+```
+
+**维度 8：文档（5 分，实得 4.9）**
+
+```
+[I] doc/2026-09-12-测试报告.md → 测试数记 33 vs 实际 59 → ISO 25010 可理解性 → -0.1
+```
+
+**维度 9：架构与设计（10 分，实得 10.0）** — 单核心 + 双绑定分层清晰；契约与边界设计良好（B/C 缺陷为契约落地缺口，归维度 1/3 主扣）。
+
+**汇总复算**：3.0 + 10.0 + 0 + 10.0 + 14.0 + 10.0 + 8.0 + 4.9 + 10.0 = **69.9**；+ 亮点 3.0 = **72.9**；一票否决封顶 → **55.0 / 100，D 待改进 / BLOCKED**。
+
+### 十、与第 9 轮「100 分」的关系
+
+- 第 9 轮 100 分是**定向整改复评**的产物（仅对第 8 轮 5 个问题回补，明确未全量重扫）；本轮全量口径证明：翻译层仍存在**长期潜伏、覆盖 9 轮未被识别**的边界缺陷，且其中一项达到一票否决级。
+- 第 9 轮的整改本身**真实有效**（M-8-1/M-8-2/M-8-3/m-8-1/m-8-2 全闭环、fmt 归一、CI 门禁、59/59 + clippy 零告警均为证）；问题不在整改质量，而在**「100 分」的采样口径不足以代表全量水位**。
+- **本轮 55 分（D / BLOCKED）应作为当前代码的真实水位基准**；修复 B-10-1 / C-10-1 / C-10-2 / M-10-1 并补齐边界矩阵后，再开第 11 轮全量复评。
+
+---
+
+## 第 11 轮 · 全量独立评测（2026-09-13）
+
+> 评测时间：2026-09-13
+> 评测对象：rust-store Rust workspace 全量（`core` 引擎 / `core-node` napi 绑定 / `core-py` PyO3 绑定），即**第 10 轮整改后的当前工作区**（`write/`、`filter/`、`schema/`、`federation/plan/`、`methods/plan/` 拆分 + B-10-1/C-10-1/C-10-2/M-10-1 修复）
+> 技术栈：Rust（edition 2021）、napi-rs（napi4）、PyO3 0.29、serde_json（Extended JSON）；多后端方言（MySQL / PostgreSQL / SQLite）
+> 评测口径：**全量独立口径**——全量门禁实测 + 全仓静态扫描 + 3 组对抗性审查子代理（选择层 / 写路径+联邦 / 规划+权限）+ 临时探针取硬证据；**不沿用第 1~10 轮任何维度分数**
+> 依据标准：ISO/IEC 25010:2011、ISO/IEC 25023、OWASP Top 10 (2021)、MITRE CWE Top 25 (2024)、SOLID、SonarQube Quality Model、CISQ、ISTQB
+
+### 一、结论前置
+
+**第 10 轮整改真实有效，但本轮更深的对抗扫描在「方言翻译层」与「权限规划层」各发现 1 个一票否决级缺陷**，均为前 10 轮未识别：
+
+| 级别 | 一句话 | 影响 |
+|------|--------|------|
+| **B** | object/array 字段（含点号路径 head）出现在 filter 中 → `scalar_column` 返回 `None` → 条件被静默 `continue` 丢弃；写路径产出**无 WHERE 的无界 `DELETE FROM t` / `UPDATE t SET …`** | 数据破坏（一票否决 §3.5） |
+| **B** | owner 条件注入被「`$condition` 参数是否存在」门控；`read:["creator"]` 下无 `$condition` 的查询不注入 `createdBy`，返回全表他人数据 | 越权数据访问（一票否决 §3.4，CWE-639） |
+| **C** | 写路径 `$set`/`$inc` 对 object/array 字段静默丢弃 → 字段静默不落库 | 静默数据丢失（CWE-1284） |
+| **M** | `$ne:null`/`$nin` 的 NULL 语义与 Mongo 不一致（`<> NULL` / `NOT IN` 排除 NULL 行） | 静默错结果集 |
+| **M** | 聚合未识别阶段（`$group` 等）被完全忽略，无告警、无 `unsupported` | 静默错结果集 |
+| **M** | 聚合阶段顺序被压平（`$limit` 先于 `$match` 时 WHERE 仍在前） | 静默错结果集 |
+| **M** | 排除式投影 `{field:0}` 反而**返回**被排除字段 | 静默错结果集 |
+| **M** | 用户 `$pipeline` 原样并入、不经 `validate_condition` → 拒绝名单（`$where`/`$out`）可绕过 | 纵深防御失效 |
+| **M** | `translate_aggregate` 254 行、`schema_def_from_rows` 165 行（>150 行阈值） | 可维护性 |
+
+**总评：55 / 100，D 待改进，BLOCKED（一票否决：数据破坏 B-11-1 + 越权读 B-11-2）。**
+
+### 二、第 10 轮问题整改复核（代码核验）
+
+| 编号 | 第 10 轮问题 | 复核 | 证据（当前工作区） |
+|------|-------------|------|-------------------|
+| B-10-1 | 非对象 filter 静默退化为「无过滤」 | ✅ 已闭环 | `filter/mod.rs::Ctx::root` 对非 `null` / 非对象显式 `Err`（`other =>` 分支） |
+| C-10-1 | 逻辑组命中即 return，丢同对象兄弟条件 | ✅ 已闭环 | `filter/mod.rs::Ctx::object` 先收 `logical_clauses` 再 `extend(field_clauses)`，统一 `and_group` |
+| C-10-2 | insertMany 仅以 `docs[0]` 推导列集 | ✅ 已闭环 | `write/insert.rs::scalar_cols_union` 取全文档列键并集，缺失键绑定 `NULL` |
+| M-10-1 | `$sort` 关系点号字段生成无效列 | ✅ 已闭环 | `select/aggregate.rs` `$sort` 分支按 JOIN 别名解析，无法映射则告警 + `unsupported:sortField` |
+| m-10-1 / m-10-2 / I-10-1 | build_filter 拆分 / 超行文件拆分 / 测试报告陈旧 | ✅ 已闭环 | 全仓 `.rs` 最大 399 行；测试报告已更新为 63/63 |
+
+> 结论：第 10 轮问题**全部真实修复**（有代码与门禁双证）。本轮所有扣分**均来自新识别的缺陷**，与上轮整改质量无关。
+
+### 三、实测证据（本轮实际运行，如实记录）
+
+| 命令 / 扫描 | 结果 |
+|-------------|------|
+| `cargo test --workspace` | ✅ 退出码 0，**63/63 全绿**（13 个测试目标；lib 7 + guards 14 + parity_dialect 16 + regression_d_fixes 10 + pushdown 6 + route 3 + …；doc-tests 0） |
+| `cargo clippy --workspace --all-targets -- -D warnings` | ✅ 退出码 0，**零告警** |
+| `cargo fmt --all -- --check` | ✅ 退出码 0，**零差异** |
+| 静态扫描 `unsafe` / `TODO` / `FIXME` / `HACK` / `XXX`（core/src） | 0 匹配 |
+| 生产代码 `unwrap` / `expect` / `panic!`（core/src 非测试） | 0 处 |
+
+**对抗性边界探测**（临时探针 `core/tests/zz_eval11_probe.rs`，评测后已删除，基线已回归 63/63）。Postgres 后端，实测输出原样摘录：
+
+```
+P1-deleteMany-tags(array):   TEXT=DELETE FROM "posts" AS t PARAMS=[]
+P2-deleteMany-meta.x(object):TEXT=DELETE FROM "posts" AS t PARAMS=[]
+P2b-find-tags(array):        TEXT=SELECT ... FROM "posts" t PARAMS=[]            ← 无 WHERE
+P6-updateMany-set-object:    TEXT=UPDATE "posts" AS t SET "status" = $1 PARAMS=["a"]   ← meta 被丢
+P7-updateMany-set-null:      ERR=没有提供要更新的字段
+P3-find-ne-null:             TEXT=... WHERE t."status" <> $1 PARAMS=[null]       ← 恒 UNKNOWN
+P3b-find-nin:                TEXT=... WHERE t."status" NOT IN ($1) PARAMS=["a"]  ← NULL 行被排除
+P9-find-or-empty:            TEXT=SELECT ... FROM "posts" t PARAMS=[]            ← $or:[] 静默无条件
+P8-find-projection-exclude:  TEXT=SELECT t."_id", ..., t."secret" FROM "posts" t  ← 返回被排除字段
+P4-aggregate-group-ignored:  TEXT=SELECT ... FROM "posts" t WARN=[] UNSUPPORTED=[]  ← $group 被忽略
+P5-aggregate-stage-order:    TEXT=... WHERE t."views" > $1 LIMIT $2 PARAMS=[1,10]    ← 顺序被压平
+A-no-condition:              pipeline=[{"$project":{"_id":1,"title":1}}]          ← 无 createdBy
+B-with-condition:            filter={"$and":[{},{"createdBy":"u1"}]}              ← 仅显式 $condition 时注入
+C-count-main:                pipeline=[{"$project":...}]                          ← 主查询无 owner
+C-count-countCmd:            filter={"$and":[{},{"createdBy":"u1"}]}              ← count 却有 owner（不一致）
+D-pipeline-where:            pipeline=[{"$match":{"$where":"this.a == 1"}}]       ← 原样透传
+E-pipeline-out:              pipeline=[{"$out":"other_collection"}]               ← 原样透传
+F-condition-where:           ERR=条件包含被拒绝的操作符 $where（服务端执行类）
+```
+
+**函数规模实测**（`core/src`，代码行 = 剔除空行与纯注释行）：
+
+```
+254  core/src/dialect/select/aggregate.rs:23  translate_aggregate   (>150 → -2)
+165  core/src/dialect/introspect.rs:30        schema_def_from_rows  (>150 → -2)
+119  core/src/command/mutation.rs:47          plan_mutation_node    (50-150 → -0.5)
+117  core/src/federation/plan/mod.rs:83       plan_federated        (50-150 → -0.5)
+ 99  core/src/federation/plan/route.rs:50     walk                  (50-150 → -0.5)
+```
+
+### 四、评分卡（全量口径，不沿用历史分数）
+
+| # | 维度 | 满分 | 第 10 轮 | **第 11 轮** | 得分率 | 等级 | Δ(11−10) |
+|---|------|------|---------|-------------|--------|------|----------|
+| 1 | 功能正确性 | 15 | 3.0 | **1.0** | 6.7% | 差 | −2.0 |
+| 2 | 可靠性 | 10 | 10.0 | **10.0** | 100% | 优 | 0 |
+| 3 | 安全性 | 15 | 0.0 | **0.0** | 0% | 差（否决） | 0 |
+| 4 | 性能效率 | 10 | 10.0 | **10.0** | 100% | 优 | 0 |
+| 5 | 可维护性 | 15 | 14.0 | **9.0** | 60% | 及格 | −5.0 |
+| 6 | 可读性与规范 | 10 | 10.0 | **10.0** | 100% | 优 | 0 |
+| 7 | 测试质量 | 10 | 8.0 | **6.0** | 60% | 及格 | −2.0 |
+| 8 | 文档 | 5 | 4.9 | **4.9** | 98% | 优 | 0 |
+| 9 | 架构与设计 | 10 | 10.0 | **10.0** | 100% | 优 | 0 |
+| — | 小计 | 100 | 69.9 | **60.9** | | | −9.0 |
+| + | 亮点加分 | +5 | +3.0 | **+3.0** | | | 0 |
+| — | 计算总分 | 100 | 72.9 | **63.9** | | | −9.0 |
+| — | **一票否决封顶后总分** | | **55.0** | **55.0** | | **D 待改进 / BLOCKED** | 0 |
+
+### 五、问题清单（按严重度）
+
+#### B Blocker（阻断 / 否决）
+
+| 编号 | 定位 | 问题 | 标准出处 | 修复建议 | 状态 |
+|------|------|------|----------|----------|------|
+| B-11-1 | core/src/dialect/filter/mod.rs:163-165 + core/src/dialect/mod.rs:37-51 | object/array 字段（`tags` 等数组字段、`meta.x` 等点号路径 head 为 object/array）经 `column` 映射得 `None` 后**静默 `continue`**，条件被丢弃且**无告警**。若 filter 只含此类条件 → `root` 得空 `WhereClause` → 写路径生成**无 WHERE 的 `DELETE FROM "posts" AS t` / `UPDATE … SET …`（无界删改）**；find/count 则返回全量。实测 P1/P2/P2b。与 B-10-1 同类（后者已修，本类为残留缺口），违反本模块「绝不静默丢弃条件」契约 | CWE-20 / CWE-1284；一票否决 §3.5「数据破坏风险」 | object/array 字段（含点号 head）应映射到附属表子查询/JOIN；**无法下推时必须 `Err`（或告警 + 拒绝写入）**，绝不 `continue` | 待修复（第 11 轮） |
+| B-11-2 | core/src/command/query.rs:193-205 | owner 条件注入被 `if let Some(r) = ast.params.get("condition")` **门控**：仅有 `$condition` 参数时才调用 `merge_owner_condition`。`read:["creator"]` + 非 admin ctx 下，GQL `Post{ title }`（无 `$condition`）**不注入 `createdBy`**，返回全表他人数据（实测 A）。而 [count.rs](file:///f:/独立开发者/项目/mongo-store/rust-store/core/src/command/count.rs#L69-L77) 对同一 schema **无条件**注入（实测 C）→ 主查询与计数隔离强度不一致，反证非设计意图 | CWE-639 / CWE-284；一票否决 §3.4「越权数据访问」 | owner 注入应与 `$condition` 是否存在解耦：无 condition 时以 owner 作为唯一条件注入（`merge_owner_condition(schema, ctx, None)`）；并统一 count 路径语义（避免二次 merge 漂移） | 待修复（第 11 轮） |
+
+> 可达性说明：B-11-2 要求 schema 以 `read:["creator"]` 声明「仅创建者可读」且调用方走 core 公共 API（`plan_query`）。fixture `q-owner-inject` 仅覆盖「带 `$condition`」路径，无 condition 路径**无任何测试锁定**（见维度 7）。若生产 Host 强制所有查询携带 `$condition` 则该路径不可达，但 **core 层契约不成立**，属可被误用的一票否决级缺口。
+
+#### C Critical
+
+| 编号 | 定位 | 问题 | 标准出处 | 修复建议 | 状态 |
+|------|------|------|----------|----------|------|
+| C-11-1 | core/src/dialect/write/update.rs:54-57 | 写路径 `$set`/`$inc` 对 object/array 字段经 `scalar_col` 得 `None` 后 `continue` **静默丢弃**：实测 P6 `updateMany $set={"meta":{…},"status":"a"}` → `UPDATE "posts" AS t SET "status" = $1`，**`meta` 未落库**。此外 `$set:{status:null}`（P7）被跳过并最终 `Err`（Mongo 允许置 null）。二者均违反「写路径不可翻译组合直接报错」的既有策略 | CWE-1284；ISO 25010 数据正确性 | object/array 字段的写应走附属表（或复制 `_id` 派生 UPDATE）；**无法表达时 `Err`**，绝不静默跳过 | 待修复（第 11 轮） |
+
+#### M Major
+
+| 编号 | 定位 | 问题 | 标准出处 | 修复建议 | 状态 |
+|------|------|------|----------|----------|------|
+| M-11-1 | core/src/dialect/filter/op.rs:26-27、100-136 | `$ne:null` 译为 `col <> $1`（param `null`）在 SQL 三值逻辑下恒为 `UNKNOWN` → **0 行**（Mongo 应返回「存在且非空」的行，实测 P3）；`$nin` 译为 `NOT IN`，`col IS NULL` 的行被排除（Mongo `$nin` 应包含 NULL/缺失，实测 P3b） | CWE-20；ISO 25010 功能正确性 | `$ne:null` → `col IS NOT NULL`；`$nin` → `(col NOT IN (…) OR col IS NULL)`；`$eq:null` 同理 `IS NULL` | 待修复（第 11 轮） |
+| M-11-2 | core/src/dialect/select/aggregate.rs:39-150 | 聚合仅处理 `$match/$lookup/$sort/$skip/$limit/$project`，其余阶段（`$group` 等）**落入无分支的静默忽略**：实测 P4 `[{$group:{_id:null,n:{$sum:1}}}]` → `SELECT … FROM "posts" t`（`WARN=[] UNSUPPORTED=[]`），返回未聚合行。与第 149 行注释「忽略或告警」及模块「无法安全翻译输出 `_unsupported` + warning」契约不符 | CWE-20；ISO 25010 功能正确性 | 未支持阶段必须 `unsupported.push`+告警（交由 Host 兜底）或直接 `Err`，不得静默忽略 | 待修复（第 11 轮） |
+| M-11-3 | core/src/dialect/select/aggregate.rs:32-37、229-247 | 阶段顺序被压平：`$match` 汇入 `root_wheres`、`$limit` 存 `root_limit`，最终**无条件 WHERE 恒在 LIMIT 之前**。实测 P5 `[{$limit:10},{$match:{"views":{"$gt":1}}}]` → `WHERE t."views" > $1 LIMIT $2`（Mongo 应先截断后过滤，语义不同） | ISO 25010 功能正确性 | 阶段顺序不可交换时应 `unsupported`（或按序生成子查询），不得跨阶段重排 | 待修复（第 11 轮） |
+| M-11-4 | core/src/dialect/select/mod.rs:100-124 | `projection_fields` 对**排除式投影**（`{secret:0}`）取「非 0 字段」为空 → 回落为**全部字段**：实测 P8 `SELECT … t."secret" …`，**返回被显式排除的字段**。Mongo 排除式投影应移除该字段 | CWE-20；ISO 25010 功能正确性 | 区分 include / exclude 投影：纯 exclude → 全字段减去排除项；混用（同时含 1 与 0，非 `_id`）→ `Err` | 待修复（第 11 轮） |
+| M-11-5 | core/src/pipeline/build.rs:63-65 | 自定义 `$pipeline` 分支 `stages.extend(arr.iter().cloned())` **原样并入用户阶段，不经 `validate_condition`**：实测 D `$match:{$where:…}`、E `$out:"other_collection"` 原样进入命令（Mongo 直通后端将执行服务端 JS / 跨集合写）；而同文件 :68 对 `$condition` 路径调用 `validate_condition` 并在实测 F 中正确拒绝 `$where` —— 两条路径策略不一致（Registry `allow_user_pipeline` 默认 `true`） | CWE-74 / OWASP A03；纵深防御 | 对用户 `$pipeline` 的 `$match`/`$out`/`$merge` 等同样过拒绝名单（或至少告警）；保持与 `$condition` 路径一致 | 待修复（第 11 轮） |
+| M-11-6 | core/src/dialect/select/aggregate.rs:23 | `translate_aggregate` **254 代码行**（>150）→ 阶段处理、列/别名解析、JOIN 展开、分页方言全挤在单函数 | scoring-rules §5 复杂度阈值 | 按阶段处理 / SELECT 拼装拆分 | 待修复（第 11 轮） |
+| M-11-7 | core/src/dialect/introspect.rs:30 | `schema_def_from_rows` **165 代码行**（>150） | scoring-rules §5 复杂度阈值 | 按「列归并 / 类型推断 / 对象-数组还原」拆分 | 待修复（第 11 轮） |
+
+#### m Minor
+
+| 编号 | 定位 | 问题 | 标准出处 | 修复建议 | 状态 |
+|------|------|------|----------|----------|------|
+| m-11-1 | core/src/dialect/filter/mod.rs:124-136 | 空 `$or: []` 静默降级为「无该条件」（实测 P9 无 WHERE），而 `$nor: []` 已显式报错（:127-129）—— 同族操作符策略不一致，且 Mongo 对空 `$or` 视为错误 | ISO 25010 / 一致性 | 空 `$or`/`$and` 与 `$nor` 对齐：显式报错（或按 Mongo 语义分别处理） | 待修复（第 11 轮） |
+| m-11-2 | core/src/dialect/write/update.rs:124-166 | `findOneAndUpdate` 生成的 `UPDATE … WHERE … RETURNING …` 无单行约束（无 `LIMIT 1` / `_id` 收敛）：filter 命中多行时会**更新全部并全部回读**，与「one」语义不符（PG/SQLite 不支持直接 `UPDATE … LIMIT`，MySQL 支持） | ISO 25010 功能正确性 | 后端能力允许则加 `LIMIT 1`；否则以子查询锁定单 `_id`，或显式告警「需唯一 filter」 | 待修复（第 11 轮） |
+| m-11-3 | core/src/command/mutation.rs:47 | `plan_mutation_node` **119 代码行**（50-150） | scoring-rules §5 | 按「one 关系 / many 关系 / 标量数据」拆分 | 待修复（第 11 轮） |
+| m-11-4 | core/src/federation/plan/mod.rs:83 | `plan_federated` **117 代码行**（50-150） | scoring-rules §5 | 按「单元划分 / 边构造 / 定位」拆分 | 待修复（第 11 轮） |
+| m-11-5 | core/src/federation/plan/route.rs:50 | `walk` **99 代码行**（50-150） | scoring-rules §5 | 按「关系遍历 / 下推判定」拆分 | 待修复（第 11 轮） |
+| m-11-6 | core/src/dialect/select/aggregate.rs:23-30 | `translate_aggregate` 参数 **6 个**（>4） | scoring-rules §5 参数阈值 | 收拢为上下文 struct（可参照 `filter::Ctx`） | 待修复（第 11 轮） |
+
+#### I Info
+
+| 编号 | 定位 | 问题 | 标准出处 | 修复建议 | 状态 |
+|------|------|------|----------|----------|------|
+| I-11-1 | core/src/dialect/select/aggregate.rs:149 | 行内注释称「`$unwind / $addFields / $count …` 忽略或告警」，实际**既不告警也不标 `unsupported`**（与 M-11-2 同源，属文档与行为不符） | ISO 25010 可理解性 | 随 M-11-2 一并修正注释或补上告警 | 待修复（第 11 轮） |
+| I-11-2 | core/src/dialect/filter/mod.rs:47-50 | 契约注释称「无法翻译的条件键一律显式报错」，但 object/array **字段映射失败**走的是 `continue` 而非报错（与 B-11-1 同源），注释与行为存在缝隙 | ISO 25010 可理解性 | 明确「条件键不支持」与「字段不可映射」两类边界，刷新注释 | 待修复（第 11 轮） |
+
+#### 范围外发现
+
+无（nodejs-store / py-store 的 Host 侧行为属各自评测范围）。另有联邦层候选缺陷（跨源 `$limit` 全局截断、跨源 `$sort`/`$condition` 未 degraded、`merge` 键退化）**本轮未取硬证据**，列入「需运行验证项」，不参与评分。
+
+### 六、亮点（+3.0）
+
+同第 8~10 轮口径，本轮独立复核仍成立：
+
+- core 纯逻辑、零 IO，产出 Command JSON 由 Host 执行；四侧对拍（core / core-node / core-py / JS）可复现 → **+1.0**
+- 读写共享唯一列解析 `scalar_column`（读/写得失对称风险被显式收口）→ **+0.5**
+- 全链路参数化 SQL + 按后端占位符，无字符串拼值（无注入面）→ **+0.5**
+- `$condition` 路径贯彻「宁可报错，绝不静默生成语义失真 SQL」的拒绝名单契约 → **+0.5**
+- parity 回归测试矩阵（三后端 SQL 文本对拍）+ 第 10 轮新增的取并集/逻辑组合并等边界修复 → **+0.5**
+
+### 七、需运行验证项
+
+| 项 | 验证步骤 | 结果 |
+|----|----------|------|
+| 分支覆盖率 | `cargo llvm-cov -p rust-store-core --branch` | 待填 |
+| B-11-1 产出 SQL 的真实后端行为 | 对 MySQL / PG / SQLite 各执行一次由 object/array filter 生成的 `DELETE FROM t` / `UPDATE t` | 待填 |
+| B-11-2 可达性 | 生产 Host（web-shw 等）是否存在「无 `$condition`」的查询入口 | 待填 |
+| m-11-2 真实后端多行影响 | 对三后端执行 `findOneAndUpdate`（filter 命中多行），观察 affected rows | 待填 |
+| 联邦层候选（未实测） | 跨源 `$limit` 截断、跨源 `$sort`/`$condition` degraded、merge 键退化 | 待填 |
+
+### 八、改进建议（按优先级）
+
+1. **本次必须（定稿前）**：
+   - **B-11-1**：`filter` 层对 object/array 字段（含点号 head）不可下推时显式 `Err`（或告警 + 拒绝写），杜绝无界 DELETE/UPDATE；
+   - **B-11-2**：owner 注入与 `$condition` 是否存在解耦（无 condition 时以 owner 为唯一条件），并统一 count 路径；
+   - **C-11-1**：`$set`/`$inc` 的 object/array 字段显式报错或走附属表；
+   - **M-11-1 / M-11-2 / M-11-3 / M-11-4 / M-11-5**：NULL 语义、未支持阶段告警、阶段顺序、排除式投影、`$pipeline` 拒绝名单。
+2. **短期跟进**：M-11-6/M-11-7 拆分超 150 行函数；m-11-2 `findOneAndUpdate` 单行收敛；m-11-3~m-11-5 拆分 50-150 行函数；m-11-6 参数收拢。
+3. **长期规划**：把「方言边界组合矩阵」（object/array filter、NULL 语义、聚合阶段语义、投影模式、owner 注入无 condition）纳入 CI 门禁；建立与真实 Mongo 的「语义对拍」用例集，防止方言翻译语义再漂移。
+
+### 九、下一轮计划
+
+- 待修复项：B-11-1 / B-11-2 / C-11-1 / M-11-1~M-11-7 / m-11-1~m-11-6 / I-11-1~I-11-2
+- 复评触发：修复完成后开第 12 轮（本文件追加），复评时必须以「无 `$condition` 的 `read:["creator"]` 查询」与「object/array 字段 filter 写路径」两类用例为回归锚点
+
+### 十、评分明细（逐维度扣分记录）
+
+**维度 1：功能正确性（15 分，实得 1.0）**
+
+```
+[C] core/src/dialect/write/update.rs:54-57 → $set/$inc 对 object/array 字段静默丢弃（实测 P6；$set:null 亦被跳过后 Err，P7）→ CWE-1284 → -5
+[M] core/src/dialect/filter/op.rs:26-27,100-136 → $ne:null / $nin 的 NULL 语义与 Mongo 不一致（P3/P3b）→ CWE-20 → -2
+[M] core/src/dialect/select/aggregate.rs:39-150 → 未识别聚合阶段（$group）静默忽略，无告警/unsupported（P4）→ CWE-20 → -2
+[M] core/src/dialect/select/aggregate.rs:32-37,229-247 → 聚合阶段顺序被压平（$limit 先于 $match 仍 WHERE 在前，P5）→ -2
+[M] core/src/dialect/select/mod.rs:100-124 → 排除式投影 {field:0} 返回被排除字段（P8）→ -2
+[m] core/src/dialect/filter/mod.rs:124-136 → 空 $or 静默降级为无条件（P9），与 $nor 报错策略不一致 → -0.5
+[m] core/src/dialect/write/update.rs:124-166 → findOneAndUpdate 无单行约束，多匹配时更新全部 → -0.5
+```
+
+**维度 2：可靠性（10 分，实得 10.0）** — 生产代码零 `unwrap`/`expect`/`panic!`、零 `unsafe`；「静默失败」按主维度归入维度 1/3，不重复扣分。
+
+**维度 3：安全性（15 分，实得 0）**
+
+```
+[B] core/src/dialect/filter/mod.rs:163-165 + dialect/mod.rs:37-51 → object/array 字段 filter 静默丢弃 → 写路径无 WHERE 的无界 DELETE/UPDATE（P1/P2）
+    → CWE-20/1284；一票否决 §3.5 → 维度 0 分 + 总评否决
+[B] core/src/command/query.rs:193-205 → owner 注入被 $condition 门控，read:["creator"] 无 condition 时越权读全表（A/B/C）
+    → CWE-639/284；一票否决 §3.4 → 否决
+[M] core/src/pipeline/build.rs:63-65 → 用户 $pipeline 绕过拒绝名单（$where/$out 透传，D/E）→ 纵深防御失效（维度已 0，记问题不重复扣）
+```
+
+**维度 4：性能效率（10 分，实得 10.0）** — 无 N+1；批量写为单条 INSERT；参数化绑定；静态未见性能退化。
+
+**维度 5：可维护性（15 分，实得 9.0）**
+
+```
+[M] core/src/dialect/select/aggregate.rs:23 → translate_aggregate 254 代码行（>150）→ scoring-rules §5 → -2
+[M] core/src/dialect/introspect.rs:30 → schema_def_from_rows 165 代码行（>150）→ scoring-rules §5 → -2
+[m] core/src/command/mutation.rs:47 → plan_mutation_node 119 行（50-150）→ -0.5
+[m] core/src/federation/plan/mod.rs:83 → plan_federated 117 行（50-150）→ -0.5
+[m] core/src/federation/plan/route.rs:50 → walk 99 行（50-150）→ -0.5
+[m] core/src/dialect/select/aggregate.rs:23-30 → translate_aggregate 参数 6 个（>4）→ -0.5
+```
+
+**维度 6：可读性与规范（10 分，实得 10.0）** — clippy 零告警 + fmt 零差异 + 命名/注释质量良好。
+
+**维度 7：测试质量（10 分，实得 6.0）**
+
+```
+[m] ≥8 类边界组合缺测（object/array filter、$set object 字段、$ne:null/$nin、$group、
+    聚合阶段顺序、排除式投影、空 $or、owner 无-condition 注入、$pipeline 拒绝名单），
+    63 例全绿仍未拦截 → ISTQB 边界与异常覆盖 → 8 × -0.5 = -4
+```
+
+**维度 8：文档（5 分，实得 4.9）**
+
+```
+[I] core/src/dialect/select/aggregate.rs:149 → 注释「忽略或告警」与实际（不告警不标 unsupported）不符 → ISO 25010 可理解性 → -0.1
+```
+
+**维度 9：架构与设计（10 分，实得 10.0）** — 单核心 + 双绑定分层清晰；契约与边界设计良好（B/C 缺陷为契约落地缺口，归维度 1/3 主扣）。
+
+**汇总复算**：1.0 + 10.0 + 0 + 10.0 + 9.0 + 10.0 + 6.0 + 4.9 + 10.0 = **60.9**；+ 亮点 3.0 = **63.9**；一票否决封顶 → **55.0 / 100，D 待改进 / BLOCKED**。
+
+### 十一、与第 10 轮的关系
+
+- **整改有效且已复核**：第 10 轮 B-10-1 / C-10-1 / C-10-2 / M-10-1 / m-10-1 / m-10-2 / I-10-1 **全部真实闭环**（代码核验 + `cargo test --workspace` 63/63 + 全仓 `.rs` 最大 399 行）。
+- **本轮为更深对抗扫描**：3 组子代理 + 硬证据探针把扫描面从「标准 GQL 主路径」推进到「方言层的字段类型边界」与「权限规划层的注入门控」，因而识别出 10 轮未见的 **2 个一票否决级 + 1 个 Critical + 7 个 Major** 缺陷。raw 分从 72.9 降至 63.9 反映的是**新识别缺陷**，而非上轮修复的回归。
+- **问题性质升级**：第 10 轮集中于「翻译层静默丢条件」，本轮进一步暴露「**字段类型（object/array）映射失败被静默吞掉**」与「**权限注入依赖可选参数存在性**」两类更结构性的缺口 —— 前者贯穿读/写两侧，后者落在鉴权面。
+- **本轮 55 分（D / BLOCKED）为当前代码的真实水位**；修复 B-11-1 / B-11-2 / C-11-1 及全部 M 级并补齐边界矩阵后，再开第 12 轮全量复评。
+

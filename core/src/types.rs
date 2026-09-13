@@ -2,6 +2,8 @@
 
 use serde_json::{json, Value};
 
+use crate::schema::Schema;
+
 /// 获取指定类型的零值；`date`/`any`/未知类型返回 null
 pub fn get_default(field_type: &str) -> Value {
     match field_type {
@@ -81,4 +83,104 @@ pub fn validate_condition(filter: &Value) -> Result<(), String> {
         }
         _ => Ok(()),
     }
+}
+
+// ─── 聚合/`$pipeline` 阶段校验（缺陷 R3） ─────────────────────
+
+/// 写副作用阶段拒绝名单：不允许在查询/聚合中落盘。
+const STAGE_FORBIDDEN: [&str; 2] = ["$out", "$merge"];
+/// `$match` 内 `$expr` 引用的合法字段（除 schema 声明外的固定键）。
+const EXPR_SYS_FIELDS: [&str; 4] = ["_id", "createdBy", "createdAt", "updatedAt"];
+/// `$expr` 内的运算符名（字段引用判定用：非运算符的 `$name` 视为字段引用）。
+const EXPR_OPS: &[&str] = &[
+    "and", "or", "not", "nor", "gt", "gte", "lt", "lte", "eq", "ne", "in", "nin", "exists", "expr",
+    "cond", "if", "then", "else", "switch", "case", "default", "sqrt", "pow", "abs", "ceil",
+    "floor", "round", "subtract", "add", "multiply", "divide", "mod", "modulo", "literal", "size",
+    "arrayElemAt", "arrayToObject", "objectToArray", "isArray", "toString", "toInt", "toDouble",
+    "toLong", "concat", "substrBytes", "toLower", "toUpper", "trim", "split", "toArray", "map",
+    "reduce", "filter", "let", "sum", "avg", "min", "max", "first", "last", "push", "anyElementTrue",
+    "allElementsTrue", "setIsSubset", "setEquals", "setIntersection", "setUnion", "setDifference",
+    "in", "type", "mergeObjects", "dateToString", "dateFromString", "toDate", "dateDiff",
+];
+
+/// 校验聚合/管道阶段：拒绝 `$out`/`$merge` 写副作用阶段、递归拒绝危险执行算子
+/// （`$where` 等）、并校验 `$expr` 未引用 schema 外字段。
+pub fn validate_pipeline_stages(schema: &Schema, pipeline: &[Value]) -> Result<(), String> {
+    for stage in pipeline {
+        match stage {
+            Value::Object(m) => {
+                for (k, v) in m {
+                    if STAGE_FORBIDDEN.contains(&k.as_str()) {
+                        return Err(format!(
+                            "聚合阶段 {k}（写副作用）被拒绝：不允许在查询/聚合中写落盘"
+                        ));
+                    }
+                    if k == "$match" {
+                        validate_expr_fields(schema, v)?;
+                    }
+                    validate_condition(v)?;
+                }
+            }
+            Value::Array(a) => {
+                for v in a {
+                    validate_condition(v)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// 递归定位 `$match` 体内的 `$expr` 子树并做字段引用校验。
+fn validate_expr_fields(schema: &Schema, v: &Value) -> Result<(), String> {
+    match v {
+        Value::Object(m) => {
+            for (k, sub) in m {
+                if k == "$expr" {
+                    validate_expr_tree(schema, sub)?;
+                } else {
+                    validate_expr_fields(schema, sub)?;
+                }
+            }
+        }
+        Value::Array(a) => {
+            for x in a {
+                validate_expr_fields(schema, x)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// `$expr` 表达式树：形如 `"$name"` 的叶子（非运算符）视为字段引用，
+/// 必须在 schema 中声明（含固定键/关系），否则显式报错。
+fn validate_expr_tree(schema: &Schema, v: &Value) -> Result<(), String> {
+    match v {
+        Value::String(s) if s.starts_with('$') => {
+            let f = &s[1..];
+            if !EXPR_OPS.contains(&f) && !schema_expr_has_field(schema, f) {
+                return Err(format!(
+                    "$expr 引用了 schema 未声明的字段 ${f}：请使用 schema 中已定义的字段"
+                ));
+            }
+        }
+        Value::Array(a) => {
+            for x in a {
+                validate_expr_tree(schema, x)?;
+            }
+        }
+        Value::Object(m) => {
+            for (_, sub) in m {
+                validate_expr_tree(schema, sub)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn schema_expr_has_field(schema: &Schema, f: &str) -> bool {
+    EXPR_SYS_FIELDS.contains(&f) || schema.fields.contains_key(f) || schema.relations.contains_key(f)
 }

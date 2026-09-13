@@ -38,6 +38,11 @@ pub(super) fn translate_find(
             columns.push(RowCol::scalar(&c, &[f.as_str()]));
         }
     }
+    // 缺失 vs null 三态（F-07/H-01）：额外查出 `__present` 哨兵列，供行还原时区分
+    // 「显式 null（有键）」与「缺失（无键）」。`__present` 不是 schema 字段，不入用户投影，
+    // 只经 present_alias 交给 restore_rows 消费。
+    cols_sql.push("t.__present AS __present".to_string());
+    let shape = RowShape { columns, present_alias: Some("__present".to_string()) };
     let select_list = if cols_sql.is_empty() {
         q(backend, "_id")
     } else {
@@ -52,6 +57,6 @@ pub(super) fn translate_find(
     Ok(vec![SqlStmt::select(
         format!("SELECT {} FROM {} t{}", select_list, from, where_sql),
         wh.params,
-        RowShape { columns },
+        shape,
     )])
 }

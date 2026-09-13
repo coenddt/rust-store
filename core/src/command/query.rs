@@ -3,13 +3,14 @@
 use serde_json::{json, Map, Value};
 
 use crate::bson::id_key;
-use crate::computes::{merge_depends_into_ast, InjectInfo};
+use crate::computes::{collect_field_deps, merge_depends_into_ast, InjectInfo};
 use crate::permission::{can_read_schema, merge_owner_condition, Context};
 use crate::pipeline::{
-    build_pipeline, build_projection, flatten_object_fields, is_nullish, param, parse_gql, Ast,
+    build_pipeline, build_pipeline_projection, build_projection, flatten_object_fields, is_nullish,
+    param, parse_gql, Ast,
 };
 use crate::schema::Registry;
-use crate::types::is_truthy;
+use crate::types::{is_truthy, validate_pipeline_stages};
 
 use super::cmd::{cmd_aggregate, cmd_find, num_value, to_number};
 use super::{ensure_context, ERR_PERMISSION, MAX_PAGE_SIZE, PHASE1_IDS};
@@ -189,7 +190,7 @@ pub fn plan_query_ast_mut(
         return Err(ERR_PERMISSION.to_string());
     }
 
-    // 所有者条件注入（非 admin 用户只看自己的数据）
+    // 所有者条件注入（非 admin 用户只看自己的数据，无需 $condition 也不能越权读全表）
     if ctx.is_some() {
         if let Some(r) = ast.params.get("condition").cloned() {
             let key = r.get(1..).unwrap_or("").to_string();
@@ -201,6 +202,11 @@ pub fn plan_query_ast_mut(
                     params.remove(&key);
                 }
             }
+        } else if let Some(owner) = merge_owner_condition(schema, ctx, None) {
+            // GQL 未显式给 $condition：注入合成 owner 条件为基准 $match，防越权读全表
+            ast.params
+                .insert("condition".to_string(), "@__core_owner__".to_string());
+            params.insert("__core_owner__".to_string(), owner);
         }
     }
 
@@ -215,11 +221,16 @@ pub fn plan_query_ast_mut(
         return Err("用户 $pipeline 已被禁用（allow_user_pipeline = false）".to_string());
     }
 
-    let inject = if has_pipeline {
+    let mut inject = if has_pipeline {
         InjectInfo::default()
     } else {
         merge_depends_into_ast(&mut ast.relations, schema)?
     };
+    // R7：asyncFn 计算列的普通字段依赖（如 `name`）并入根 AST，供投影取数与
+    // process_node 裁剪保留；宿主 asyncFn 执行后由 strip_dep_injected 剥离。
+    if !has_pipeline {
+        inject.fields = collect_field_deps(&mut ast.fields, schema);
+    }
 
     // `postprocess.ast` 取「展平后、含全部关系」的快照（build_pipeline 会原地展平 fetch ast）
     let mut post_ast = ast.clone();
@@ -256,7 +267,9 @@ pub fn build_plan(
     let stages: Vec<Value> = pipeline.as_array().cloned().unwrap_or_default();
 
     let projection = if has_pipeline {
-        None
+        // R9：用户 $pipeline 模式仍按 GQL 请求字段施加顶层投影（字段选择），
+        // 但不追加 compute 层/默认值/裁剪。
+        build_pipeline_projection(&fetch_ast, schema)
     } else {
         build_projection(&fetch_ast, schema, ctx)
     };
@@ -324,11 +337,13 @@ pub fn build_plan(
 
     // ── 标准单阶段聚合 / 用户 $pipeline ──
     let mut final_stages = stages;
-    if !has_pipeline {
-        if let Some(p) = projection.as_ref() {
-            final_stages.push(json!({ "$project": p }));
-        }
+    if let Some(p) = projection.as_ref() {
+        // 普通模式：追加计算投影；$pipeline 模式：仅做字段选择（R9）
+        final_stages.push(json!({ "$project": p }));
     }
+
+    // R3：用户 `$pipeline` 的写副作用/危险阶段必须显式拒绝（即使 allow_user_pipeline）
+    validate_pipeline_stages(schema, &final_stages)?;
 
     Ok(QueryPlan {
         collection,

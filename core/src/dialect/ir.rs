@@ -55,6 +55,11 @@ pub struct RowShape {
     /// 列 → { jsonPath, isArray }。jsonPath 形如 `["title"]` 或 `["items","amount"]`，
     /// 表示该列应嵌套还原到文档的哪个位置；isArray 表示该字段是关系数组（聚合还原）。
     pub columns: Vec<RowCol>,
+    /// `__present` 哨兵列的别名（缺失 vs null 三态，F-07/H-01）：该列存每行
+    /// 「哪些标量字段显式存在」的集合。读取时标量列值为 null，仅当字段存在于
+    /// 该集合才还原为 `key: null`，否则（缺失）不产出该键。`None` 表示本条语句
+    /// 未查该列（如 count / 关系聚合），还原时不做存在性判定。
+    pub present_alias: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,6 +76,7 @@ impl RowShape {
     pub fn empty() -> Self {
         RowShape {
             columns: Vec::new(),
+            present_alias: None,
         }
     }
 
@@ -87,7 +93,10 @@ impl RowShape {
                 })
             })
             .collect();
-        json!({ "columns": cols })
+        json!({
+            "columns": cols,
+            "present": self.present_alias.clone().unwrap_or_default(),
+        })
     }
 }
 

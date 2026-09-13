@@ -11,7 +11,7 @@ use crate::pipeline::{flatten_object_fields_impl, RelAst};
 use crate::schema::{Registry, Schema};
 
 use super::super::cache::{ensure_cache, Cache};
-use super::super::defaults::{fill_nested_defaults, is_object_field, raw_field_default};
+use super::super::defaults::{is_object_field, raw_field_default};
 use super::super::registry::FnRegistry;
 
 /// GQL 请求字段 + fn 计算列依赖字段（去重，保序）
@@ -99,27 +99,15 @@ fn fill_dot_nested(doc: &mut Value, schema: &Schema, root: &str, sub_path: &str)
 }
 
 /// 递归填充嵌套 object 子字段默认值（含点号精确子字段）
+///
+/// 语义（对拍 JS / MongoDB）：**仅当**请求以点号精确引用某子字段时，才为缺失的
+/// 该子字段补默认值（`_fillDotNested`）；请求整个 object 字段时**原样返回存储值**，
+/// 不做嵌套默认值回填——否则 `$set` 整体替换存储的 `{cover:"x"}` 会被默认值补回
+/// `{level,seo}`，破坏「对象整体替换、返回即所存」契约（B-05）。
 fn fill_nested_objects(doc: &mut Value, schema: &Schema, needed: &[String]) {
     for key in needed {
-        match key.find('.') {
-            Some(idx) => fill_dot_nested(doc, schema, &key[..idx], &key[idx + 1..]),
-            None => {
-                let Some(field) = schema.fields.get(key) else {
-                    continue;
-                };
-                if !is_object_field(field) {
-                    continue;
-                }
-                let Some(fd) = field.fields.clone() else {
-                    continue;
-                };
-                let Some(sub) = doc.as_object_mut().and_then(|o| o.get_mut(key)) else {
-                    continue;
-                };
-                if sub.is_object() {
-                    fill_nested_defaults(sub, &fd);
-                }
-            }
+        if let Some(idx) = key.find('.') {
+            fill_dot_nested(doc, schema, &key[..idx], &key[idx + 1..]);
         }
     }
 }
@@ -185,11 +173,29 @@ fn descend_relations(
             continue;
         };
         let rel_schema = registry.get(&rel_def.model)?;
+        let is_one = rel_def.rel_type == "one";
 
-        let Some(rel_val) = doc.as_object_mut().and_then(|o| o.get_mut(&*rel_name)) else {
+        let Some(o) = doc.as_object_mut() else {
             continue;
         };
-        match rel_val {
+        let stored = o.get(rel_name).cloned();
+        let Some(mut rel_val) = stored.filter(|v| !v.is_null()) else {
+            // S3：one 关系无匹配 → `null`；many 关系无匹配 → `[]`
+            // （对齐 C-01/C-07 形状契约：不得一边 [] 一边 null、也不得缺键）
+            o.insert(
+                rel_name.clone(),
+                if is_one {
+                    Value::Null
+                } else {
+                    Value::Array(Vec::new())
+                },
+            );
+            continue;
+        };
+
+        // 关系子文档是否应保留 `_id`：仅当 GQL 显式请求 `{_id}`（S4 读裁剪，C-09/C-10）
+        let keep_id = rel_ast.fields.iter().any(|f| f == "_id");
+        match &mut rel_val {
             Value::Array(arr) => {
                 for item in arr.iter_mut() {
                     process_node(
@@ -201,11 +207,16 @@ fn descend_relations(
                         registry,
                         fn_registry,
                     )?;
+                    if !keep_id {
+                        if let Value::Object(so) = item {
+                            so.remove("_id");
+                        }
+                    }
                 }
             }
             Value::Object(_) => {
                 process_node(
-                    rel_val,
+                    &mut rel_val,
                     &mut rel_ast.fields,
                     &mut rel_ast.relations,
                     rel_schema,
@@ -213,9 +224,16 @@ fn descend_relations(
                     registry,
                     fn_registry,
                 )?;
+                if !keep_id {
+                    if let Some(so) = rel_val.as_object_mut() {
+                        so.remove("_id");
+                    }
+                }
             }
             _ => {}
         }
+        // 写回（处理后的关系值；含 one 的 object 与 many 的数组）
+        o.insert(rel_name.clone(), rel_val);
     }
 
     Ok(())

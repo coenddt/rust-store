@@ -511,3 +511,190 @@ fn dialect_introspection_non_id_pk_has_no_phantom_field() {
     );
     assert!(fields.contains_key("name"), "普通字段不受影响: {fields:?}");
 }
+
+// ─── 第 10 轮缺陷修复回归（B-10-1 / C-10-1 / C-10-2 / M-10-1） ─────────
+
+/// B-10-1：非对象 filter 必须显式报错，绝不静默退化为「无过滤」——
+/// 后者会让写路径产出无 WHERE 的无界 DELETE/UPDATE（一票否决：数据破坏风险）。
+#[test]
+fn dialect_rejects_non_object_filter() {
+    let registry = registry_with(&schemas());
+
+    // 写路径：字符串 filter → 修复前会产出 `DELETE FROM "posts" AS t`（全表删）
+    let err = translate(
+        Backend::Postgres,
+        &json!({ "kind": "deleteMany", "collection": "posts", "filter": "oops" }),
+        &registry,
+    )
+    .expect_err("非对象 filter 必须报错（不得静默全表删）");
+    assert!(err.contains("filter"), "错误应指明 filter: {err}");
+
+    // 读路径：数字 / 数组 / 布尔 filter 同样拒绝
+    for cmd in [
+        json!({ "kind": "find", "collection": "posts", "filter": 5 }),
+        json!({ "kind": "countDocuments", "collection": "posts", "filter": [1, 2] }),
+        json!({ "kind": "updateMany", "collection": "posts", "filter": true,
+                "update": { "$set": { "status": "x" } } }),
+    ] {
+        translate(Backend::Postgres, &cmd, &registry).expect_err("非对象 filter 必须报错");
+    }
+
+    // `null` 仍表示「无过滤条件」（与 `{}` 同义）——既有约定不回归
+    let out = translate(
+        Backend::Postgres,
+        &json!({ "kind": "find", "collection": "posts", "filter": null }),
+        &registry,
+    )
+    .expect("null filter 应放行");
+    let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        !text.contains("WHERE"),
+        "null filter 不应产生 WHERE: {text}"
+    );
+}
+
+/// C-10-1：同一对象内的逻辑组（$and/$or/$nor）与兄弟字段条件必须 AND 合并，
+/// 绝不丢弃兄弟条件（修复前逻辑组命中即提前 return）。
+#[test]
+fn dialect_filter_logical_group_keeps_sibling_conditions() {
+    let registry = registry_with(&schemas());
+
+    // $and + 兄弟字段：WHERE 必须同时含 views 与 status
+    let cmd = json!({ "kind": "find", "collection": "posts",
+        "filter": { "status": "draft", "$and": [ { "views": { "$gt": 1 } } ] } });
+    let out = translate(Backend::Postgres, &cmd, &registry).expect("translate");
+    let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("t.\"views\" > $1") && text.contains("t.\"status\" = $2"),
+        "兄弟条件 status 不得被丢弃: {text}"
+    );
+    assert_eq!(
+        out["stmts"][0]["params"].as_array().map(|a| a.len()),
+        Some(2),
+        "应有两个绑定参数: {out}"
+    );
+
+    // $or 同理（兄弟字段 + OR 组同时生效）
+    let cmd = json!({ "kind": "find", "collection": "posts",
+        "filter": { "status": "draft",
+                    "$or": [ { "views": { "$gt": 1 } }, { "views": { "$lt": 5 } } ] } });
+    let out = translate(Backend::Postgres, &cmd, &registry).expect("translate");
+    let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("OR") && text.contains("t.\"status\""),
+        "$or 与兄弟字段应同时生效: {text}"
+    );
+    assert_eq!(
+        out["stmts"][0]["params"].as_array().map(|a| a.len()),
+        Some(3),
+        "应为三个绑定参数: {out}"
+    );
+
+    // $nor 同理
+    let cmd = json!({ "kind": "find", "collection": "posts",
+        "filter": { "status": "draft", "$nor": [ { "views": { "$gt": 1 } } ] } });
+    let out = translate(Backend::Postgres, &cmd, &registry).expect("translate");
+    let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("NOT") && text.contains("t.\"status\""),
+        "$nor 与兄弟字段应同时生效: {text}"
+    );
+}
+
+/// C-10-2：insertMany 的列集必须是**所有文档字段的并集**（异构文档不得丢列）。
+#[test]
+fn dialect_insert_many_merges_heterogeneous_columns() {
+    let registry = registry_with(&schemas());
+    let cmd = json!({ "kind": "insertMany", "collection": "posts",
+        "docs": [ { "title": "a" }, { "title": "b", "views": 9 } ] });
+
+    // 跨后端 SQL 一致
+    assert_sql_parity("insert-many-heterogeneous", &cmd);
+
+    let out = translate(Backend::Postgres, &cmd, &registry).expect("translate");
+    let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("\"title\"") && text.contains("\"views\""),
+        "列集应为并集（含仅次篇文档才有的 views）: {text}"
+    );
+    let params = out["stmts"][0]["params"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        params.contains(&json!(9)),
+        "第二篇文档的 views=9 不得丢失: {params:?}"
+    );
+}
+
+/// M-10-1：$sort 的关系点号字段必须映射到 JOIN 别名，绝不产出无效列 `t."items.qty"`。
+#[test]
+fn dialect_aggregate_sort_by_relation_uses_join_alias() {
+    let registry = registry_with(&schemas());
+
+    // 有对应 $lookup → 排序键映射到 r0 别名
+    let out = translate(
+        Backend::Postgres,
+        &json!({ "kind": "aggregate", "collection": "orders", "pipeline": [
+            { "$lookup": { "from": "order_items", "localField": "_id",
+                           "foreignField": "orderId", "as": "items" } },
+            { "$sort": { "items.qty": -1 } }
+        ] }),
+        &registry,
+    )
+    .expect("translate");
+    let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("ORDER BY r0.\"qty\" DESC"),
+        "关系排序应映射到 JOIN 别名: {text}"
+    );
+    assert!(
+        !text.contains("items.qty"),
+        "不得产出无效列 t.\"items.qty\": {text}"
+    );
+    assert_eq!(
+        out["unsupported"].as_array().map(|a| a.len()),
+        Some(0),
+        "可下推的关系排序不应产生 unsupported: {out}"
+    );
+
+    // 无对应 $lookup → 不下推：告警 + sortField 标记，且不得出现无效列
+    let out = translate(
+        Backend::Postgres,
+        &json!({ "kind": "aggregate", "collection": "orders",
+                 "pipeline": [ { "$sort": { "items.qty": -1 } } ] }),
+        &registry,
+    )
+    .expect("translate");
+    let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(!text.contains("items.qty"), "不得产出无效列: {text}");
+    let unsupported = out["unsupported"].as_array().cloned().unwrap_or_default();
+    assert_eq!(unsupported.len(), 1, "应标记 1 条 unsupported: {out}");
+    assert_eq!(
+        unsupported[0].get("code").and_then(|v| v.as_str()),
+        Some("sortField"),
+        "code 应为 sortField: {out}"
+    );
+    assert!(
+        !out["warnings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .is_empty(),
+        "应同时给出 warning: {out}"
+    );
+
+    // 根表标量排序既有行为不回归
+    let out = translate(
+        Backend::Postgres,
+        &json!({ "kind": "aggregate", "collection": "orders",
+                 "pipeline": [ { "$sort": { "amount": -1 } } ] }),
+        &registry,
+    )
+    .expect("translate");
+    let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("ORDER BY t.\"amount\" DESC"),
+        "标量排序应保持: {text}"
+    );
+}

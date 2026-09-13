@@ -87,13 +87,51 @@ pub(super) fn translate_aggregate(
         } else if let Some(s) = stage.get("$sort") {
             if let Some(o) = s.as_object() {
                 for (k, dir) in o {
-                    if let Some(c) = col_fn(schema)(k) {
-                        let d = dir.as_i64().unwrap_or(1);
-                        root_order.push(format!(
-                            "t.{} {}",
-                            q(backend, &c),
-                            if d >= 0 { "ASC" } else { "DESC" }
-                        ));
+                    // 排序键 → 有效列表达式（缺陷修复 M-10-1）：
+                    // - 无点号标量字段 → `t.<col>`
+                    // - 关系点号路径（`rel.field`）且已存在同名 JOIN → `r{i}.<col>`
+                    // - 其余（未知字段 / object·array 字段 / 关系名本身 / 无对应 $lookup）
+                    //   → **不生成 SQL**，告警 + 标记 unsupported 交由 Host 兜底排序。
+                    //   此前直接拼 `t.<raw>` 会产出无效列 `t."items.qty"`（后端执行报错），
+                    //   或对 object/array 字段静默跳过（排序语义丢失）。
+                    let resolved: Option<String> = match k.split_once('.') {
+                        Some((head, rest)) => {
+                            joins.iter().position(|j| j.rel_name == head).and_then(|i| {
+                                registry
+                                    .get(&joins[i].model)
+                                    .ok()
+                                    .and_then(|rel| crate::dialect::scalar_column(rel, rest))
+                                    .map(|c| format!("r{}.{}", i, q(backend, &c)))
+                            })
+                        }
+                        None => {
+                            if schema.relations.iter().any(|(n, _)| n.as_str() == k) {
+                                // 关系名本身（排序关系数组）不是标量列 → 不下推
+                                None
+                            } else {
+                                col_fn(schema)(k).map(|c| format!("t.{}", q(backend, &c)))
+                            }
+                        }
+                    };
+                    match resolved {
+                        Some(expr) => {
+                            let d = dir.as_i64().unwrap_or(1);
+                            root_order.push(format!(
+                                "{} {}",
+                                expr,
+                                if d >= 0 { "ASC" } else { "DESC" }
+                            ));
+                        }
+                        None => {
+                            warnings.push(format!(
+                                "$sort 字段 {k} 无法映射到有效列（未知字段 / object·array 字段 / 无对应 $lookup），未下推排序"
+                            ));
+                            unsupported.push(json!({
+                                "code": "sortField",
+                                "field": k,
+                                "reason": "$sort 字段无法映射到有效列，需 Host 侧兜底排序",
+                            }));
+                        }
                     }
                 }
             }
@@ -107,8 +145,19 @@ pub(super) fn translate_aggregate(
             // 理论不可达：$lookup 已在上方分支处理（含 childLimit 标记）。防御性收口——
             // 本模块契约是「绝不 panic / 绝不生成错误 SQL」，收拢到 Err 而非 unreachable!()
             return Err("SELECT 翻译不支持 $lookup 阶段（应经 JOIN 下推）".to_string());
+        } else {
+            // S1 / 缺陷 G-02：未实现阶段（$group / $unwind / $addFields / $count / $facet …）。
+            // 此前静默忽略 → 返回「未聚合的原始行」＝语义失真。
+            // 硬化契约：SQL 无法翻译即显式报错，绝不静默忽略。
+            let stage_name = stage
+                .as_object()
+                .and_then(|m| m.keys().next())
+                .cloned()
+                .unwrap_or_else(|| "?".to_string());
+            return Err(format!(
+                "SQL 后端暂不支持的聚合阶段 {stage_name}：拒绝静默忽略后返回未聚合的原始行"
+            ));
         }
-        // $unwind / $addFields / $count … 忽略或告警
     }
 
     // ── 拼装 SELECT ──
@@ -260,6 +309,11 @@ pub(super) fn translate_aggregate(
 
     let select_list = if cols_sql.is_empty() {
         q(backend, "_id")
+    } else if !cols_sql.iter().any(|c| c.contains("__present")) {
+        // 缺失 vs null 三态（F-07）：根表标量随行携带 `__present` 哨兵列，供还原时区分
+        // 「显式 null（有键）」与「缺失（无键）」。仅需查一次（根表列），不入用户投影。
+        cols_sql.push("t.__present AS __present".to_string());
+        cols_sql.join(", ")
     } else {
         cols_sql.join(", ")
     };
@@ -270,6 +324,9 @@ pub(super) fn translate_aggregate(
     Ok(vec![SqlStmt::select(
         text,
         all_params,
-        RowShape { columns },
+        RowShape {
+            columns,
+            present_alias: Some("__present".to_string()),
+        },
     )])
 }

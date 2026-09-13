@@ -22,8 +22,8 @@ mod run;
 pub use cache::{ensure_cache, Cache, ComputeEntry};
 pub use defaults::{apply_defaults_and_computes, field_default, fill_nested_defaults};
 pub use inject::{
-    collect_rel_deps, inject_into_ast, merge_depends_into_ast, strip_dep_injected, InjectInfo,
-    Injected, RelDep,
+    collect_field_deps, collect_rel_deps, inject_into_ast, merge_depends_into_ast,
+    strip_dep_injected, InjectInfo, Injected, RelDep,
 };
 pub use registry::FnRegistry;
 pub use run::{process_node, run_async_fns, run_computes, select_async_fns};

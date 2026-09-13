@@ -36,14 +36,17 @@ pub enum Injected {
     Fields(Vec<String>),
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct InjectInfo {
     pub relations: Vec<(String, Injected)>,
+    /// R7：asyncFn 计算列的**普通字段**依赖（非关系子字段），注入根 AST 后供 process_node
+    /// 保留、宿主 asyncFn 读取，随后在 strip 阶段从根文档剥离，避免泄漏到最终输出。
+    pub fields: Vec<String>,
 }
 
 impl InjectInfo {
     pub fn is_empty(&self) -> bool {
-        self.relations.is_empty()
+        self.relations.is_empty() && self.fields.is_empty()
     }
 
     /// 序列化为 JS 侧形状（Set → 数组，`'__all__'` → 字符串）
@@ -56,30 +59,51 @@ impl InjectInfo {
             };
             m.insert(name.clone(), v);
         }
+        let mut root = Map::new();
+        if let Some(rm) = Value::Object(m).as_object() {
+            if !rm.is_empty() {
+                root.insert("relations".to_string(), Value::Object(rm.clone()));
+            }
+        }
+        if !self.fields.is_empty() {
+            root.insert(
+                "fields".to_string(),
+                Value::Array(self.fields.iter().cloned().map(Value::String).collect()),
+            );
+        }
         Value::Object(Map::from_iter([(
-            "relations".to_string(),
-            Value::Object(m),
+            "inject".to_string(),
+            Value::Object(root),
         )]))
     }
 
     /// 从 [`to_value`] 产出的 JSON 重建（供 finalize_query 从 plan.postprocess 还原）
     pub fn from_value(v: &Value) -> InjectInfo {
         let mut relations = Vec::new();
-        if let Some(Value::Object(rm)) = v.get("relations") {
-            for (name, inj) in rm {
-                let parsed = match inj {
-                    Value::String(s) if s == "__all__" => Injected::All,
-                    Value::Array(arr) => Injected::Fields(
-                        arr.iter()
-                            .map(|f| f.as_str().unwrap_or_default().to_string())
-                            .collect(),
-                    ),
-                    _ => continue,
-                };
-                relations.push((name.clone(), parsed));
+        let mut fields = Vec::new();
+        if let Some(Value::Object(m)) = v.get("inject").or_else(|| Some(v)) {
+            if let Some(Value::Object(rm)) = m.get("relations") {
+                for (name, inj) in rm {
+                    let parsed = match inj {
+                        Value::String(s) if s == "__all__" => Injected::All,
+                        Value::Array(arr) => Injected::Fields(
+                            arr.iter()
+                                .map(|f| f.as_str().unwrap_or_default().to_string())
+                                .collect(),
+                        ),
+                        _ => continue,
+                    };
+                    relations.push((name.clone(), parsed));
+                }
+            }
+            if let Some(Value::Array(fa)) = m.get("fields") {
+                fields = fa
+                    .iter()
+                    .filter_map(|f| f.as_str().map(String::from))
+                    .collect();
             }
         }
-        InjectInfo { relations }
+        InjectInfo { relations, fields }
     }
 }
 
@@ -95,6 +119,32 @@ fn dep_slot<'a>(deps: &'a mut Vec<RelDep>, name: &str) -> &'a mut RelDep {
         }
     };
     &mut deps[idx]
+}
+
+/// R7：收集 asyncFn 计算列的**普通字段**依赖（非关系子字段、非关系名、非 `_id`），
+/// 并入根 AST 字段（供投影取数与 `process_node` 裁剪保留），返回被注入的字段列表。
+///
+/// 关系子字段/关系名依赖由 [`collect_rel_deps`] 处理；这里只处理根级标量字段。
+pub fn collect_field_deps(fields: &mut Vec<String>, schema: &Schema) -> Vec<String> {
+    let cache = ensure_cache(schema);
+    let mut added = Vec::new();
+    for entry in &cache.async_fn_list {
+        for dep in &entry.depends {
+            let trimmed = dep.trim();
+            if trimmed.is_empty() || trimmed == "_id" {
+                continue;
+            }
+            // 关系子字段（`lessons{duration}`）或关系名 → 由 collect_rel_deps 负责，跳过
+            if trimmed.contains('{') || schema.relations.contains_key(trimmed) {
+                continue;
+            }
+            if !fields.contains(&trimmed.to_string()) {
+                fields.push(trimmed.to_string());
+                added.push(trimmed.to_string());
+            }
+        }
+    }
+    added
 }
 
 /// 收集所有 asyncFn 计算列 depends 中的关系字段需求（对应 JS `_collectRelDeps`）
@@ -192,6 +242,12 @@ pub fn strip_dep_injected(items: &mut [Value], info: &InjectInfo) {
         let Some(o) = item.as_object_mut() else {
             continue;
         };
+        // R7：剥离注入的 asyncFn 普通字段依赖（如 `name`），避免泄漏到最终输出
+        if !info.fields.is_empty() {
+            for f in &info.fields {
+                o.remove(f);
+            }
+        }
         for (rel_name, injected) in &info.relations {
             match injected {
                 Injected::All => {

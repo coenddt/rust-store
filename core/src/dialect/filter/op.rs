@@ -1,189 +1,21 @@
-//! Mongo filter → WHERE 子句（参数化）
+//! 单字段条件的操作符翻译（`$eq` / `$in` / `$regex` / `$not` …）。
+//!
+//! 契约：无法翻译的操作符/取值一律显式报错，绝不静默丢弃条件（缺陷 D-02）。
 
 use serde_json::Value;
 
-use super::Backend;
-
-/// 告警通道：`Some(&mut Vec<String>)` 表示调用方能收集翻译告警（select 侧会透出给 Host）；
-/// `None` 表示**无告警能力**（写路径）——此时遇到「条件可翻译但语义需降级」的组合直接报错，
-/// 宁可失败也绝不静默生成语义失真的 SQL（对齐 `write.rs`「需告警的翻译直接报错」策略）。
-pub type Warnings<'a> = Option<&'a mut Vec<String>>;
-
-/// 单条 WHERE 片段（文本 + 已生成的参数、排序号）
-#[derive(Debug, Clone)]
-pub struct WhereClause {
-    pub text: String,
-    pub params: Vec<Value>,
-}
-
-impl WhereClause {
-    fn new(text: String, params: Vec<Value>) -> Self {
-        WhereClause { text, params }
-    }
-
-    pub fn and(a: WhereClause, b: WhereClause) -> WhereClause {
-        let text = match (a.text.is_empty(), b.text.is_empty()) {
-            (true, true) => String::new(),
-            (true, false) => b.text,
-            (false, true) => a.text,
-            (false, false) => format!("({} AND {})", a.text, b.text),
-        };
-        let mut params = a.params;
-        params.extend(b.params);
-        WhereClause { text, params }
-    }
-}
-
-/// 把 Mongo filter 翻译为 WHERE。`param_seq` 是 Postgres 占位序号游标（就地递增）。
-/// `alias` 是本表别名（`t`）；`column` 是字段 → 列名的映射。
-///
-/// 硬化契约（缺陷 D-02）：**无法翻译的条件键一律显式报错，绝不静默丢弃** ——
-/// 丢弃条件 = 生成缺 WHERE 的错误 SQL（返回全量/全表写），调用方无法区分
-/// 「无数据」与「条件被丢弃」。服务端执行类操作符（`$where` 等）在规划层
-/// 已被 [`crate::types::validate_condition`] 拒绝，此处为纵深防御兜底。
-pub fn build_filter(
-    filter: &Value,
-    backend: Backend,
-    alias: &str,
-    column: &dyn Fn(&str) -> Option<String>,
-    param_seq: &mut usize,
-    mut warnings: Warnings,
-) -> Result<WhereClause, String> {
-    match filter {
-        Value::Null => Ok(WhereClause::new(String::new(), Vec::new())),
-        Value::Object(map) => {
-            if map.is_empty() {
-                return Ok(WhereClause::new(String::new(), Vec::new()));
-            }
-            // 顶层逻辑操作符
-            if let Some(v) = map.get("$and") {
-                let arr = v.as_array().ok_or_else(|| "$and 需要数组".to_string())?;
-                return Ok(and_group(
-                    arr.iter()
-                        .map(|f| {
-                            build_filter(
-                                f,
-                                backend,
-                                alias,
-                                column,
-                                param_seq,
-                                warnings.as_deref_mut(),
-                            )
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                    "AND",
-                    backend,
-                    param_seq,
-                ));
-            }
-            if let Some(v) = map.get("$or") {
-                let arr = v.as_array().ok_or_else(|| "$or 需要数组".to_string())?;
-                return Ok(and_group(
-                    arr.iter()
-                        .map(|f| {
-                            build_filter(
-                                f,
-                                backend,
-                                alias,
-                                column,
-                                param_seq,
-                                warnings.as_deref_mut(),
-                            )
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                    "OR",
-                    backend,
-                    param_seq,
-                ));
-            }
-            if let Some(v) = map.get("$nor") {
-                // $nor = NOT(OR(...))；Mongo 语义要求数组（缺陷修复：数组形态此前
-                // 会被误译为恒假 "0"，静默返回空结果）
-                let arr = v.as_array().ok_or_else(|| "$nor 需要数组".to_string())?;
-                if arr.is_empty() {
-                    return Err("$nor 需要非空数组".to_string());
-                }
-                let inner = and_group(
-                    arr.iter()
-                        .map(|f| {
-                            build_filter(
-                                f,
-                                backend,
-                                alias,
-                                column,
-                                param_seq,
-                                warnings.as_deref_mut(),
-                            )
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                    "OR",
-                    backend,
-                    param_seq,
-                );
-                if inner.text.is_empty() {
-                    // 所有分支都无法生成条件（如空对象 {}）→ OR 匹配全部 → NOR 匹配无
-                    return Ok(WhereClause::new("0".to_string(), Vec::new()));
-                }
-                return Ok(WhereClause::new(
-                    format!("NOT {}", inner.text),
-                    inner.params,
-                ));
-            }
-
-            // 字段条件：至少有一条具体字段
-            let mut clauses: Vec<WhereClause> = Vec::new();
-            for (field, cond) in map {
-                if field.starts_with('$') {
-                    // 未识别的顶层操作符 → 显式报错（缺陷 D-02：绝不静默丢条件）
-                    return Err(format!(
-                        "不支持的过滤条件操作符: {field}（SQL 侧无法安全翻译，拒绝静默丢弃）"
-                    ));
-                }
-                let Some(col) = column(field) else { continue };
-                let qualified = format!("{}.{}", alias, backend.quote_ident(&col));
-                clauses.push(cond_clause(
-                    cond,
-                    &qualified,
-                    backend,
-                    param_seq,
-                    warnings.as_deref_mut(),
-                )?);
-            }
-            Ok(and_group(clauses, "AND", backend, param_seq))
-        }
-        _ => Ok(WhereClause::new(String::new(), Vec::new())),
-    }
-}
-
-fn and_group(
-    clauses: Vec<WhereClause>,
-    op: &str,
-    _backend: Backend,
-    _param_seq: &mut usize,
-) -> WhereClause {
-    let mut active: Vec<WhereClause> = clauses.into_iter().filter(|c| !c.text.is_empty()).collect();
-    if active.is_empty() {
-        return WhereClause::new(String::new(), Vec::new());
-    }
-    let mut it = active.drain(..);
-    let Some(mut acc) = it.next() else {
-        return WhereClause::new(String::new(), Vec::new());
-    };
-    for c in it {
-        let text = format!("({} {} {})", acc.text, op, c.text);
-        acc.params.extend(c.params);
-        acc.text = text;
-    }
-    acc
-}
+use super::{and_group, Warnings, WhereClause};
+use crate::dialect::Backend;
 
 /// 单个字段 = 条件的 WHERE 片段
 ///
-/// （`column` 映射在 `build_filter` 层已解析为限定列名 `col`，此处不再需要 ——
+/// （`column` 映射在 `filter` 层已解析为限定列名 `col`，此处不再需要 ——
 /// `$not` 递归仅传递已解析的 `col`。）
-fn cond_clause(
+pub(super) fn cond_clause(
     cond: &Value,
     col: &str,
+    field_token: &str,
+    alias: &str,
     backend: Backend,
     param_seq: &mut usize,
     mut warnings: Warnings,
@@ -193,17 +25,31 @@ fn cond_clause(
         let mut parts: Vec<WhereClause> = Vec::new();
         for (k, v) in op {
             let part = match k.as_str() {
-                "$eq" => binop(col, "=", v, backend, param_seq),
-                "$ne" => binop(col, "<>", v, backend, param_seq),
+                // F-07 三态契约：`$eq/$ne` 取值为 null 时，SQL 必须译为 `IS NULL` / `IS NOT NULL`。
+                // `col = NULL` / `col <> NULL` 在 SQL 三值逻辑下恒否 → 显式 null 的行读不到（回归）。
+                // 且 `$eq:null` 须仅命中「显式 null」而非「缺失」 → 追加 existence(alias.__present) 判定。
+                "$eq" => null_eq_ne(col, "=", v, field_token, alias, backend, param_seq),
+                "$ne" => null_eq_ne(col, "<>", v, field_token, alias, backend, param_seq),
                 "$gt" => binop(col, ">", v, backend, param_seq),
                 "$gte" => binop(col, ">=", v, backend, param_seq),
                 "$lt" => binop(col, "<", v, backend, param_seq),
                 "$lte" => binop(col, "<=", v, backend, param_seq),
                 "$in" => in_list(col, v, false, backend, param_seq)?,
                 "$nin" => in_list(col, v, true, backend, param_seq)?,
-                "$exists" => exists_expr(col, v, backend),
+                // `$exists`：语义为「字段显式存在（含显式 null）」⇔ 在 __present 集合中。
+                // 缺失行不在集合 → `$exists:false` 命中缺失。相较旧实现 `col IS [NOT] NULL`，
+                // 这能把「缺失」与「显式 null」区分开（F-07/A-19）。
+                "$exists" => exists_expr(field_token, alias, v, backend),
                 "$not" => {
-                    let inner = cond_clause(v, col, backend, param_seq, warnings.as_deref_mut())?;
+                    let inner = cond_clause(
+                        v,
+                        col,
+                        field_token,
+                        alias,
+                        backend,
+                        param_seq,
+                        warnings.as_deref_mut(),
+                    )?;
                     let text = if inner.text.is_empty() {
                         String::new()
                     } else {
@@ -254,11 +100,51 @@ fn cond_clause(
         if op.is_empty() {
             return Ok(WhereClause::new(String::new(), Vec::new()));
         }
-        return Ok(and_group(parts, "AND", backend, param_seq));
+        return Ok(and_group(parts, "AND"));
     }
 
     // 直接值 → $eq 简写
-    Ok(binop(col, "=", cond, backend, param_seq))
+    Ok(null_eq_ne(
+        col,
+        "=",
+        cond,
+        field_token,
+        alias,
+        backend,
+        param_seq,
+    ))
+}
+
+/// existence 判定片段：谓词「字段存在于 ``__present`` 集合」。
+/// `col IS NULL` / `$exists` 需要与它做 AND / NOT。
+fn present_pred(alias: &str, field_token: &str) -> String {
+    format!(
+        "COALESCE({}.__present, ',') LIKE '%,{},%'",
+        alias, field_token
+    )
+}
+
+/// `$eq/$ne` 翻译，取值 null 特判（F-07 三态）：
+/// - `$eq:null` → `col IS NULL AND 字段存在`（显式 null，不含缺失）
+/// - `$ne:null` → `col IS NOT NULL`（非空值；缺失/显式 null 都排外）
+fn null_eq_ne(
+    col: &str,
+    op: &str,
+    v: &Value,
+    field_token: &str,
+    alias: &str,
+    backend: Backend,
+    seq: &mut usize,
+) -> WhereClause {
+    if v.is_null() {
+        if op == "=" {
+            let is_null = format!("{} IS NULL", col);
+            let exist = present_pred(alias, field_token);
+            return WhereClause::new(format!("({} AND {})", is_null, exist), Vec::new());
+        }
+        return WhereClause::new(format!("{} IS NOT NULL", col), Vec::new());
+    }
+    binop(col, op, v, backend, seq)
 }
 
 fn binop(col: &str, op: &str, v: &Value, backend: Backend, seq: &mut usize) -> WhereClause {
@@ -305,9 +191,15 @@ fn in_list(
     Ok(WhereClause::new(text, arr.clone()))
 }
 
-fn exists_expr(col: &str, v: &Value, _backend: Backend) -> WhereClause {
+/// `$exists` → 字段是否在 `__present` 集合（存在含显式 null，区别于缺失）。
+fn exists_expr(field_token: &str, alias: &str, v: &Value, _backend: Backend) -> WhereClause {
     let exists = v.as_bool().unwrap_or(true);
-    let text = format!("{} {} NULL", col, if exists { "IS NOT" } else { "IS" });
+    let present = present_pred(alias, field_token);
+    let text = if exists {
+        present
+    } else {
+        format!("NOT ({})", present)
+    };
     WhereClause::new(text, Vec::new())
 }
 

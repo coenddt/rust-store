@@ -25,13 +25,19 @@ pub fn restore_rows(shape: &RowShape, rows: &[Value]) -> Value {
         .into_iter()
         .map(|(_, group)| {
             let mut obj = Map::new();
+            // 每行「显式存在字段集合」（`__present` 哨兵，缺失 vs null 三态）
+            let present = shape
+                .present_alias
+                .as_deref()
+                .and_then(|a| row_val(group[0], a).as_str())
+                .map(|s| s.to_owned());
             // 先写标量列（同根组内第一条）
             for col in &shape.columns {
                 if col.is_array {
                     continue;
                 }
-                let val = row_val(group[0], &col.alias);
-                merge_path(&mut obj, &col.json_path, val.clone());
+                let val = row_val(group[0], &col.alias).clone();
+                merge_path(&mut obj, &col.json_path, val, present.as_deref());
             }
             // 再按关系（rel_name = 数组列 json_path[0]）聚合子文档数组
             let rel_names = rel_names_of(shape);
@@ -105,10 +111,15 @@ fn root_key(shape: &RowShape, row: &Value) -> Value {
 }
 
 /// 把 value 写到 obj 的嵌套路径（创建中间 object）
-fn merge_path(obj: &mut Map<String, Value>, path: &[String], val: Value) {
+///
+/// 缺失 vs null 三态（F-07/H-01）：标量值为 null 时，仅当字段在该行「显式存在集合」
+/// （`present`）中才写入 `key: null`，否则（字段缺失）不产出该键 —— 对齐 Mongo
+/// 「显式 null 有键、缺失无键」。`present == None` 表示本语句未查哨兵列（count/关系聚合），
+/// 退化为旧语义：null 一律不产出键。
+fn merge_path(obj: &mut Map<String, Value>, path: &[String], val: Value, present: Option<&str>) {
     if path.len() <= 1 {
         if let Some(k) = path.first() {
-            if !val.is_null() {
+            if !val.is_null() || present_contains(present, k) {
                 obj.insert(k.clone(), val);
             }
         }
@@ -119,7 +130,15 @@ fn merge_path(obj: &mut Map<String, Value>, path: &[String], val: Value) {
         .entry(head.clone())
         .or_insert_with(|| Value::Object(Map::new()));
     if let Value::Object(m) = entry {
-        merge_path(m, &path[1..], val);
+        merge_path(m, &path[1..], val, present);
+    }
+}
+
+/// `present` 集合形如 `,field1,field2,`，判定 `key` 是否显式存在（用 `,key,` 匹配）
+fn present_contains(present: Option<&str>, key: &str) -> bool {
+    match present {
+        Some(s) => s.contains(&format!(",{},", key)),
+        None => false,
     }
 }
 
@@ -174,6 +193,14 @@ impl RowShape {
                 sub_shape,
             });
         }
-        Ok(RowShape { columns })
+        let present_alias = v
+            .get("present")
+            .and_then(|p| p.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        Ok(RowShape {
+            columns,
+            present_alias,
+        })
     }
 }

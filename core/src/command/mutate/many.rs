@@ -10,7 +10,7 @@ use crate::permission::{can_write_schema, Context};
 use crate::schema::Registry;
 use crate::types::validate_condition;
 
-use super::{build_raw_update, build_set_data, has_raw_operators, needs_new_id, IdCursor};
+use super::{build_raw_update, build_set_data, has_raw_operators, is_blank_condition, needs_new_id, IdCursor};
 
 /// 批量插入（对应 JS `insertMany`）。
 ///
@@ -70,6 +70,10 @@ pub fn plan_update_many(
     let schema = registry.get(schema_name)?;
     // 条件拒绝名单（缺陷 D-02）：updateMany 条件命中拒绝名单即显式报错
     validate_condition(condition)?;
+    // R4：无条件批量写一票否决（不落全表）
+    if is_blank_condition(condition) {
+        return Err(ERR_NO_BATCH_WRITE.to_string());
+    }
     if let Some(c) = ctx {
         let guest = c
             .roles

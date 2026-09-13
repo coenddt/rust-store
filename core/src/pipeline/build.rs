@@ -1,5 +1,7 @@
 //! 整条 pipeline 的编排（含 object 字段展平、自定义 pipeline 分支）
 
+use std::collections::HashSet;
+
 use serde_json::{json, Map, Value};
 
 use crate::permission::Context;
@@ -90,6 +92,7 @@ fn root_lookup_stages(
     params: &Map<String, Value>,
     stages: &mut Vec<Value>,
     registry: &Registry,
+    ctx: Option<&Context>,
 ) -> Result<(), String> {
     for (rel_name, rel_ast) in &ast.relations {
         let rel_def = schema.relations.get(rel_name).ok_or_else(|| {
@@ -100,7 +103,7 @@ fn root_lookup_stages(
         })?;
         let rel_schema = registry.get(&rel_def.model)?;
         stages.push(build_lookup(
-            rel_name, rel_ast, params, rel_def, rel_schema, schema, 0, 0, registry,
+            rel_name, rel_ast, params, rel_def, rel_schema, schema, 0, 0, registry, ctx,
         )?);
         if rel_def.rel_type == "one" {
             stages.push(json!({
@@ -149,7 +152,7 @@ pub fn build_pipeline(
     }
 
     // $lookup: 逐层展开 relations
-    root_lookup_stages(ast, schema, params, &mut stages, registry)?;
+    root_lookup_stages(ast, schema, params, &mut stages, registry, ctx)?;
 
     // sort / skip / limit（根级别）
     append_order(
@@ -159,11 +162,18 @@ pub fn build_pipeline(
         root_limit.as_ref(),
     );
 
-    // $lookup: compute 独立的 $lookup 阶段（在 $addFields 之前）
-    stages.extend(build_compute_lookup_stages(schema));
+    // $lookup: compute 独立的 $lookup 阶段（在 $addFields 之前）。
+    // 仅在字段被请求时发射 lookup 计算列，避免无谓 join 与 SQL 不可翻译的 $addFields。
+    let requested_computes: HashSet<String> = schema
+        .computes
+        .iter()
+        .map(|(k, _)| k.clone())
+        .filter(|k| ast.fields.iter().any(|f| f == k || f.starts_with(&format!("{}.", k))))
+        .collect();
+    stages.extend(build_compute_lookup_stages(schema, &requested_computes));
 
     // $addFields: lookup 计算列（放在最后，确保所有 $lookup 字段已就绪）
-    if let Some(add_fields) = build_add_fields(schema, ctx) {
+    if let Some(add_fields) = build_add_fields(schema, ctx, &requested_computes) {
         stages.push(add_fields);
     }
 

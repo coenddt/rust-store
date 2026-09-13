@@ -204,6 +204,14 @@ pub fn can_write_schema(schema: &Schema, ctx: Option<&Context>) -> bool {
         if has_role(c, "guest") {
             return false;
         }
+        // R2：write 显式配置为空白名单（`[]`）= 未声明任何可写角色 → 拒绝一切写，
+        // 但 super_admin/admin 仍保留编辑权；internal 一律放行。
+        if !c.internal && matches!(schema.write, Some(ref w) if w.is_empty()) {
+            let roles = c.roles.clone().unwrap_or_default();
+            if !roles.iter().any(|r| r == "super_admin" || r == "admin") {
+                return false;
+            }
+        }
     }
     evaluate(ctx, schema.write.as_deref(), Doc::Missing)
 }
