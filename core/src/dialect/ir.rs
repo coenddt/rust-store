@@ -68,6 +68,8 @@ pub struct RowCol {
     pub json_path: Vec<String>,
     /// 是否为关系聚合数组字段（`many` 关系的子文档）
     pub is_array: bool,
+    /// 是否为 `one` 关系（LEFT JOIN 后还原为对象或 `null`，而非数组）
+    pub one: bool,
     /// 若为空：标量直接取该列；若非空：构造子文档
     pub sub_shape: Option<RowShape>,
 }
@@ -89,6 +91,7 @@ impl RowShape {
                     "alias": c.alias,
                     "path": c.json_path,
                     "isArray": c.is_array,
+                    "one": c.one,
                     "subShape": c.sub_shape.as_ref().map(|s| s.to_value()).unwrap_or(Value::Null),
                 })
             })
@@ -106,6 +109,7 @@ impl RowCol {
             alias: alias.to_string(),
             json_path: path.iter().map(|s| s.to_string()).collect(),
             is_array: false,
+            one: false,
             sub_shape: None,
         }
     }
@@ -115,6 +119,7 @@ impl RowCol {
             alias: alias.to_string(),
             json_path: vec![alias.to_string()],
             is_array: true,
+            one: false,
             sub_shape: Some(sub_shape),
         }
     }
