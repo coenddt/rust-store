@@ -16,6 +16,18 @@ mod op;
 /// 宁可失败也绝不静默生成语义失真的 SQL（对齐 `write`「需告警的翻译直接报错」策略）。
 pub type Warnings<'a> = Option<&'a mut Vec<String>>;
 
+/// 关系聚合谓词（§9.6）解析器：给字段名与条件值，返回 `Some(WhereClause)` 表示该键
+/// 是关系谓词代理（翻译为 `EXISTS` / `NOT EXISTS`），`None` = 普通字段条件。
+pub trait RelPredResolver {
+    fn resolve(
+        &self,
+        field: &str,
+        cond: &Value,
+        param_seq: &mut usize,
+        warnings: Warnings<'_>,
+    ) -> Result<Option<WhereClause>, String>;
+}
+
 /// 单条 WHERE 片段（文本 + 已生成的参数、排序号）
 #[derive(Debug, Clone)]
 pub struct WhereClause {
@@ -56,23 +68,62 @@ pub fn build_filter(
     param_seq: &mut usize,
     warnings: Warnings,
 ) -> Result<WhereClause, String> {
+    build_filter_with_relations(filter, backend, alias, column, None, param_seq, warnings)
+}
+
+/// [`build_filter`] 的关系谓词版：额外接受 [`RelPredResolver`]，把 §9.6 关系聚合谓词的
+/// 代理键（`__rp…​.0`）翻译为 `EXISTS` / `NOT EXISTS` 子查询；`rel_pred = None` 时与
+/// [`build_filter`] 完全一致。
+pub fn build_filter_with_relations(
+    filter: &Value,
+    backend: Backend,
+    alias: &str,
+    column: &dyn Fn(&str) -> Option<String>,
+    rel_pred: Option<&dyn RelPredResolver>,
+    param_seq: &mut usize,
+    warnings: Warnings,
+) -> Result<WhereClause, String> {
     let mut ctx = Ctx {
         backend,
         alias,
         column,
+        rel_pred,
         param_seq,
         warnings,
     };
     ctx.root(filter)
 }
 
-/// 过滤翻译上下文：打包 `backend` / `alias` / `column` / `param_seq` / `warnings`，
+/// 把条件翻译为**表达式过滤**（`GROUP BY` 之后的 `HAVING`）：`expr_of(name)` 返回
+/// **完整 SQL 表达式**（如分组列 `t."status"` 或聚合表达式 `COUNT(*)`），本函数
+/// **不做表别名限定**；分组结果无 `__present` 哨兵列，故 `$exists` / `$eq:null`
+/// 退化为 `IS [NOT] NULL`（`present_pred` 恒真）。
+pub fn build_filter_raw(
+    filter: &Value,
+    backend: Backend,
+    expr_of: &dyn Fn(&str) -> Option<String>,
+    param_seq: &mut usize,
+    warnings: Warnings,
+) -> Result<WhereClause, String> {
+    let mut ctx = Ctx {
+        backend,
+        alias: "",
+        column: expr_of,
+        rel_pred: None,
+        param_seq,
+        warnings,
+    };
+    ctx.root(filter)
+}
+
+/// 过滤翻译上下文：打包 `backend` / `alias` / `column` / `rel_pred` / `param_seq` / `warnings`，
 /// 便于按职责拆分逻辑（`build_filter` 主体已收窄到分发），
 /// 并让各辅助函数的参数个数保持在 4 以内。
 struct Ctx<'a> {
     backend: Backend,
     alias: &'a str,
     column: &'a dyn Fn(&str) -> Option<String>,
+    rel_pred: Option<&'a dyn RelPredResolver>,
     param_seq: &'a mut usize,
     warnings: Warnings<'a>,
 }
@@ -84,6 +135,7 @@ impl Ctx<'_> {
             backend: self.backend,
             alias: self.alias,
             column: self.column,
+            rel_pred: self.rel_pred,
             param_seq: &mut *self.param_seq,
             warnings: self.warnings.as_deref_mut(),
         }
@@ -160,6 +212,15 @@ impl Ctx<'_> {
                     "不支持的过滤条件操作符: {field}（SQL 侧无法安全翻译，拒绝静默丢弃）"
                 ));
             }
+            // §9.6 关系聚合谓词代理键（`__rp….0`）→ EXISTS / NOT EXISTS
+            if let Some(rp) = self.rel_pred {
+                if let Some(clause) =
+                    rp.resolve(field, cond, self.param_seq, self.warnings.as_deref_mut())?
+                {
+                    out.push(clause);
+                    continue;
+                }
+            }
             let Some(col) = (self.column)(field) else {
                 // S1 / 缺陷 D-02：object/array 复杂 JSON 字段或未声明字段的条件，SQL 无法
                 // 语义等价翻译（如 `tags="python"`、`coupon:{...}`、`meta.seo.title`）。
@@ -169,7 +230,12 @@ impl Ctx<'_> {
                     "SQL 后端无法翻译字段 \"{field}\" 的过滤条件（复杂 JSON 或未声明字段）：拒绝静默丢弃后返回全表"
                 ));
             };
-            let qualified = format!("{}.{}", self.alias, self.backend.quote_ident(&col));
+            let qualified = if self.alias.is_empty() {
+                // 表达式模式（HAVING）：`col` 已是完整 SQL 表达式，不再限定/加引号
+                col
+            } else {
+                format!("{}.{}", self.alias, self.backend.quote_ident(&col))
+            };
             let clause = self.cond(cond, &qualified, field, self.alias)?;
             out.push(clause);
         }

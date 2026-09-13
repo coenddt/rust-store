@@ -4,8 +4,7 @@
 与其黄金基准，逐条深比较 PyO3 绑定层的输出——语义与 `core-node/test/parity.test.js` 完全一致：
   - pipeline   : `build_pipeline` 的 tokens / ast / pipeline / projection
   - commands   : `plan_query` / `plan_query_with_count` / `resolve_page` /
-                 `restore_sort_order` / `plan_insert` / `plan_exists` / `plan_count` /
-                 `plan_aggregate`
+                 `restore_sort_order` / `plan_insert` / `plan_exists` / `plan_count`
   - computes   : `process_node` / `inject_depends` + `strip_dep_injected` / `permission.*`
   - fnfns      : 同步 fn 走 `set_fn` 回调桥；asyncFn 由 Host 执行
                  （`async_fn_refs` 取标识，`prepare_query` + `strip_query` 两段式）
@@ -336,11 +335,6 @@ def run_command_case(reg, fx):
 
     if kind == "count":
         return {"command": reg.plan_count(fx.get("model") or "", fx.get("filter"))}
-
-    if kind == "aggregate":
-        return {
-            "command": reg.plan_aggregate(fx.get("model") or "", fx.get("pipeline") or [])
-        }
 
     # 写路径用例走 replay_write_case（对齐 parity_write.rs 的 Host 模拟执行）
     return replay_write_case(reg, fx)

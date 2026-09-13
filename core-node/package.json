@@ -1,6 +1,6 @@
 {
   "name": "rust-store-node",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "rust-store 的 Node 绑定（napi-rs）：把 core 的 Command 契约暴露给 JS Host",
   "main": "index.js",
   "types": "index.d.ts",
@@ -56,10 +56,10 @@
     "sql.js": "^1.8.0"
   },
   "optionalDependencies": {
-    "rust-store-node-win32-x64-msvc": "1.0.0",
-    "rust-store-node-linux-x64-gnu": "1.0.0",
-    "rust-store-node-linux-arm64-gnu": "1.0.0",
-    "rust-store-node-darwin-x64": "1.0.0",
-    "rust-store-node-darwin-arm64": "1.0.0"
+    "rust-store-node-win32-x64-msvc": "2.0.0",
+    "rust-store-node-linux-x64-gnu": "2.0.0",
+    "rust-store-node-linux-arm64-gnu": "2.0.0",
+    "rust-store-node-darwin-x64": "2.0.0",
+    "rust-store-node-darwin-arm64": "2.0.0"
   }
 }

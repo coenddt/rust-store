@@ -6,7 +6,7 @@ use crate::schema::Schema;
 
 use crate::dialect::filter::build_filter;
 use crate::dialect::ir::{RowCol, RowShape, SqlStmt};
-use crate::dialect::Backend;
+use crate::dialect::{field_is_bool, Backend};
 
 use super::{col_fn, projection_fields, q, tname};
 
@@ -20,6 +20,8 @@ pub(super) fn translate_find(
 ) -> Result<Vec<SqlStmt>, String> {
     let mut seq = 0usize;
     let wh = build_filter(filter, backend, "t", &col_fn(schema), &mut seq, warnings)?;
+    // D2：显式投影 object/array 字段在 SQL 侧无列 → 显式 Err，绝不静默丢弃该列
+    super::check_projection_supported(schema, projection)?;
     let mut selected = projection_fields(schema, projection);
     // Mongo find 默认返回 `_id`（仅当显式 `_id: 0` 时排除）
     let id_excluded = projection
@@ -33,16 +35,24 @@ pub(super) fn translate_find(
     let mut cols_sql = Vec::new();
     let mut columns = Vec::new();
     for f in &selected {
+        // 计算列不是真实列（fn/asyncFn 在 Host 尾部求值、agg 由派生表物化），跳过不下推
+        if schema.compute(f).is_some() {
+            continue;
+        }
         if let Some(c) = col_fn(schema)(f) {
             cols_sql.push(format!("t.{}", q(backend, &c)));
-            columns.push(RowCol::scalar(&c, &[f.as_str()]));
+            // §9.7 布尔归一：schema `boolean` 字段的列值 0/1 → JSON bool
+            columns.push(RowCol::scalar_bool(&c, &[f.as_str()], field_is_bool(schema, f)));
         }
     }
     // 缺失 vs null 三态（F-07/H-01）：额外查出 `__present` 哨兵列，供行还原时区分
     // 「显式 null（有键）」与「缺失（无键）」。`__present` 不是 schema 字段，不入用户投影，
     // 只经 present_alias 交给 restore_rows 消费。
     cols_sql.push("t.__present AS __present".to_string());
-    let shape = RowShape { columns, present_alias: Some("__present".to_string()) };
+    let shape = RowShape {
+        columns,
+        present_alias: Some("__present".to_string()),
+    };
     let select_list = if cols_sql.is_empty() {
         q(backend, "_id")
     } else {

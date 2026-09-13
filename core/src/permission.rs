@@ -192,6 +192,30 @@ pub fn get_readable_relations(schema: &Schema, ctx: Option<&Context>) -> Option<
     Some(allowed)
 }
 
+/// 单个字段读权限判定（点号路径按 root 字段判定）。
+///
+/// - `ctx = None` → 放行（fail-open，与默认姿态一致）；
+/// - 字段未在 schema `fields` 中声明 → 放行（无 `field.read` 配置可依）；
+/// - 字段在 schema 中且配了 `read` 白名单 → 按 [`get_readable_fields`] 判定。
+pub fn is_field_readable(schema: &Schema, ctx: Option<&Context>, field: &str) -> bool {
+    let root = field.split('.').next().unwrap_or(field);
+    if !schema.fields.contains_key(root) {
+        return true;
+    }
+    match get_readable_fields(schema, ctx) {
+        None => true,
+        Some(allowed) => allowed.contains(root),
+    }
+}
+
+/// 单个关系读权限判定（R6/L1）。`ctx = None` → 放行（fail-open）。
+pub fn is_relation_readable(schema: &Schema, ctx: Option<&Context>, rel: &str) -> bool {
+    match get_readable_relations(schema, ctx) {
+        None => true,
+        Some(allowed) => allowed.contains(rel),
+    }
+}
+
 // ─── Schema 级检查 ────────────────────────────────────────────
 
 pub fn can_read_schema(schema: &Schema, ctx: Option<&Context>) -> bool {

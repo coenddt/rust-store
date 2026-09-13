@@ -96,12 +96,6 @@ impl Registry {
         self.sync_fns.clear();
     }
 
-    /// 开关用户 $pipeline 直通（默认允许；AI 查询宿主建议关闭作纵深防御）
-    #[napi]
-    pub fn set_allow_user_pipeline(&mut self, allow: bool) {
-        self.core.set_allow_user_pipeline(allow);
-    }
-
     /// 开关「上下文强制」（默认关闭 = fail-open，保持 JS parity）。
     /// 开启后：plan 入口遇 `ctx` 缺失抛 `ERR_NO_CONTEXT`（fail-secure），
     /// 内部调用须显式传系统上下文 `systemContext()`。

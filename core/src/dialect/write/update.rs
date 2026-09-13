@@ -19,6 +19,7 @@ pub(super) fn build_assignments(
     binder: &mut Binder,
     schema: &Schema,
     update: &Value,
+    present_qualifier: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let Some(obj) = update.as_object() else {
         return Err("update 必须是对象".to_string());
@@ -40,7 +41,7 @@ pub(super) fn build_assignments(
                     &mut assigns,
                     &mut set_fields,
                     &mut unset_fields,
-                );
+                )?;
             }
             // upsert 专用，非 upsert 路径忽略
             "$setOnInsert" => continue,
@@ -54,7 +55,12 @@ pub(super) fn build_assignments(
     }
     // 缺失 vs null 三态（F-07）：$set/$inc 置字段「显式存在」、$unset 置「缺失」，
     // 一并维护 `__present` 哨兵，保证后续 `$eq:null`/`$exists` 过滤仍正确。
-    if let Some(present) = present_expr(binder.backend, &set_fields, &unset_fields) {
+    if let Some(present) = present_expr(
+        binder.backend,
+        &set_fields,
+        &unset_fields,
+        present_qualifier,
+    ) {
         assigns.push(present);
     }
     Ok(assigns)
@@ -64,13 +70,24 @@ pub(super) fn build_assignments(
 /// 再用后端各自拼接追加（$set/$inc）显式存在的字段。无任何标量增删 → None（不生成）。
 ///
 /// 注意：UPDATE 的 SET 目标**不可以**带表别名限定（SQLite 直接 `near "."` 语法错，
-/// MySQL/PG 亦不通用）——此处 `__present` 一律用裸列名（UPDATE 目标行即当前行）。
-fn present_expr(backend: Backend, set_fields: &[String], unset_fields: &[String]) -> Option<String> {
+/// MySQL/PG 亦不通用）——LHS 一律裸列名。`present_qualifier` 仅用于限定 RHS 的
+/// 现值引用：PG 的 `ON CONFLICT … DO UPDATE` 中裸 `__present` 会与 `EXCLUDED` 歧义，
+/// 须限定为目标表（其余场景为 None）。
+fn present_expr(
+    backend: Backend,
+    set_fields: &[String],
+    unset_fields: &[String],
+    qualifier: Option<&str>,
+) -> Option<String> {
     if set_fields.is_empty() && unset_fields.is_empty() {
         return None;
     }
     let col = q(backend, "__present");
-    let mut expr = format!("COALESCE({}, ',')", col);
+    let col_ref = match qualifier {
+        Some(tbl) => format!("{}.{}", tbl, col),
+        None => col.clone(),
+    };
+    let mut expr = format!("COALESCE({}, ',')", col_ref);
     for k in unset_fields {
         expr = format!("REPLACE({}, ',{},,', ',')", expr, k);
     }
@@ -86,6 +103,9 @@ fn present_expr(backend: Backend, set_fields: &[String], unset_fields: &[String]
 
 /// 单个更新操作符 → 赋值片段（`$set` 跳过 null；`$inc`/`$unset` 不跳过）。
 /// 另把涉及标量字段的增删收集进 `set_fields`/`unset_fields`，供 `__present` 维护。
+///
+/// C-11-1：`$set`/`$inc` 目标为 schema 声明的 object/array 字段（SQL 侧无列）时
+/// → **显式 `Err`**，绝不让写入静默丢失。
 fn op_assignments(
     binder: &mut Binder,
     schema: &Schema,
@@ -94,12 +114,17 @@ fn op_assignments(
     assigns: &mut Vec<String>,
     set_fields: &mut Vec<String>,
     unset_fields: &mut Vec<String>,
-) {
+) -> Result<(), String> {
     let Some(fields) = val.as_object() else {
-        return;
+        return Ok(());
     };
     for (k, v) in fields {
         let Some(col) = super::scalar_col(schema, k) else {
+            if matches!(op, "$set" | "$inc") {
+                return Err(format!(
+                    "SQL 后端不支持对 object/array 字段 \"{k}\" 执行 {op}（无对应列；C-11-1：绝不静默丢失写入）"
+                ));
+            }
             continue;
         };
         let qc = binder.backend.quote_ident(&col);
@@ -130,6 +155,7 @@ fn op_assignments(
             _ => {}
         }
     }
+    Ok(())
 }
 
 /// `WHERE` 片段（沿用统一 filter 翻译；占位序号接续 SET 参数）
@@ -164,7 +190,7 @@ pub(super) fn translate_update_many(
     update: &Value,
 ) -> Result<Vec<SqlStmt>, String> {
     let mut binder = Binder::new(backend);
-    let assigns = build_assignments(&mut binder, schema, update)?;
+    let assigns = build_assignments(&mut binder, schema, update, None)?;
     if assigns.is_empty() {
         return Err("没有提供要更新的字段".to_string());
     }
@@ -194,7 +220,7 @@ pub(super) fn translate_find_one_and_update(
     }
 
     let mut binder = Binder::new(backend);
-    let assigns = build_assignments(&mut binder, schema, update)?;
+    let assigns = build_assignments(&mut binder, schema, update, None)?;
     if assigns.is_empty() {
         return Err("没有提供要更新的字段".to_string());
     }
@@ -209,6 +235,7 @@ pub(super) fn translate_find_one_and_update(
     Ok(if backend.supports_returning() {
         vec![write_with_returning(
             backend,
+            schema,
             update_text,
             &cols,
             binder.params,
@@ -225,6 +252,7 @@ pub(super) fn translate_find_one_and_update(
 /// 单条「写 + `RETURNING` 回读」语句（支持 RETURNING 的后端）
 pub(super) fn write_with_returning(
     backend: Backend,
+    schema: &Schema,
     write_text: String,
     cols: &[String],
     params: Vec<Value>,
@@ -236,7 +264,7 @@ pub(super) fn write_with_returning(
         .join(", ");
     let mut stmt = SqlStmt::write(format!("{} RETURNING {}", write_text, ret), params);
     stmt.is_write = true;
-    stmt.row_shape = Some(returning_shape(cols));
+    stmt.row_shape = Some(returning_shape(schema, cols));
     stmt.returning = cols.to_vec();
     stmt
 }
@@ -263,6 +291,6 @@ pub(super) fn read_back(
     );
     let mut stmt = SqlStmt::write(text, read_binder.params);
     stmt.is_write = false;
-    stmt.row_shape = Some(returning_shape(cols));
+    stmt.row_shape = Some(returning_shape(schema, cols));
     Ok(stmt)
 }

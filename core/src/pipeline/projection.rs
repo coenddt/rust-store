@@ -121,28 +121,6 @@ fn collect_real_fields(
     (proj, dot_parent_fields, has_real_field)
 }
 
-/// R9：`$pipeline` 模式的顶层投影 —— 只按请求保留 `_id` + 真实 schema 字段，
-/// 不追加 compute 层/依赖/关系（`$pipeline` 语义：按用户 pipeline 输出，仅做字段选择）。
-/// 无有效真实字段（全为计算列/空）时返回 None（不施加投影，原样输出）。
-pub fn build_pipeline_projection(ast: &Ast, schema: &Schema) -> Option<Value> {
-    let mut proj: Map<String, Value> = Map::new();
-    proj.insert("_id".to_string(), json!(1));
-    let mut any = false;
-    for f in &ast.fields {
-        if f == "_id" {
-            continue;
-        }
-        if schema.fields.contains_key(f) {
-            proj.insert(f.clone(), json!(1));
-            any = true;
-        }
-    }
-    if !any {
-        return None;
-    }
-    Some(Value::Object(proj))
-}
-
 /// 从 GQL 根字段列表 + schema computes 计算投影；无有效字段时返回 None
 pub fn build_projection(ast: &Ast, schema: &Schema, ctx: Option<&Context>) -> Option<Value> {
     if ast.fields.is_empty() {
@@ -166,17 +144,17 @@ pub fn build_projection(ast: &Ast, schema: &Schema, ctx: Option<&Context>) -> Op
     // 收集需要在应用层执行的计算列（fn + asyncFn），其依赖字段不能被投影排除
     append_compute_deps(&mut proj, schema, &dot_parent_fields);
 
-    // R8：数据库阶段已物化的 lookup 计算列（如 lessonCount=$size）必须保留在
+    // 归一聚合计算列（§9.2(2)，数据库阶段已物化，如 lessonCount）必须保留在
     // 顶层 $project 输出，否则会被 $project 丢弃。fn/asyncFn 计算列在应用层求值，
     // 只需保依赖（见上），不在这里投影其字段本身。
-    let lookup_compute_keys: HashSet<&str> = schema
+    let agg_compute_keys: HashSet<&str> = schema
         .computes
         .iter()
-        .filter(|(_, c)| !c.has_fn && !c.has_async_fn && c.lookup.is_some())
+        .filter(|(_, c)| !c.has_fn && !c.has_async_fn && c.agg.is_some())
         .map(|(k, _)| k.as_str())
         .collect();
     for f in &ast.fields {
-        if lookup_compute_keys.contains(f.as_str()) {
+        if agg_compute_keys.contains(f.as_str()) {
             proj.insert(f.clone(), json!(1));
         }
     }

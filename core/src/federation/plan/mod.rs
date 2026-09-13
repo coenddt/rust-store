@@ -18,11 +18,13 @@ use std::collections::HashMap;
 
 use serde_json::{json, Map, Value};
 
-use crate::command::{build_plan, ensure_context, plan_query_ast_mut, ERR_PERMISSION};
-use crate::computes::{merge_depends_into_ast, InjectInfo};
+use crate::command::{
+    build_plan, check_readable_relations, ensure_context, plan_query_ast_mut, ERR_PERMISSION,
+};
+use crate::computes::merge_depends_into_ast;
 use crate::datasource::DataSourceConfig;
 use crate::permission::{can_read_schema, merge_owner_condition, Context};
-use crate::pipeline::{flatten_object_fields, is_nullish, param, parse_gql, Ast};
+use crate::pipeline::{flatten_object_fields, parse_gql, Ast};
 use crate::schema::{Registry, Schema};
 
 use route::{detect_cross_source_sort, walk};
@@ -112,29 +114,17 @@ pub fn plan_federated(
         }
     }
 
-    let has_pipeline = ast
-        .params
-        .get("pipeline")
-        .map(|r| !is_nullish(param(&params, Some(r))))
-        .unwrap_or(false);
-
-    // Registry 级守卫：与单库 plan_query_ast_mut 同款（联邦含单源场景）
-    if has_pipeline && !registry.allow_user_pipeline {
-        return Err("用户 $pipeline 已被禁用（allow_user_pipeline = false）".to_string());
-    }
-
     // asyncFn 依赖注入在**完整 AST** 上做：postprocess 才能带全注入信息
-    let inject = if has_pipeline {
-        InjectInfo::default()
-    } else {
-        merge_depends_into_ast(&mut ast.relations, &root_schema)?
-    };
+    let inject = merge_depends_into_ast(&mut ast.relations, &root_schema)?;
+
+    // L1 / L2 / L5 / L6：完整 AST（含跨源关系与 depends 注入关系）的关系可读性 ——
+    // 关系不可读 → Err，绝不静默省略。跨源关系会被 `walk` 剥离出根取数 AST，
+    // 故必须在剥离前的完整 AST 上判定。
+    check_readable_relations(&ast.relations, &root_schema, registry, ctx)?;
 
     // 后处理 AST 快照：展平后、含全部关系（与单库同形状）
     let mut post_ast = ast.clone();
-    if !has_pipeline {
-        flatten_object_fields(&mut post_ast, &root_schema);
-    }
+    flatten_object_fields(&mut post_ast, &root_schema);
 
     let root_loc = loc_of(&root_schema);
     let mut units: Vec<UnitSpec> = Vec::new();
@@ -154,10 +144,6 @@ pub fn plan_federated(
         &mut edges,
         &mut degraded,
     )?;
-
-    if has_pipeline && !edges.is_empty() {
-        return Err("联邦查询不支持用户 $pipeline（无法跨源下推）".to_string());
-    }
 
     detect_cross_source_sort(&fetch_ast, &params, &edges, &mut degraded);
 

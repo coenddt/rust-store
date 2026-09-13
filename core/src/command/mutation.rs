@@ -37,10 +37,17 @@ pub fn plan_mutation(
     new_ids: &[String],
 ) -> Result<Value, String> {
     ensure_context(registry, ctx)?;
-    let mut steps: Vec<Value> = Vec::new();
+    let mut out = PlanOut::default();
     let mut ids = IdCursor::new(new_ids);
-    plan_mutation_node(schema_name, registry, ctx, data, now, &mut ids, &mut steps)?;
-    Ok(json!({ "steps": steps }))
+    plan_mutation_node(schema_name, registry, ctx, data, now, &mut ids, &mut out)?;
+    Ok(json!({ "steps": out.steps, "degraded": out.degraded }))
+}
+
+/// 规划期的可变累积器：有序步骤序列 + 降级声明（§11.4 静默点收口）。
+#[derive(Default)]
+struct PlanOut {
+    steps: Vec<Value>,
+    degraded: Vec<Value>,
 }
 
 /// 展开一个 mutation 节点：根写入步骤 + 各 relation 子步骤（`many` 递归）
@@ -51,7 +58,7 @@ fn plan_mutation_node(
     data: &Value,
     now: i64,
     ids: &mut IdCursor,
-    steps: &mut Vec<Value>,
+    out: &mut PlanOut,
 ) -> Result<(), String> {
     let schema = registry.get(schema_name)?;
     if !can_write_schema(schema, ctx) {
@@ -76,6 +83,17 @@ fn plan_mutation_node(
             };
             if allowed {
                 relation_data.push((key, val));
+            } else {
+                // §11.4 静默点收口（D2：绝不静默）：关系 read 不通过时写入数据被跳过，
+                // 但必须显式声明 —— 记入 `degraded:relationSkipped`，Host 经反馈通道告警。
+                out.degraded.push(json!({
+                    "code": "relationSkipped",
+                    "layer": "mutation",
+                    "message": format!(
+                        "模型 {schema_name} 的关系 \"{key}\" 不可读（read 权限不通过），其写入数据已跳过"
+                    ),
+                    "hint": "授予该关系 read 权限；如需该情形显式报错，请在应用层先校验权限",
+                }));
             }
         } else {
             field_data.insert(key.clone(), val.clone());
@@ -88,7 +106,7 @@ fn plan_mutation_node(
     };
 
     // ── 2/3. 写入 parent（upsert 或 insert 路径在规划期即可确定） ──
-    let step_idx = steps.len();
+    let step_idx = out.steps.len();
     let parent_ph = step_id_placeholder(step_idx);
     let or_conditions = build_upsert_conditions(schema, &filtered_field);
     let command = if or_conditions.is_empty() {
@@ -116,7 +134,8 @@ fn plan_mutation_node(
             &fu_options,
         )
     };
-    steps.push(json!({ "model": schema_name, "command": command }));
+    out.steps
+        .push(json!({ "model": schema_name, "command": command }));
 
     // ── 4. 处理 relation 子文档 ──
     for (rel_name, rel_val) in relation_data {
@@ -154,7 +173,8 @@ fn plan_mutation_node(
             let filter = json!({ rel_def.foreign_field.clone(): parent_ph });
             let fu_options = json!({ "upsert": true, "returnDocument": "after" });
             let cmd = cmd_find_one_and_update(rel_schema, &filter, &update_doc, &fu_options);
-            steps.push(json!({ "model": rel_def.model, "command": cmd }));
+            out.steps
+                .push(json!({ "model": rel_def.model, "command": cmd }));
         } else if rel_def.rel_type == "many" {
             let arr: Vec<Value> = match rel_val {
                 Value::Array(a) => a.clone(),
@@ -173,11 +193,17 @@ fn plan_mutation_node(
                     &Value::Object(c),
                     now,
                     ids,
-                    steps,
+                    out,
                 )?;
             }
+        } else {
+            // §11.4 静默点收口（D2：绝不静默）：未知 rel_type 无法规划写入步骤，
+            // 显式报错（原行为为静默跳过该关系）。
+            return Err(format!(
+                "关系 \"{rel_name}\" 的 rel_type \"{}\" 不被支持（仅支持 one / many；D2：绝不静默跳过）",
+                rel_def.rel_type
+            ));
         }
-        // 其他 type：JS 无分支，静默跳过
     }
 
     Ok(())

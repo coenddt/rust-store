@@ -3,27 +3,20 @@
     "name": "pn-defaults-basic",
     "kind": "process_node",
     "_id": "1",
-    "title": "a",
-    "views": 0,
     "status": "draft",
-    "active": false,
-    "tags": []
+    "title": "a"
   },
   {
     "name": "pn-null-filled",
     "kind": "process_node",
     "_id": "1",
-    "title": "",
+    "title": null,
     "views": 5
   },
   {
     "name": "pn-nested-object-defaults",
     "kind": "process_node",
-    "_id": "1",
-    "profile": {
-      "nick": "",
-      "zip": "000000"
-    }
+    "_id": "1"
   },
   {
     "name": "pn-dot-prune",
@@ -40,12 +33,10 @@
     "title": "t",
     "comments": [
       {
-        "_id": "c1",
         "text": "a"
       },
       {
-        "_id": "c2",
-        "text": ""
+        "text": null
       }
     ]
   },
@@ -55,7 +46,6 @@
     "_id": "p1",
     "title": "t",
     "author": {
-      "_id": "u1",
       "name": "n"
     }
   },
@@ -85,7 +75,6 @@
     "_id": "1",
     "title": "t",
     "reviewer": {
-      "_id": "u1",
       "name": "n"
     }
   },
@@ -96,7 +85,6 @@
     "title": "t",
     "comments": [
       {
-        "_id": "c1",
         "text": "a"
       }
     ]
@@ -146,9 +134,11 @@
       }
     },
     "injectInfo": {
-      "relations": {
-        "comments": "__all__",
-        "author": "__all__"
+      "inject": {
+        "relations": {
+          "comments": "__all__",
+          "author": "__all__"
+        }
       }
     },
     "stripped": [
@@ -221,11 +211,13 @@
       }
     },
     "injectInfo": {
-      "relations": {
-        "comments": [
-          "text"
-        ],
-        "tags": "__all__"
+      "inject": {
+        "relations": {
+          "comments": [
+            "text"
+          ],
+          "tags": "__all__"
+        }
       }
     },
     "stripped": [
@@ -268,7 +260,7 @@
       }
     },
     "injectInfo": {
-      "relations": {}
+      "inject": {}
     },
     "stripped": null
   },

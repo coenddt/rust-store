@@ -1,5 +1,7 @@
 //! `$lookup` → LEFT JOIN 的关系解析
 
+use serde_json::Value;
+
 use crate::schema::{Registry, Schema};
 
 #[derive(Debug, Clone)]
@@ -10,9 +12,24 @@ pub(super) struct Join {
     pub(super) model: String,
     pub(super) local_col: String,
     pub(super) foreign_col: String,
+    /// `one` 关系（LEFT JOIN 后还原为对象/null；`many` 为数组）
+    pub(super) one: bool,
+    /// 关系子 pipeline `$match` 中除 join 键外的附加条件（关系 `$condition` + 目标 owner 注入）
+    /// → 作为 JOIN 的 `ON ... AND <条件>` 下推，绝不静默丢弃
+    pub(super) extra: Option<Value>,
+    /// 父 JOIN 下标（`None` = 根表）；嵌套关系靠它决定 `ON <子>.<fk> = <父>.<lk>`
+    pub(super) parent: Option<usize>,
+    /// 关系名路径（根 → 本层，含本层关系名）—— 决定平铺列还原到文档的哪一层
+    pub(super) path: Vec<String>,
+    /// 沿 `path` 每级关系的基数（`true` = `one`），与 `path` 等长
+    pub(super) ones: Vec<bool>,
+    /// 关系子 pipeline 的每父 top-N（`$sort` / `$skip` / `$limit`）→ 窗口函数下推
+    pub(super) child_sort: Option<Value>,
+    pub(super) child_skip: Option<i64>,
+    pub(super) child_limit: Option<i64>,
 }
 
-/// 从 schema.relations 解析 $lookup JOIN 键
+/// 从 schema.relations 解析 $lookup JOIN 键（`parent`/`path`/`ones`/`child_*` 由调用方填充）
 pub(super) fn resolve_join(
     schema: &Schema,
     registry: &Registry,
@@ -25,6 +42,14 @@ pub(super) fn resolve_join(
         model: d.model.clone(),
         local_col: d.local_field.clone(),
         foreign_col: d.foreign_field.clone(),
+        one: d.rel_type == "one",
+        extra: None,
+        parent: None,
+        path: vec![name.to_string()],
+        ones: vec![d.rel_type == "one"],
+        child_sort: None,
+        child_skip: None,
+        child_limit: None,
     };
     // 优先按关系名匹配
     if let Some((name, d)) = schema.relations.iter().find(|(n, _)| n.as_str() == alias) {

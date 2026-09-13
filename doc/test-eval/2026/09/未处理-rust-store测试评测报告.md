@@ -94,7 +94,7 @@
 | C3 | 权限/规则决策表 | 2 | 1.0 | 2.0 | 探针 `Erust-probe-bcise.log:27-41`：5 角色 × 读/写 + `requireContext × ctx × 读/写` 8 例决策表（C-r-guest 行为为设计内 fail-open，见 §8） | 含拒绝分支与具体报错 |
 | C4 | 状态迁移组合 | 1 | 0.5 | 0.5 | `route_override.rs` 3 态（override / reset-noop / empty-noop）；实体状态迁移（已删再改）无 | 配置态有、实体态无 |
 | C5 | 类型组合 | 1 | 0.5 | 0.5 | `dialect_restore_rows_roundtrip_supports_is_array` / bson 类型转换；bool/date/object × 后端不全 | 部分 |
-| C6 | 配置/开关组合 | 1 | 1.0 | 1.0 | guards：`setAllowUserPipeline` 禁用后 `planQuery/planFederated` 报错、重开恢复（×2 路径）；`require_context` 开关可逆（×2）；探针 C-up-1/2 | 开关 × 路径全组合 |
+| C6 | 配置/开关组合 | 1 | 1.0 | 1.0 | guards：`setAllowUserPipeline` 禁用后 `planQuery/planFederated` 报错、重开恢复（×2 路径）；`require_context` 开关可逆（×2）；探针 C-up-1/2。（注：`setAllowUserPipeline` 已随归一化 P3「砍 `$pipeline` 逃生舱」移除，本条为历史快照，现状见 rust-store/CHANGELOG.md） | 开关 × 路径全组合 |
 | C7 | 异常组合 | 1 | 0.5 | 0.5 | `error.rs` sentinel 分类 + `merge_rejects_oversized_source` | 多失败点叠加无（单命令规划模型，叠加场景属宿主） |
 | C8 | 组合剪裁说明 | 1 | 0.5 | 0.5 | `ci.yml` 注释说明三层流水线与 `[lib] test = false` 缘由 | 有分层说明、无组合策略文档 |
 

@@ -81,7 +81,7 @@ impl InjectInfo {
     pub fn from_value(v: &Value) -> InjectInfo {
         let mut relations = Vec::new();
         let mut fields = Vec::new();
-        if let Some(Value::Object(m)) = v.get("inject").or_else(|| Some(v)) {
+        if let Some(Value::Object(m)) = v.get("inject").or(Some(v)) {
             if let Some(Value::Object(rm)) = m.get("relations") {
                 for (name, inj) in rm {
                     let parsed = match inj {

@@ -67,10 +67,10 @@ pub use mutate::{
 };
 pub use mutation::plan_mutation;
 pub use query::{
-    build_plan, plan_query, plan_query_ast_mut, plan_query_mut, plan_query_one, resolve_page,
-    restore_sort_order, sorts_by_relation, Mode, Page, QueryPlan,
+    build_plan, check_readable_relations, plan_query, plan_query_ast_mut, plan_query_mut,
+    plan_query_one, resolve_page, restore_sort_order, sorts_by_relation, Mode, Page, QueryPlan,
 };
-pub use write::{check_write_perm, plan_aggregate, plan_count, plan_exists, plan_insert, Probe};
+pub use write::{check_write_perm, plan_count, plan_exists, plan_insert, Probe};
 
 /// 权限拒绝哨兵：Host 需映射为各自的 PermissionError。
 ///

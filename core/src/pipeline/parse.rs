@@ -59,6 +59,14 @@ impl Parser {
                 .value
                 .trim_start_matches('$')
                 .to_string();
+            // `$pipeline` 直通已移除（D18：不留 Mongo 逃生舱）——显式报错而非静默忽略，
+            // 否则用户自控的 pipeline 参数会被无声丢弃（与「绝不静默」冲突）。
+            if key == "pipeline" {
+                return Err(
+                    "$pipeline 直通已移除：请改用标准 GQL（$condition/$sort/$skip/$limit + 关系字段）"
+                        .to_string(),
+                );
+            }
             self.consume("p", Some(":"))?;
             let val = self.peek().cloned();
             if let Some(v) = &val {

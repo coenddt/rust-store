@@ -1,7 +1,7 @@
 //! GQL 解析 + Aggregate Pipeline 构建器（对应 JS `src/pipeline.js`）
 //!
-//! GQL 语法（极简，5 个参数）:
-//!   ModelName($condition:@c0,$sort:@s1,$skip:@sk,$limit:@l1,$pipeline:@p1) {
+//! GQL 语法（极简，4 个参数）:
+//!   ModelName($condition:@c0,$sort:@s1,$skip:@sk,$limit:@l1) {
 //!     field1, field2,
 //!     RelationName($condition:@c2,$sort:@s3) { field3, NestedRelation { field4 } }
 //!   }
@@ -12,25 +12,28 @@
 //!   - [`ast`]：AST 数据定义与 JSON 互转
 //!   - [`parse`]：语法分析
 //!   - [`lookup`]：$lookup / $addFields 阶段构建
+//!   - [`group`]：根级 $group / $having 成组聚合（§9.2(1)）
 //!   - [`build`]：整条 pipeline 的编排
 //!   - [`projection`]：$project 投影构建
 //!   - [`util`]：跨模块共享的小工具
 
 mod ast;
 mod build;
+mod group;
 mod lookup;
 mod parse;
 mod projection;
+mod relation_filter;
 mod token;
 mod util;
 
 pub use ast::{Ast, RelAst};
 pub(crate) use build::flatten_object_fields_impl;
 pub use build::{build_pipeline, flatten_object_fields};
-pub use lookup::{build_add_fields, build_compute_lookup_stages, build_empty_lookup, build_lookup};
+pub use lookup::{build_agg_stages, build_empty_lookup, build_lookup};
 pub use parse::{parse, parse_gql};
-pub use projection::build_pipeline_projection;
 pub use projection::build_projection;
+pub use relation_filter::{rel_name_from_as, RelPredicate, RelationFilterPlan, REL_PRED_PREFIX};
 pub use token::{token_to_value, tokenize, Token};
 pub(crate) use util::{is_nullish, param};
 

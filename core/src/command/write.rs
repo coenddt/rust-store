@@ -4,13 +4,14 @@ use serde_json::{json, Map, Value};
 
 use crate::computes::{apply_defaults_and_computes, FnRegistry};
 use crate::permission::{
-    can_write_schema, evaluate, filter_writable_data, merge_owner_condition, should_inject_owner_condition,
-    Context, Doc,
+    can_write_schema, evaluate, filter_writable_data, merge_owner_condition, Context, Doc,
 };
 use crate::schema::{Registry, Schema};
-use crate::types::{is_truthy, validate_condition, validate_pipeline_stages};
+use crate::types::{
+    has_relation_predicate, is_truthy, validate_condition, validate_condition_shape,
+};
 
-use super::cmd::{cmd_aggregate, cmd_count_documents, cmd_find_one, cmd_insert_one};
+use super::cmd::{cmd_count_documents, cmd_find_one, cmd_insert_one};
 use super::{ensure_context, ERR_NO_WRITE};
 
 /// 生成插入命令（对应 JS `insert`）
@@ -98,6 +99,16 @@ pub fn plan_exists(
     // 条件拒绝名单（缺陷 D-02）
     validate_condition(condition)?;
     let schema = registry.get(schema_name)?;
+    // §11.4（D2）：与 pipeline 读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
+    validate_condition_shape(schema, condition)?;
+    // §9.6 关系聚合谓词无法用标量 `findOne` 表达 → 显式 Err（否则 Mongo 静默给错结果）
+    if has_relation_predicate(schema, condition) {
+        return Err(
+            "exists 不支持关系聚合谓词条件（§9.6）：标量查询无法表达关系谓词，\
+             请改用 query 并自行判断是否有结果"
+                .to_string(),
+        );
+    }
     Ok(cmd_find_one(schema, condition, Some(&json!({ "_id": 1 }))))
 }
 
@@ -116,57 +127,24 @@ pub fn plan_count(
         validate_condition(f)?;
     }
     let schema = registry.get(schema_name)?;
+    // §11.4（D2）：与 pipeline 读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
+    if let Some(f) = filter {
+        validate_condition_shape(schema, f)?;
+        // §9.6 关系聚合谓词无法用标量 count 表达 → 显式 Err（与 query_with_count 同口径）
+        if has_relation_predicate(schema, f) {
+            return Err(
+                "count 不支持关系聚合谓词条件（§9.6）：标量计数无法表达关系谓词，\
+                 请改用 query 并在调用方自行统计"
+                    .to_string(),
+            );
+        }
+    }
     let base = match filter {
         None | Some(Value::Null) => json!({}),
         Some(v) => v.clone(),
     };
     let filter = merge_owner_condition(schema, ctx, Some(base)).unwrap_or_else(|| json!({}));
     Ok(cmd_count_documents(schema, &filter))
-}
-
-/// 原生聚合（对应 JS `aggregate`）
-///
-/// R1：owner(read=creator) 场景下，把 `createdBy = ctx.userId` 注入 `$match`，
-/// 否则 aggregate 会越权读全表（E-09）。
-pub fn plan_aggregate(
-    schema_name: &str,
-    registry: &Registry,
-    pipeline: &[Value],
-    ctx: Option<&Context>,
-) -> Result<Value, String> {
-    let schema = registry.get(schema_name)?;
-    let stages = inject_owner_into_pipeline(schema, ctx, pipeline);
-    // R3：拒绝 $out/$merge 写副作用阶段、危险执行算子与 $expr 未声明字段
-    validate_pipeline_stages(schema, &stages)?;
-    Ok(cmd_aggregate(schema, &stages))
-}
-
-/// 把 owner 条件合并进聚合 pipeline 的 `$match`（无 `$match` 时前置）：
-/// 已有 `$match` 字段不覆盖用户显式条件（`or_insert`）。
-fn inject_owner_into_pipeline(schema: &Schema, ctx: Option<&Context>, pipeline: &[Value]) -> Vec<Value> {
-    if !should_inject_owner_condition(schema, ctx) {
-        return pipeline.to_vec();
-    }
-    let owner = json!({ "createdBy": ctx.and_then(|c| c.user_id.clone()) });
-    let owner_obj = owner
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
-    let mut stages = pipeline.to_vec();
-    let mut injected = false;
-    for s in stages.iter_mut() {
-        if let Some(m) = s.get_mut("$match").and_then(|v| v.as_object_mut()) {
-            for (k, v) in &owner_obj {
-                m.entry(k.clone()).or_insert(v.clone());
-            }
-            injected = true;
-            break;
-        }
-    }
-    if !injected {
-        stages.insert(0, json!({ "$match": owner }));
-    }
-    stages
 }
 
 pub(super) fn has_creator_permission(schema: &Schema) -> bool {

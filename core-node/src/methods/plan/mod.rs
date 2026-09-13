@@ -8,8 +8,7 @@ use serde_json::{json, Value};
 
 use rust_store_core::command::apply_route_override as core_apply_route_override;
 use rust_store_core::command::{
-    plan_aggregate as core_plan_aggregate, plan_count as core_plan_count,
-    plan_exists as core_plan_exists, plan_query as core_plan_query,
+    plan_count as core_plan_count, plan_exists as core_plan_exists, plan_query as core_plan_query,
     plan_query_one as core_plan_query_one, plan_query_with_count as core_plan_query_with_count,
     resolve_page as core_resolve_page, restore_sort_order as core_restore_sort_order,
     sorts_by_relation as core_sorts_by_relation,
@@ -79,7 +78,7 @@ impl Registry {
         Ok(with_route_override(plan, &route_override))
     }
 
-    /// queryOne 计划：未显式 `$limit` 时强制下推 `$limit(1)`（`$pipeline` 全权模式不注入）
+    /// queryOne 计划：未显式 `$limit` 时强制下推 `$limit(1)`
     #[napi]
     pub fn plan_query_one(
         &self,
@@ -162,20 +161,6 @@ impl Registry {
         let filter = filter.as_ref().filter(|v| !v.is_null());
         let context = ctx.as_ref().and_then(context_from_value);
         let plan = core_plan_count(&model, &self.core, filter, context.as_ref()).map_err(err)?;
-        Ok(with_route_override(plan, &route_override))
-    }
-
-    #[napi]
-    pub fn plan_aggregate(
-        &self,
-        model: String,
-        pipeline: Vec<Value>,
-        ctx: Option<Value>,
-        route_override: Option<Value>,
-    ) -> Result<Value> {
-        let context = ctx.as_ref().and_then(context_from_value);
-        let plan =
-            core_plan_aggregate(&model, &self.core, &pipeline, context.as_ref()).map_err(err)?;
         Ok(with_route_override(plan, &route_override))
     }
 

@@ -71,7 +71,7 @@ function runAll(sqlDb, out) {
 
 test('dialect smoke: insert + find roundtrip on sqlite', () => {
   const sqlDb = db();
-  sqlDb.run(`CREATE TABLE posts (_id TEXT PRIMARY KEY, title TEXT, status TEXT, views INTEGER)`);
+  sqlDb.run(`CREATE TABLE posts (_id TEXT PRIMARY KEY, title TEXT, status TEXT, views INTEGER, __present TEXT)`);
 
   const insert = reg.dialectTranslate('sqlite', {
     kind: 'insertOne', collection: 'posts',
@@ -91,7 +91,7 @@ test('dialect smoke: insert + find roundtrip on sqlite', () => {
 
 test('dialect smoke: insertMany + count on sqlite', () => {
   const sqlDb = db();
-  sqlDb.run(`CREATE TABLE posts (_id TEXT PRIMARY KEY, title TEXT, status TEXT, views INTEGER)`);
+  sqlDb.run(`CREATE TABLE posts (_id TEXT PRIMARY KEY, title TEXT, status TEXT, views INTEGER, __present TEXT)`);
   runAll(sqlDb, reg.dialectTranslate('sqlite', {
     kind: 'insertMany', collection: 'posts',
     docs: [
@@ -109,10 +109,10 @@ test('dialect smoke: insertMany + count on sqlite', () => {
 
 test('dialect smoke: $lookup join → nested items array', () => {
   const sqlDb = db();
-  sqlDb.run(`CREATE TABLE orders (_id TEXT PRIMARY KEY, code TEXT, amount REAL)`);
-  sqlDb.run(`CREATE TABLE order_items (_id TEXT PRIMARY KEY, orderId TEXT, sku TEXT, qty INTEGER)`);
-  sqlDb.run(`INSERT INTO orders VALUES ('o1','A-1',10),('o2','B-1',20)`);
-  sqlDb.run(`INSERT INTO order_items VALUES ('i1','o1','sku-x',2),('i2','o1','sku-y',3)`);
+  sqlDb.run(`CREATE TABLE orders (_id TEXT PRIMARY KEY, code TEXT, amount REAL, __present TEXT)`);
+  sqlDb.run(`CREATE TABLE order_items (_id TEXT PRIMARY KEY, orderId TEXT, sku TEXT, qty INTEGER, __present TEXT)`);
+  sqlDb.run(`INSERT INTO orders VALUES ('o1','A-1',10,',_id,code,amount,'),('o2','B-1',20,',_id,code,amount,')`);
+  sqlDb.run(`INSERT INTO order_items VALUES ('i1','o1','sku-x',2,',_id,orderId,sku,qty,'),('i2','o1','sku-y',3,',_id,orderId,sku,qty,')`);
 
   const agg = reg.dialectTranslate('sqlite', {
     kind: 'aggregate', collection: 'orders', pipeline: [

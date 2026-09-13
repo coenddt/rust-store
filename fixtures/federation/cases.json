@@ -221,43 +221,6 @@
   },
   {
     "kind": "plan",
-    "name": "federation-pipeline-cross-source",
-    "expect_error": true,
-    "schemas": [
-      {
-        "name": "User", "collection": "users", "timestamps": false, "datasource": "mongodb_main",
-        "fields": { "name": { "type": "string" } },
-        "relations": {
-          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "userId" }
-        }
-      },
-      {
-        "name": "Order", "collection": "orders", "timestamps": false, "datasource": "mysql_main",
-        "fields": { "userId": { "type": "string" }, "code": { "type": "string" } },
-        "relations": {}
-      }
-    ],
-    "gql": "User($pipeline:@p0){name, orders{code}}",
-    "params": { "p0": [{ "$match": {} }] },
-    "context": null
-  },
-  {
-    "kind": "plan",
-    "name": "federation-pipeline-single-source",
-    "parity_with_query": true,
-    "schemas": [
-      {
-        "name": "Post", "collection": "posts", "timestamps": false,
-        "fields": { "title": { "type": "string" } },
-        "relations": {}
-      }
-    ],
-    "gql": "Post($pipeline:@p0){title}",
-    "params": { "p0": [{ "$match": { "title": "x" } }] },
-    "context": null
-  },
-  {
-    "kind": "plan",
     "name": "federation-permission-denied",
     "expect_error": true,
     "schemas": [

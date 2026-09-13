@@ -107,14 +107,14 @@ fn present_value(schema: &Schema, doc: &Value) -> Value {
     let mut keys: Vec<String> = Vec::new();
     if let Some(m) = doc.as_object() {
         for (k, _) in m.iter() {
-            if k == "_id" {
-                keys.push(k.clone());
-            } else if schema
-                .fields
-                .get(k)
-                .map(|f| f.field_type != "object" && f.field_type != "array")
-                .unwrap_or(false)
-            {
+            // `_id` 恒为标量列；其余仅当 schema 声明为标量（非 object/array）时入列
+            let is_scalar = k == "_id"
+                || schema
+                    .fields
+                    .get(k)
+                    .map(|f| f.field_type != "object" && f.field_type != "array")
+                    .unwrap_or(false);
+            if is_scalar {
                 keys.push(k.clone());
             }
         }

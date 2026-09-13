@@ -58,6 +58,10 @@ pub fn str_list(v: Option<&Value>) -> Option<Vec<String>> {
 /// 都不允许进入规划，命中即显式报错。
 const FORBIDDEN_COND_OPS: [&str; 3] = ["$where", "$function", "$accumulator"];
 
+/// 聚合算子白名单（§9.5 批次一）：计算列 `agg`、根级 `$group.agg`、§9.6
+/// 关系聚合谓词共用同一集合。单点定义，避免多处字面量数组漂移（新增算子时漏改）。
+pub(crate) const AGG_OPS: [&str; 5] = ["$count", "$sum", "$avg", "$min", "$max"];
+
 /// 校验查询/写入条件：递归遍历条件树，命中拒绝名单即显式报错。
 ///
 /// 覆盖顶层逻辑组（`$and`/`$or`/`$nor`）、字段级操作符对象与嵌套数组内的
@@ -70,6 +74,17 @@ pub fn validate_condition(filter: &Value) -> Result<(), String> {
                     return Err(format!(
                         "条件包含被拒绝的操作符 {k}（服务端执行类，命中拒绝名单）：请改用结构化条件"
                     ));
+                }
+                // 空逻辑组（`$and:[]` / `$or:[]` / `$nor:[]`）会让 WHERE 退化为空条件
+                // → 全表/全量，与「绝不静默」冲突（A-20 / G-06）→ 规划期显式报错，所有后端一致。
+                if matches!(k.as_str(), "$and" | "$or" | "$nor") {
+                    if let Value::Array(arr) = v {
+                        if arr.is_empty() {
+                            return Err(format!(
+                                "{k} 逻辑组为空：拒绝生成无条件的全表查询（请在组内提供至少一个条件）"
+                            ));
+                        }
+                    }
                 }
                 validate_condition(v)?;
             }
@@ -85,46 +100,55 @@ pub fn validate_condition(filter: &Value) -> Result<(), String> {
     }
 }
 
-// ─── 聚合/`$pipeline` 阶段校验（缺陷 R3） ─────────────────────
+// ─── U1~U4 形态拒绝（落 D2，跨后端归一） ─────────────────────
 
-/// 写副作用阶段拒绝名单：不允许在查询/聚合中落盘。
-const STAGE_FORBIDDEN: [&str; 2] = ["$out", "$merge"];
-/// `$match` 内 `$expr` 引用的合法字段（除 schema 声明外的固定键）。
-const EXPR_SYS_FIELDS: [&str; 4] = ["_id", "createdBy", "createdAt", "updatedAt"];
-/// `$expr` 内的运算符名（字段引用判定用：非运算符的 `$name` 视为字段引用）。
-const EXPR_OPS: &[&str] = &[
-    "and", "or", "not", "nor", "gt", "gte", "lt", "lte", "eq", "ne", "in", "nin", "exists", "expr",
-    "cond", "if", "then", "else", "switch", "case", "default", "sqrt", "pow", "abs", "ceil",
-    "floor", "round", "subtract", "add", "multiply", "divide", "mod", "modulo", "literal", "size",
-    "arrayElemAt", "arrayToObject", "objectToArray", "isArray", "toString", "toInt", "toDouble",
-    "toLong", "concat", "substrBytes", "toLower", "toUpper", "trim", "split", "toArray", "map",
-    "reduce", "filter", "let", "sum", "avg", "min", "max", "first", "last", "push", "anyElementTrue",
-    "allElementsTrue", "setIsSubset", "setEquals", "setIntersection", "setUnion", "setDifference",
-    "in", "type", "mergeObjects", "dateToString", "dateFromString", "toDate", "dateDiff",
-];
+/// 取条件键的**根字段类型**（`a.b.c` → 查 `a`）；未声明返回 `None`。
+fn root_field_type<'a>(schema: &'a Schema, key: &str) -> Option<&'a str> {
+    let root = key.split('.').next().unwrap_or(key);
+    schema.fields.get(root).map(|f| f.field_type.as_str())
+}
 
-/// 校验聚合/管道阶段：拒绝 `$out`/`$merge` 写副作用阶段、递归拒绝危险执行算子
-/// （`$where` 等）、并校验 `$expr` 未引用 schema 外字段。
-pub fn validate_pipeline_stages(schema: &Schema, pipeline: &[Value]) -> Result<(), String> {
-    for stage in pipeline {
-        match stage {
-            Value::Object(m) => {
-                for (k, v) in m {
-                    if STAGE_FORBIDDEN.contains(&k.as_str()) {
-                        return Err(format!(
-                            "聚合阶段 {k}（写副作用）被拒绝：不允许在查询/聚合中写落盘"
-                        ));
-                    }
-                    if k == "$match" {
-                        validate_expr_fields(schema, v)?;
-                    }
-                    validate_condition(v)?;
+/// U1~U4（`$condition` 侧）：数组字段过滤 / 对象字段过滤 / 对象点号路径过滤 ——
+/// 在**所有后端（含 Mongo）**规划期统一显式报错（D2：绝不静默）。
+///
+/// 判定依据 = schema：数组 / 对象字段在 SQL 侧无可翻译列，Mongo 侧虽能执行，
+/// 但会造成跨后端结果不一致 → 一律拒绝。**关系名**（§9.6 关系聚合谓词）不在本检查
+/// 范围，交由关系节点处理。
+pub fn validate_condition_shape(schema: &Schema, filter: &Value) -> Result<(), String> {
+    let Value::Object(map) = filter else {
+        return Ok(());
+    };
+    for (k, v) in map {
+        if matches!(k.as_str(), "$and" | "$or" | "$nor") {
+            if let Value::Array(arr) = v {
+                for it in arr {
+                    validate_condition_shape(schema, it)?;
                 }
             }
-            Value::Array(a) => {
-                for v in a {
-                    validate_condition(v)?;
-                }
+            continue;
+        }
+        if k.starts_with('$') || schema.relations.contains_key(k) {
+            continue;
+        }
+        let Some(ft) = root_field_type(schema, k) else {
+            continue;
+        };
+        let dotted = k.contains('.');
+        match (ft, dotted) {
+            ("array", _) => {
+                return Err(format!(
+                    "数组字段 \"{k}\" 不支持过滤条件（U1/D2：所有后端含 Mongo 统一显式拒绝）"
+                ));
+            }
+            ("object", false) => {
+                return Err(format!(
+                    "对象字段 \"{k}\" 不支持过滤条件（U2/D2：所有后端含 Mongo 统一显式拒绝）"
+                ));
+            }
+            ("object", true) => {
+                return Err(format!(
+                    "对象点号路径 \"{k}\" 不支持过滤条件（U3/D2：所有后端含 Mongo 统一显式拒绝）"
+                ));
             }
             _ => {}
         }
@@ -132,55 +156,53 @@ pub fn validate_pipeline_stages(schema: &Schema, pipeline: &[Value]) -> Result<(
     Ok(())
 }
 
-/// 递归定位 `$match` 体内的 `$expr` 子树并做字段引用校验。
-fn validate_expr_fields(schema: &Schema, v: &Value) -> Result<(), String> {
-    match v {
-        Value::Object(m) => {
-            for (k, sub) in m {
-                if k == "$expr" {
-                    validate_expr_tree(schema, sub)?;
-                } else {
-                    validate_expr_fields(schema, sub)?;
-                }
-            }
+/// §9.6 关系聚合谓词探测：`$condition` 中是否出现**关系名**作键。
+///
+/// 覆盖 `$and` / `$or` / `$nor` 嵌套与 `$not` 否定形态（anti-join）。
+/// 标量查询路径（`countDocuments` / 标量 `count` / `exists`）无法表达关系谓词，
+/// 命中即须显式 `Err`，否则 Mongo 侧会把它当成「字段等于该对象」而**静默给出错数**（D2）。
+pub fn has_relation_predicate(schema: &Schema, v: &Value) -> bool {
+    let Some(m) = v.as_object() else {
+        return false;
+    };
+    m.iter().any(|(k, val)| {
+        if matches!(k.as_str(), "$and" | "$or" | "$nor") {
+            return val
+                .as_array()
+                .map(|a| a.iter().any(|x| has_relation_predicate(schema, x)))
+                .unwrap_or(false);
         }
-        Value::Array(a) => {
-            for x in a {
-                validate_expr_fields(schema, x)?;
-            }
+        // `{"$not": { "<rel>": { … } }}` → anti-join（见 `pipeline/relation_filter.rs`）
+        if k == "$not" {
+            return has_relation_predicate(schema, val);
         }
-        _ => {}
+        if schema.relations.contains_key(k.as_str()) {
+            return true;
+        }
+        // 运算对象（`{"field": {"$gt": …}}`）不下钻：关系名只可能作顶层键
+        false
+    })
+}
+
+/// U4（`$sort` 侧）：对象点号路径排序 —— 所有后端（含 Mongo）规划期统一显式报错。
+///
+/// 仅当点号键的根字段是 schema 声明的 object 字段时拒绝；关系路径排序
+/// （`bidders.amount`，R10）不在本检查范围。
+pub fn validate_sort_shape(schema: &Schema, sort: &Value) -> Result<(), String> {
+    let Some(map) = sort.as_object() else {
+        return Ok(());
+    };
+    for k in map.keys() {
+        if !k.contains('.') || schema.relations.contains_key(k) {
+            continue;
+        }
+        if root_field_type(schema, k) == Some("object") {
+            return Err(format!(
+                "对象点号路径 \"{k}\" 不支持排序（U4/D2：所有后端含 Mongo 统一显式拒绝）"
+            ));
+        }
     }
     Ok(())
 }
 
-/// `$expr` 表达式树：形如 `"$name"` 的叶子（非运算符）视为字段引用，
-/// 必须在 schema 中声明（含固定键/关系），否则显式报错。
-fn validate_expr_tree(schema: &Schema, v: &Value) -> Result<(), String> {
-    match v {
-        Value::String(s) if s.starts_with('$') => {
-            let f = &s[1..];
-            if !EXPR_OPS.contains(&f) && !schema_expr_has_field(schema, f) {
-                return Err(format!(
-                    "$expr 引用了 schema 未声明的字段 ${f}：请使用 schema 中已定义的字段"
-                ));
-            }
-        }
-        Value::Array(a) => {
-            for x in a {
-                validate_expr_tree(schema, x)?;
-            }
-        }
-        Value::Object(m) => {
-            for (_, sub) in m {
-                validate_expr_tree(schema, sub)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn schema_expr_has_field(schema: &Schema, f: &str) -> bool {
-    EXPR_SYS_FIELDS.contains(&f) || schema.fields.contains_key(f) || schema.relations.contains_key(f)
-}
+// ─── 条件形状校验（U1~U4 / D2） ─────────────────────

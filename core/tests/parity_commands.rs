@@ -10,7 +10,6 @@
 //!   - insert             : `plan_insert`（`now` / `newId` 由 Host 提供）
 //!   - exists             : `plan_exists`
 //!   - count              : `plan_count`
-//!   - aggregate          : `plan_aggregate`
 //!
 //! 黄金基准为**冻结快照**（原单体 JS 参考实现已随重构退役，快照无源可再生）。
 //! 复算校验：`node tools/verify-fixtures.js`。
@@ -21,8 +20,8 @@ use std::path::PathBuf;
 use serde_json::{json, Map, Value};
 
 use rust_store_core::command::{
-    plan_aggregate, plan_count, plan_exists, plan_insert, plan_query, plan_query_with_count,
-    resolve_page, restore_sort_order,
+    plan_count, plan_exists, plan_insert, plan_query, plan_query_with_count, resolve_page,
+    restore_sort_order,
 };
 use rust_store_core::permission::context_from_value;
 use rust_store_core::pipeline::parse_gql;
@@ -164,17 +163,6 @@ fn run_count(fx: &Value) -> Result<Value, String> {
     Ok(json!({ "command": command }))
 }
 
-fn run_aggregate(fx: &Value) -> Result<Value, String> {
-    let registry = build_registry(fx)?;
-    let pipeline = fx
-        .get("pipeline")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let command = plan_aggregate(model_of(fx), &registry, &pipeline, None)?;
-    Ok(json!({ "command": command }))
-}
-
 fn run_case(fx: &Value) -> Result<Value, String> {
     match fx.get("kind").and_then(|v| v.as_str()).unwrap_or("") {
         "query" => run_query(fx),
@@ -184,7 +172,6 @@ fn run_case(fx: &Value) -> Result<Value, String> {
         "insert" => run_insert(fx),
         "exists" => run_exists(fx),
         "count" => run_count(fx),
-        "aggregate" => run_aggregate(fx),
         // 写路径用例归 parity_write 覆盖，此处跳过
         "insert_many" | "update" | "update_many" | "remove" | "upsert" | "mutation" => {
             Ok(Value::Null)

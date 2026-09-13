@@ -4,31 +4,18 @@ use std::collections::HashMap;
 
 use serde_json::{json, Map, Value};
 
-use crate::types::{is_truthy, str_list};
+use crate::types::{is_truthy, str_list, AGG_OPS};
 
 use super::definition::{normalize_fields, ComputeDef, FieldDef, RelationDef, Schema};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Registry {
     schemas: HashMap<String, Schema>,
     order: Vec<String>,
-    /// 用户 `$pipeline` 直通开关（默认允许；AI 查询宿主可关闭作纵深防御）
-    pub allow_user_pipeline: bool,
     /// 上下文强制开关（默认关闭 = fail-open，与 JS 原版 parity）；
     /// 开启后所有 plan 入口对 `ctx: None` 显式报错（fail-secure，见 `permission` 模块文档）。
     /// 内部调用请传显式系统上下文（JSON `{"internal": true}` / `Context::system()`）。
     require_context: bool,
-}
-
-impl Default for Registry {
-    fn default() -> Self {
-        Self {
-            schemas: HashMap::new(),
-            order: Vec::new(),
-            allow_user_pipeline: true,
-            require_context: false,
-        }
-    }
 }
 
 impl Registry {
@@ -79,11 +66,6 @@ impl Registry {
 
     pub fn has(&self, name: &str) -> bool {
         self.schemas.contains_key(name)
-    }
-
-    /// 开关用户 `$pipeline` 直通（默认允许；AI 查询宿主建议关闭作纵深防御）
-    pub fn set_allow_user_pipeline(&mut self, allow: bool) {
-        self.allow_user_pipeline = allow;
     }
 
     /// 开关「上下文强制」（默认关闭 = fail-open，保持 JS parity）。
@@ -214,6 +196,9 @@ fn build_schema(
     if timestamps {
         add_timestamp_fields(&mut fields);
     }
+    let relations = parse_relations(obj);
+    // 计算列的 agg 需要校验「引用的关系存在」→ 必须晚于 relations 解析
+    let computes = parse_computes(obj, &relations)?;
     Ok(Schema {
         name,
         collection,
@@ -224,8 +209,8 @@ fn build_schema(
             .to_string(),
         timestamps,
         fields,
-        relations: parse_relations(obj),
-        computes: parse_computes(obj),
+        relations,
+        computes,
         read: str_list(obj.get("read")),
         write: str_list(obj.get("write")),
         indexes: obj
@@ -295,15 +280,18 @@ fn parse_relations(obj: &Map<String, Value>) -> HashMap<String, RelationDef> {
     relations
 }
 
-fn parse_computes(obj: &Map<String, Value>) -> Vec<(String, ComputeDef)> {
+fn parse_computes(
+    obj: &Map<String, Value>,
+    relations: &HashMap<String, RelationDef>,
+) -> Result<Vec<(String, ComputeDef)>, String> {
     let mut computes = Vec::new();
     if let Some(Value::Object(cm)) = obj.get("computes") {
         for (key, val) in cm {
             let vo = val.as_object();
             let get = |k: &str| vo.and_then(|o| o.get(k)).cloned();
-            // R8：lookup 计算列的 `<addFields>` 表达式以兄弟键书写，
-            // 注册时并入 lookup 对象，供 `build_add_fields` 读取物化表达式。
-            let lookup = merge_lookup_add_fields(&get);
+            let has_fn = get("fn").map(|v| is_truthy(&v)).unwrap_or(false);
+            let has_async_fn = get("asyncFn").map(|v| is_truthy(&v)).unwrap_or(false);
+            let agg = parse_agg(key, get("agg").as_ref(), relations, has_fn || has_async_fn)?;
             computes.push((
                 key.clone(),
                 ComputeDef {
@@ -311,19 +299,88 @@ fn parse_computes(obj: &Map<String, Value>) -> Vec<(String, ComputeDef)> {
                         .and_then(|v| v.as_str().map(String::from))
                         .filter(|s| !s.is_empty())
                         .unwrap_or_else(|| "any".to_string()),
-                    has_fn: get("fn").map(|v| is_truthy(&v)).unwrap_or(false),
-                    has_async_fn: get("asyncFn").map(|v| is_truthy(&v)).unwrap_or(false),
+                    has_fn,
+                    has_async_fn,
                     fn_ref: get("fnRef")
                         .and_then(|v| v.as_str().map(String::from))
                         .filter(|s| !s.is_empty()),
-                    lookup,
+                    agg,
                     depends: str_list(get("depends").as_ref()).unwrap_or_default(),
                     read: str_list(get("read").as_ref()),
                 },
             ));
         }
     }
-    computes
+    Ok(computes)
+}
+
+/// 解析并校验归一聚合计算列（§9.2(2)）：`{"$count":"lessons"}` / `{"$sum":"lessons.duration"}`。
+///
+/// - 算子白名单 `$count/$sum/$avg/$min/$max`，不在白名单 → Err（绝不静默）；
+/// - 取值必须是**关系路径**：`$count` 仅关系整行计数（`lessons`，不接受字段），
+///   其余算子必须带字段（`lessons.duration`）；
+/// - 二级关系路径（`orders.items.price`）首批不支持 → Err；
+/// - 与 `fn` / `asyncFn` 互斥。
+fn parse_agg(
+    key: &str,
+    raw: Option<&Value>,
+    relations: &HashMap<String, RelationDef>,
+    has_callback: bool,
+) -> Result<Option<Value>, String> {
+    let Some(v) = raw.filter(|v| is_truthy(v)) else {
+        return Ok(None);
+    };
+    if has_callback {
+        return Err(format!(
+            "计算列 \"{key}\" 不能同时声明 agg 与 fn/asyncFn（二选一）"
+        ));
+    }
+    let obj = v.as_object().ok_or_else(|| {
+        format!("计算列 \"{key}\" 的 agg 必须是对象，如 {{\"$count\": \"lessons\"}}")
+    })?;
+    let mut it = obj.iter();
+    let (op, arg) = match (it.next(), it.next()) {
+        (Some(kv), None) => kv,
+        _ => return Err(format!("计算列 \"{key}\" 的 agg 必须且只能声明一个算子键")),
+    };
+    if !AGG_OPS.contains(&op.as_str()) {
+        return Err(format!(
+            "计算列 \"{key}\" 的 agg 算子 {op} 不在白名单（$count/$sum/$avg/$min/$max）"
+        ));
+    }
+    let path = arg
+        .as_str()
+        .filter(|s| !s.is_empty() && *s != "*")
+        .ok_or_else(|| {
+            format!("计算列 \"{key}\" 的 agg 取值必须是关系路径字符串（如 \"lessons\" / \"lessons.duration\"）")
+        })?;
+    let (rel, field) = match path.split_once('.') {
+        Some((r, f)) => (r, Some(f)),
+        None => (path, None),
+    };
+    if !relations.contains_key(rel) {
+        return Err(format!(
+            "计算列 \"{key}\" 的 agg 引用的关系 \"{rel}\" 未在 schema 中定义"
+        ));
+    }
+    if field
+        .map(|f| f.is_empty() || f.contains('.'))
+        .unwrap_or(false)
+    {
+        return Err(format!(
+            "计算列 \"{key}\" 的 agg 关系路径 \"{path}\" 非法：仅支持单级「关系.字段」（二级路径首批不支持）"
+        ));
+    }
+    match op.as_str() {
+        "$count" if field.is_some() => Err(format!(
+            "计算列 \"{key}\" 的 $count 仅支持关系整行计数（如 \"lessons\"），按字段计数待 P5"
+        )),
+        "$count" => Ok(Some(v.clone())),
+        _ if field.is_none() => Err(format!(
+            "计算列 \"{key}\" 的 agg 算子 {op} 必须引用关系字段（如 \"lessons.duration\"）"
+        )),
+        _ => Ok(Some(v.clone())),
+    }
 }
 
 /// 取非空字符串字段（空串归一为 `None`）
@@ -331,21 +388,6 @@ fn opt_nonempty_str(v: Option<&Value>) -> Option<String> {
     v.and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(String::from)
-}
-
-/// lookup 计算列的 `lookup` 值：若计算列以**兄弟键** `addFields` 提供物化表达式，
-/// 则并入 lookup 对象（`build_add_fields` 从 lookup 内读 `<addFields>`）。
-/// 其它情况原样返回（`lookup` 无效 → None）。
-fn merge_lookup_add_fields(get: &impl Fn(&str) -> Option<Value>) -> Option<Value> {
-    let lookup = get("lookup").filter(|v| is_truthy(v));
-    let Some(Value::Object(mut lo)) = lookup else {
-        return lookup;
-    };
-    let Some(af) = get("addFields").filter(|v| is_truthy(v)) else {
-        return Some(Value::Object(lo));
-    };
-    lo.insert("addFields".to_string(), af);
-    Some(Value::Object(lo))
 }
 
 /// 构造 `<Name>Deleted` 归档表 schema 定义（字段 = 原字段 + `deletedAt`）；

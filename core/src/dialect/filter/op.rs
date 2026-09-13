@@ -39,7 +39,7 @@ pub(super) fn cond_clause(
                 // `$exists`：语义为「字段显式存在（含显式 null）」⇔ 在 __present 集合中。
                 // 缺失行不在集合 → `$exists:false` 命中缺失。相较旧实现 `col IS [NOT] NULL`，
                 // 这能把「缺失」与「显式 null」区分开（F-07/A-19）。
-                "$exists" => exists_expr(field_token, alias, v, backend),
+                "$exists" => exists_expr(col, field_token, alias, v, backend),
                 "$not" => {
                     let inner = cond_clause(
                         v,
@@ -117,7 +117,11 @@ pub(super) fn cond_clause(
 
 /// existence 判定片段：谓词「字段存在于 ``__present`` 集合」。
 /// `col IS NULL` / `$exists` 需要与它做 AND / NOT。
+/// `alias` 为空 = 表达式模式（HAVING，无哨兵列）→ 恒真（调用方改用 `IS [NOT] NULL`）。
 fn present_pred(alias: &str, field_token: &str) -> String {
+    if alias.is_empty() {
+        return "TRUE".to_string();
+    }
     format!(
         "COALESCE({}.__present, ',') LIKE '%,{},%'",
         alias, field_token
@@ -148,9 +152,28 @@ fn null_eq_ne(
 }
 
 fn binop(col: &str, op: &str, v: &Value, backend: Backend, seq: &mut usize) -> WhereClause {
-    let text = format!("{} {} {}", col, op, backend.placeholder(*seq));
-    *seq += 1;
+    let text = format!("{} {} {}", col, op, param_expr(backend, seq, v));
     WhereClause::new(text, vec![v.clone()])
+}
+
+/// 参数占位表达式（消耗一个参数序号）。
+///
+/// §9.7「数值归 double」在 **PostgreSQL** 上的必要补充：PG 的扩展协议由**服务端按上下文**
+/// 推断 `$n` 的类型 —— `int_col > $1`（字面量 `2.5`）会把 `$1` 推断为 `integer`，执行期直接
+/// 报 `invalid input syntax for type integer: "2.5"`（MySQL/SQLite 动态类型无此问题）。
+/// 此处对 PG 的**非整数字面量**显式标注 `CAST($n AS double precision)`，与 py 宿主 asyncpg
+/// 「Python float → float8」的原生行为一致，保证两宿主对同一查询的行为相同。
+fn param_expr(backend: Backend, seq: &mut usize, v: &Value) -> String {
+    let ph = backend.placeholder(*seq);
+    *seq += 1;
+    if backend == Backend::Postgres {
+        if let Value::Number(n) = v {
+            if n.is_f64() {
+                return format!("CAST({} AS double precision)", ph);
+            }
+        }
+    }
+    ph
 }
 
 fn in_list(
@@ -174,14 +197,8 @@ fn in_list(
             WhereClause::new("0".to_string(), Vec::new())
         });
     }
-    let phs: Vec<String> = arr
-        .iter()
-        .map(|_| {
-            let p = backend.placeholder(*seq);
-            *seq += 1;
-            p
-        })
-        .collect();
+    // 与 `binop` 同一占位表达式（PG 浮点字面量需显式 `CAST`，见 [`param_expr`]）
+    let phs: Vec<String> = arr.iter().map(|v| param_expr(backend, seq, v)).collect();
     let text = format!(
         "{} {} ({})",
         col,
@@ -192,8 +209,23 @@ fn in_list(
 }
 
 /// `$exists` → 字段是否在 `__present` 集合（存在含显式 null，区别于缺失）。
-fn exists_expr(field_token: &str, alias: &str, v: &Value, _backend: Backend) -> WhereClause {
+/// 表达式模式（`alias` 为空，HAVING）：无哨兵列 → 退化为 `IS [NOT] NULL`。
+fn exists_expr(
+    col: &str,
+    field_token: &str,
+    alias: &str,
+    v: &Value,
+    _backend: Backend,
+) -> WhereClause {
     let exists = v.as_bool().unwrap_or(true);
+    if alias.is_empty() {
+        let text = if exists {
+            format!("{} IS NOT NULL", col)
+        } else {
+            format!("{} IS NULL", col)
+        };
+        return WhereClause::new(text, Vec::new());
+    }
     let present = present_pred(alias, field_token);
     let text = if exists {
         present

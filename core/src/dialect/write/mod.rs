@@ -16,7 +16,7 @@ use crate::schema::{Registry, Schema};
 
 use super::filter::build_filter;
 use super::ir::{RowCol, RowShape, SqlStmt};
-use super::Backend;
+use super::{field_is_bool, Backend};
 
 mod insert;
 mod update;
@@ -165,13 +165,13 @@ fn returning_cols(schema: &Schema) -> Vec<String> {
     cols
 }
 
-/// 回读列 → RowShape（标量直接还原到 `[field]`）
-fn returning_shape(cols: &[String]) -> RowShape {
+/// 回读列 → RowShape（标量直接还原到 `[field]`；§9.7 布尔列标记归一）
+fn returning_shape(schema: &Schema, cols: &[String]) -> RowShape {
     RowShape {
         columns: cols
             .iter()
             .filter(|c| c.as_str() != "__present")
-            .map(|c| RowCol::scalar(c, &[c.as_str()]))
+            .map(|c| RowCol::scalar_bool(c, &[c.as_str()], field_is_bool(schema, c)))
             .collect(),
         present_alias: Some("__present".to_string()),
     }

@@ -61,28 +61,25 @@ export declare class Registry {
   readableRelations(model: string, ctx?: any | undefined | null): any
   writableFields(model: string, ctx?: any | undefined | null): any
   filterWritableData(model: string, ctx: any | undefined | null, data: any): any
-  /** 解析 GQL 并构建 pipeline / projection，返回 `{tokens, ast, pipeline, projection}` */
-  buildPipeline(gql: string, params: any, ctx?: any | undefined | null): any
-  planQuery(gql: string, params: any, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
-  /** queryOne 计划：未显式 `$limit` 时强制下推 `$limit(1)`（`$pipeline` 全权模式不注入） */
-  planQueryOne(gql: string, params: any, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
-  /** 列表 + total；`total` 由 Host 执行 `countCommand` 后回喂，用于算 `hasMore` */
-  planQueryWithCount(gql: string, params: any, ctx?: any | undefined | null, total?: number | undefined | null, routeOverride?: any | undefined | null): any
-  resolvePage(gql: string, params: any): any
-  /** 两阶段查询后按阶段一 `_id` 顺序重排，返回 `{items}` */
-  restoreSortOrder(items: Array<any>, ids: Array<any>, sort?: any | undefined | null): any
-  /** 生成插入命令；`now` / `newId` 由 Host 提供（core 无时钟与随机源） */
+  /**
+   * 生成插入命令；`now` / `newId` 由 Host 提供（core 无时钟与随机源）
+   *
+   * 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
+   */
   planInsert(model: string, data: any, now: number, newId: string, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
-  planExists(model: string, condition: any, routeOverride?: any | undefined | null): any
-  planCount(model: string, filter?: any | undefined | null, routeOverride?: any | undefined | null): any
-  planAggregate(model: string, pipeline: Array<any>, routeOverride?: any | undefined | null): any
-  /** 批量插入命令；`newIds` 按需消费（仅无 `_id` 的文档取用） */
+  /**
+   * 批量插入命令；`newIds` 按需消费（仅无 `_id` 的文档取用）
+   *
+   * 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
+   */
   planInsertMany(model: string, docs: Array<any>, now: number, newIds: Array<string>, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
   /**
    * 更新一条（findOneAndUpdate + returnDocument AFTER）。
    *
    * creator 写权限需探针时返回 `{"needsProbe": cmd}`；Host 执行探针后携
    * `probeFound`（true/false）与 `probeDoc` 重入即得 `{"command": cmd}`。
+   *
+   * 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
    */
   planUpdate(model: string, condition: any, data: any, options: any | undefined | null, now: number, ctx?: any | undefined | null, probeFound?: boolean | undefined | null, probeDoc?: any | undefined | null, routeOverride?: any | undefined | null): any
   /** 批量更新（guest / 无写授权直接拒绝，不走 creator 探针） */
@@ -94,7 +91,11 @@ export declare class Registry {
   planRemove(model: string, condition: any, ctx?: any | undefined | null, probeFound?: boolean | undefined | null, probeDoc?: any | undefined | null, routeOverride?: any | undefined | null): any
   /** 归档文档命令：源文档补 `deletedAt` 后批量写入 `<collection>_deleted` */
   planArchiveDocs(model: string, docs: Array<any>, now: number, routeOverride?: any | undefined | null): any
-  /** 显式条件 upsert；`newId` 仅在需生成 `_id` 时被使用 */
+  /**
+   * 显式条件 upsert；`newId` 仅在需生成 `_id` 时被使用
+   *
+   * 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
+   */
   planUpsert(model: string, condition: any, data: any, options: any | undefined | null, now: number, newId: string, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
   /**
    * mutation 规划：展开为有序步骤序列 `{steps: [{model, command}]}`，
@@ -106,6 +107,18 @@ export declare class Registry {
    * （对齐 JS `applyDefaultsAndComputes(result, s)`）
    */
   applyWriteDefaults(model: string, doc: any): any
+  /** 解析 GQL 并构建 pipeline / projection，返回 `{tokens, ast, pipeline, projection}` */
+  buildPipeline(gql: string, params: any, ctx?: any | undefined | null): any
+  planQuery(gql: string, params: any, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
+  /** queryOne 计划：未显式 `$limit` 时强制下推 `$limit(1)` */
+  planQueryOne(gql: string, params: any, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
+  /** 列表 + total；`total` 由 Host 执行 `countCommand` 后回喂，用于算 `hasMore` */
+  planQueryWithCount(gql: string, params: any, ctx?: any | undefined | null, total?: number | undefined | null, routeOverride?: any | undefined | null): any
+  resolvePage(gql: string, params: any): any
+  /** 两阶段查询后按阶段一 `_id` 顺序重排，返回 `{items}` */
+  restoreSortOrder(items: Array<any>, ids: Array<any>, sort?: any | undefined | null): any
+  planExists(model: string, condition: any, routeOverride?: any | undefined | null): any
+  planCount(model: string, filter?: any | undefined | null, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
   sortsByRelation(sort?: any | undefined | null): boolean
   constructor()
   /** 注册 schema（自动派生 `<Name>Deleted` 归档表；`timestamps !== false` 时补时间戳字段） */
@@ -115,8 +128,6 @@ export declare class Registry {
   /** 注册同步计算列回调（schema 里 `fn: true` 的 `fnRef`，缺省为计算列名） */
   setFn(fnRef: string, callback: (arg: any) => any): void
   clearFns(): void
-  /** 开关用户 $pipeline 直通（默认允许；AI 查询宿主建议关闭作纵深防御） */
-  setAllowUserPipeline(allow: boolean): void
   /**
    * 开关「上下文强制」（默认关闭 = fail-open，保持 JS parity）。
    * 开启后：plan 入口遇 `ctx` 缺失抛 `ERR_NO_CONTEXT`（fail-secure），

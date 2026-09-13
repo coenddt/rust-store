@@ -10,7 +10,9 @@ use crate::dialect::Backend;
 
 mod aggregate;
 mod find;
+mod group_agg;
 mod lookup_join;
+mod relation_agg;
 
 use aggregate::translate_aggregate;
 use find::translate_find;
@@ -123,6 +125,54 @@ pub(in crate::dialect::select) fn projection_fields(
     }
 }
 
+/// 投影可用性校验：显式请求 schema 声明的 `object`/`array` 字段时，
+/// SQL 侧无对应列（对象/数组不建列）→ 显式 `Err`，**绝不静默返回残缺行**（D2：绝不静默）。
+///
+/// 仅校验**显式请求**的字段：`projection = None`（全字段）维持既有「跳过」语义，
+/// 避免影响内部全字段取数（关系目标展开等）。
+/// 识别 `$count:"<f>"` 生成的「非空计数」形态：
+/// `{"$cond":[{"$eq":[{"$ifNull":["$f", null]}, null]}, 0, 1]}`
+///
+/// 根级 `$group`（`group_agg.rs`）与关系聚合谓词（`relation_agg.rs`）共用同一形态识别。
+pub(super) fn count_field_pattern(v: &Value) -> Option<String> {
+    let arr = v.get("$cond")?.as_array()?;
+    if arr.len() != 3 {
+        return None;
+    }
+    let cond = arr[0].get("$eq")?.as_array()?;
+    let if_null = cond.first()?.get("$ifNull")?.as_array()?;
+    let f = if_null.first()?.as_str()?;
+    if cond.get(1)?.is_null() && arr[1].as_i64()? == 0 && arr[2].as_i64()? == 1 {
+        return f.strip_prefix('$').map(|x| x.to_string());
+    }
+    None
+}
+
+pub(in crate::dialect::select) fn check_projection_supported(
+    schema: &Schema,
+    projection: Option<&Value>,
+) -> Result<(), String> {
+    let Some(o) = projection.and_then(|p| p.as_object()) else {
+        return Ok(());
+    };
+    for (k, v) in o {
+        let requested = v.as_i64().map(|n| n != 0).unwrap_or(false) || v.as_bool() == Some(true);
+        if !requested || k == "_id" {
+            continue;
+        }
+        // 关系名与计算列不是真实列，交由关系 JOIN / 派生表处理，不在本检查范围
+        if schema.relations.contains_key(k.as_str()) || schema.compute(k).is_some() {
+            continue;
+        }
+        if super::scalar_column(schema, k).is_none() {
+            return Err(format!(
+                "SQL 后端不支持投影 object/array 字段 \"{k}\"（无对应列；D2：绝不静默返回残缺结果）"
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(in crate::dialect::select) fn q(backend: Backend, ident: &str) -> String {
     backend.quote_ident(ident)
 }
@@ -130,4 +180,57 @@ pub(in crate::dialect::select) fn q(backend: Backend, ident: &str) -> String {
 /// 表名 SQL：带 schema.namespace 限定（区别于列/别名的 `q`）
 pub(in crate::dialect::select) fn tname(backend: Backend, schema: &Schema) -> String {
     backend.qualified_table(schema.ns(), &schema.collection)
+}
+
+/// LIMIT/OFFSET 子句（含绑定参数），`param_seq` 为占位序号游标。
+///
+/// 仅 offset（无 limit）时没有跨后端统一写法，必须按后端生成合法惯用法（评测 M-8-1）：
+/// PostgreSQL 省略 LIMIT 只写 OFFSET；MySQL 用超大 LIMIT 表示「取到末尾」；SQLite 用 `LIMIT -1`。
+pub(in crate::dialect::select) fn limit_offset_sql(
+    backend: Backend,
+    limit: Option<i64>,
+    offset: i64,
+    param_seq: &mut usize,
+) -> (String, Vec<Value>) {
+    let mut sql = String::new();
+    let mut params: Vec<Value> = Vec::new();
+    if let Some(lim) = limit {
+        match backend {
+            Backend::Postgres => {
+                sql = format!(" LIMIT ${}", *param_seq + 1);
+                *param_seq += 1;
+                params.push(json!(lim));
+                if offset > 0 {
+                    sql.push_str(&format!(" OFFSET ${}", *param_seq + 1));
+                    params.push(json!(offset));
+                }
+            }
+            _ => {
+                if offset > 0 {
+                    sql = " LIMIT ? OFFSET ?".to_string();
+                    params.push(json!(lim));
+                    params.push(json!(offset));
+                } else {
+                    sql = " LIMIT ?".to_string();
+                    params.push(json!(lim));
+                }
+            }
+        }
+    } else if offset > 0 {
+        match backend {
+            Backend::Postgres => {
+                sql = format!(" OFFSET ${}", *param_seq + 1);
+                params.push(json!(offset));
+            }
+            Backend::Mysql => {
+                sql = " LIMIT 18446744073709551615 OFFSET ?".to_string();
+                params.push(json!(offset));
+            }
+            Backend::Sqlite => {
+                sql = " LIMIT -1 OFFSET ?".to_string();
+                params.push(json!(offset));
+            }
+        }
+    }
+    (sql, params)
 }

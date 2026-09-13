@@ -7,8 +7,7 @@
  * 与其黄金基准，逐条深比较 Rust 绑定层的输出——语义与 core/tests/parity*.rs 完全一致：
  *   - pipeline   : `buildPipeline` 的 tokens / ast / pipeline / projection
  *   - commands   : `planQuery` / `planQueryWithCount` / `resolvePage` /
- *                  `restoreSortOrder` / `planInsert` / `planExists` / `planCount` /
- *                  `planAggregate`
+ *                  `restoreSortOrder` / `planInsert` / `planExists` / `planCount`
  *   - computes   : `processNode` / `injectDepends` + `stripDepInjected` / `permission.*`
  *   - fnfns      : 同步 fn 走 `setFn` 回调桥；asyncFn 由 Host 执行
  *                  （`asyncFnRefs` 取标识，`prepareQuery` + `stripQuery` 两段式）
@@ -234,9 +233,6 @@ function runCommandCase(reg, fx) {
 
     case 'count':
       return { command: reg.planCount(fx.model || '', fx.filter ?? null) };
-
-    case 'aggregate':
-      return { command: reg.planAggregate(fx.model || '', fx.pipeline || []) };
 
     default:
       // 写路径用例走 replayWriteCase（对齐 parity_write.rs 的 Host 模拟执行）
@@ -530,34 +526,3 @@ test('core-node: 非法 GQL / 未注册 model 以异常抛出', () => {
   );
 });
 
-// ─── 用户 $pipeline 开关（Registry 级守卫） ─────────────────
-
-test('core-node: setAllowUserPipeline 禁用后 planQuery/planFederated 报错，重开恢复', () => {
-  const make = () => {
-    const reg = new Registry();
-    reg.register({
-      name: 'Post',
-      collection: 'posts',
-      timestamps: false,
-      fields: { title: { type: 'string' } },
-      relations: {},
-    });
-    return reg;
-  };
-  const gql = 'Post($pipeline:@p){ title }';
-  const params = { p: [{ $match: {} }] };
-
-  // 默认放行
-  const reg0 = make();
-  assert.doesNotThrow(() => reg0.planQuery(gql, params, null));
-
-  // 关闭后：单库 + 联邦均显式报错
-  const reg = make();
-  reg.setAllowUserPipeline(false);
-  assert.throws(() => reg.planQuery(gql, params, null), /已被禁用/);
-  assert.throws(() => reg.planFederated(gql, params, null), /已被禁用/);
-
-  // 重新打开恢复
-  reg.setAllowUserPipeline(true);
-  assert.doesNotThrow(() => reg.planQuery(gql, params, null));
-});

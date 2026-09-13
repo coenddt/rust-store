@@ -146,42 +146,27 @@
     "context": null
   },
   {
-    "name": "compute-lookup",
+    "name": "compute-agg",
     "schemas": [
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": { "shopId": { "type": "string" }, "amount": { "type": "number" } },
+        "relations": {}
+      },
       {
         "name": "Shop", "collection": "shops", "timestamps": false,
         "fields": { "name": { "type": "string" } },
-        "computes": {
-          "orderCount": {
-            "type": "int",
-            "lookup": {
-              "from": "orders",
-              "let": { "sid": "$_id" },
-              "pipeline": [{ "$match": { "$expr": { "$eq": ["$shopId", "$$sid"] } } }],
-              "as": "_orders"
-            },
-            "addFields": { "$size": { "$ifNull": ["$_orders", []] } }
-          },
-          "label": { "type": "string", "lookup": { "$concat": ["$name", "!"] } }
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "shopId" }
         },
-        "relations": {}
+        "computes": {
+          "orderCount": { "type": "int", "agg": { "$count": "orders" } },
+          "totalAmount": { "type": "number", "agg": { "$sum": "orders.amount" } }
+        }
       }
     ],
-    "gql": "Shop{name, orderCount, label}",
+    "gql": "Shop{name, orderCount, totalAmount}",
     "params": {},
-    "context": null
-  },
-  {
-    "name": "custom-pipeline",
-    "schemas": [
-      { "name": "X", "collection": "xs", "timestamps": false, "fields": { "a": { "type": "int" } }, "relations": {} }
-    ],
-    "gql": "X($pipeline:@p,$sort:@s,$limit:@l){a}",
-    "params": {
-      "p": [{ "$match": { "a": { "$gt": 1 } } }, { "$group": { "_id": null, "n": { "$sum": 1 } } }],
-      "s": { "a": 1 },
-      "l": 3
-    },
     "context": null
   },
   {
@@ -245,6 +230,598 @@
     ],
     "gql": "M{$condition:",
     "params": {},
+    "context": null,
+    "expect_error": true
+  },
+  {
+    "name": "group-single-key-multi-agg",
+    "schemas": [
+      {
+        "name": "Course", "collection": "courses", "timestamps": false,
+        "fields": {
+          "status": { "type": "string" },
+          "price": { "type": "number" },
+          "rating": { "type": "float" },
+          "paidAt": { "type": "string" },
+          "meta": { "type": "object", "fields": { "level": { "type": "string" } } }
+        },
+        "relations": {
+          "lessons": { "model": "Lesson", "type": "many", "localField": "_id", "foreignField": "courseId" }
+        }
+      },
+      {
+        "name": "Lesson", "collection": "lessons", "timestamps": false,
+        "fields": { "courseId": { "type": "string" }, "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Course($condition:@c0,$group:@g0){ status, n, total }",
+    "params": {
+      "c0": { "status": "published" },
+      "g0": { "by": ["status"], "agg": {
+        "n": { "$count": "*" },
+        "total": { "$sum": "price" },
+        "avgRate": { "$avg": "rating" }
+      } }
+    },
+    "context": null
+  },
+  {
+    "name": "group-multi-key-dotted",
+    "schemas": [
+      {
+        "name": "Course", "collection": "courses", "timestamps": false,
+        "fields": {
+          "status": { "type": "string" },
+          "price": { "type": "number" },
+          "rating": { "type": "float" },
+          "paidAt": { "type": "string" },
+          "meta": { "type": "object", "fields": { "level": { "type": "string" } } }
+        },
+        "relations": {
+          "lessons": { "model": "Lesson", "type": "many", "localField": "_id", "foreignField": "courseId" }
+        }
+      },
+      {
+        "name": "Lesson", "collection": "lessons", "timestamps": false,
+        "fields": { "courseId": { "type": "string" }, "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Course($group:@g0){ status, meta.level, n }",
+    "params": {
+      "g0": { "by": ["status", "meta.level"], "agg": {
+        "n": { "$count": "*" },
+        "paid": { "$count": "paidAt" }
+      } }
+    },
+    "context": null
+  },
+  {
+    "name": "group-having-sort-limit",
+    "schemas": [
+      {
+        "name": "Course", "collection": "courses", "timestamps": false,
+        "fields": {
+          "status": { "type": "string" },
+          "price": { "type": "number" },
+          "rating": { "type": "float" },
+          "paidAt": { "type": "string" },
+          "meta": { "type": "object", "fields": { "level": { "type": "string" } } }
+        },
+        "relations": {
+          "lessons": { "model": "Lesson", "type": "many", "localField": "_id", "foreignField": "courseId" }
+        }
+      },
+      {
+        "name": "Lesson", "collection": "lessons", "timestamps": false,
+        "fields": { "courseId": { "type": "string" }, "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Course($group:@g0,$having:@h0,$sort:@s0,$limit:@l0){ status, n, total }",
+    "params": {
+      "g0": { "by": ["status"], "agg": {
+        "n": { "$count": "*" },
+        "total": { "$sum": "price" }
+      } },
+      "h0": { "n": { "$gt": 1 } },
+      "s0": { "total": -1 },
+      "l0": 10
+    },
+    "context": null
+  },
+  {
+    "name": "group-all-rows",
+    "schemas": [
+      {
+        "name": "Course", "collection": "courses", "timestamps": false,
+        "fields": {
+          "status": { "type": "string" },
+          "price": { "type": "number" },
+          "meta": { "type": "object", "fields": { "level": { "type": "string" } } }
+        },
+        "relations": {
+          "lessons": { "model": "Lesson", "type": "many", "localField": "_id", "foreignField": "courseId" }
+        }
+      },
+      {
+        "name": "Lesson", "collection": "lessons", "timestamps": false,
+        "fields": { "courseId": { "type": "string" }, "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Course($group:@g0){ n, total }",
+    "params": {
+      "g0": { "agg": { "n": { "$count": "*" }, "total": { "$sum": "price" } } }
+    },
+    "context": null
+  },
+  {
+    "name": "error-group-by-relation",
+    "schemas": [
+      {
+        "name": "Course", "collection": "courses", "timestamps": false,
+        "fields": { "status": { "type": "string" } },
+        "relations": {
+          "lessons": { "model": "Lesson", "type": "many", "localField": "_id", "foreignField": "courseId" }
+        }
+      },
+      {
+        "name": "Lesson", "collection": "lessons", "timestamps": false,
+        "fields": { "courseId": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Course($group:@g0){ status, n }",
+    "params": { "g0": { "by": ["lessons"], "agg": { "n": { "$count": "*" } } } },
+    "context": null,
+    "expect_error": true
+  },
+  {
+    "name": "error-group-agg-unknown-field",
+    "schemas": [
+      {
+        "name": "Course", "collection": "courses", "timestamps": false,
+        "fields": { "status": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Course($group:@g0){ status, n }",
+    "params": { "g0": { "by": ["status"], "agg": { "n": { "$sum": "nope" } } } },
+    "context": null,
+    "expect_error": true
+  },
+  {
+    "name": "error-group-having-unknown-field",
+    "schemas": [
+      {
+        "name": "Course", "collection": "courses", "timestamps": false,
+        "fields": { "status": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Course($group:@g0,$having:@h0){ status, n }",
+    "params": {
+      "g0": { "by": ["status"], "agg": { "n": { "$count": "*" } } },
+      "h0": { "bogus": { "$gt": 1 } }
+    },
+    "context": null,
+    "expect_error": true
+  },
+  {
+    "name": "error-group-select-undeclared",
+    "schemas": [
+      {
+        "name": "Course", "collection": "courses", "timestamps": false,
+        "fields": { "status": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Course($group:@g0){ status, missing }",
+    "params": { "g0": { "by": ["status"], "agg": { "n": { "$count": "*" } } } },
+    "context": null,
+    "expect_error": true
+  },
+  {
+    "name": "rel-exists-true",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" }, "status": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": {
+          "productId": { "type": "string" }, "status": { "type": "string" },
+          "amount": { "type": "float" }, "paidAt": { "type": "string" }, "tags": { "type": "array" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "orders": { "$exists": true } } },
+    "context": null
+  },
+  {
+    "name": "rel-exists-false",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" }, "status": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": {
+          "productId": { "type": "string" }, "status": { "type": "string" },
+          "amount": { "type": "float" }, "paidAt": { "type": "string" }, "tags": { "type": "array" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "orders": { "$exists": false } } },
+    "context": null
+  },
+  {
+    "name": "rel-count-gt",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" }, "status": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": {
+          "productId": { "type": "string" }, "status": { "type": "string" },
+          "amount": { "type": "float" }, "paidAt": { "type": "string" }, "tags": { "type": "array" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "orders": { "$count": { "$gt": 3 } } } },
+    "context": null
+  },
+  {
+    "name": "rel-count-of",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" }, "status": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": {
+          "productId": { "type": "string" }, "status": { "type": "string" },
+          "amount": { "type": "float" }, "paidAt": { "type": "string" }, "tags": { "type": "array" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "orders": { "$count": { "$of": "paidAt", "$gte": 4 } } } },
+    "context": null
+  },
+  {
+    "name": "rel-sum",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" }, "status": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": {
+          "productId": { "type": "string" }, "status": { "type": "string" },
+          "amount": { "type": "float" }, "paidAt": { "type": "string" }, "tags": { "type": "array" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "orders": { "$sum": { "$of": "amount", "$gt": 1000 } } } },
+    "context": null
+  },
+  {
+    "name": "rel-anti-not",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" }, "status": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": {
+          "productId": { "type": "string" }, "status": { "type": "string" },
+          "amount": { "type": "float" }, "paidAt": { "type": "string" }, "tags": { "type": "array" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "$not": { "orders": { "$count": { "$gt": 3 } } } } },
+    "context": null
+  },
+  {
+    "name": "rel-child-filter",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" }, "status": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": {
+          "productId": { "type": "string" }, "status": { "type": "string" },
+          "amount": { "type": "float" }, "paidAt": { "type": "string" }, "tags": { "type": "array" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "orders": { "$filter": { "status": "paid" }, "$count": { "$gt": 3 } } } },
+    "context": null
+  },
+  {
+    "name": "rel-main-form",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" }, "status": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": {
+          "productId": { "type": "string" }, "status": { "type": "string" },
+          "amount": { "type": "float" }, "paidAt": { "type": "string" }, "tags": { "type": "array" }
+        },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": {
+      "c0": { "$and": [
+        { "status": "onSale" },
+        { "orders": {
+            "filter": { "status": "paid" },
+            "agg": { "n": { "$count": "*" }, "amt": { "$sum": "amount" } },
+            "having": { "n": { "$gt": 3 }, "amt": { "$gte": 1000 } }
+        } }
+      ] }
+    },
+    "context": null
+  },
+  {
+    "name": "rel-multi-relation",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" }, "status": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" },
+          "reviews": { "model": "Review", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": {
+          "productId": { "type": "string" }, "status": { "type": "string" },
+          "amount": { "type": "float" }, "paidAt": { "type": "string" }, "tags": { "type": "array" }
+        },
+        "relations": {}
+      },
+      {
+        "name": "Review", "collection": "reviews", "timestamps": false,
+        "fields": { "productId": { "type": "string" }, "rating": { "type": "int" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": {
+      "c0": { "$and": [
+        { "status": "onSale" },
+        { "orders": { "$count": { "$gt": 3 } } },
+        { "reviews": { "$exists": true } }
+      ] }
+    },
+    "context": null
+  },
+  {
+    "name": "error-rel-having-out-of-range",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": { "productId": { "type": "string" }, "amount": { "type": "float" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "orders": { "agg": { "n": { "$count": "*" } }, "having": { "bogus": { "$gt": 1 } } } } },
+    "context": null,
+    "expect_error": true
+  },
+  {
+    "name": "error-rel-main-missing-agg",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": { "productId": { "type": "string" }, "amount": { "type": "float" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "orders": { "having": { "n": { "$gt": 1 } } } } },
+    "context": null,
+    "expect_error": true
+  },
+  {
+    "name": "error-rel-unreadable",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "orders": {
+            "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId",
+            "read": ["admin"]
+          }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": { "productId": { "type": "string" }, "amount": { "type": "float" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "orders": { "$exists": true } } },
+    "context": { "userId": "u1", "roles": ["editor"] },
+    "expect_error": true
+  },
+  {
+    "name": "error-rel-second-level-path",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": { "productId": { "type": "string" }, "amount": { "type": "float" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "orders.items": { "$exists": true } } },
+    "context": null,
+    "expect_error": true
+  },
+  {
+    "name": "error-rel-filter-unknown-field",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": { "productId": { "type": "string" }, "amount": { "type": "float" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "orders": { "$filter": { "nope": 1 }, "$count": { "$gt": 1 } } } },
+    "context": null,
+    "expect_error": true
+  },
+  {
+    "name": "error-rel-filter-array-field",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": { "productId": { "type": "string" }, "tags": { "type": "array" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "orders": { "$filter": { "tags": "x" }, "$count": { "$gt": 1 } } } },
+    "context": null,
+    "expect_error": true
+  },
+  {
+    "name": "error-rel-simple-multi-predicate",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": { "productId": { "type": "string" }, "amount": { "type": "float" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0){ name }",
+    "params": { "c0": { "orders": { "$count": { "$gt": 1 }, "$sum": { "$of": "amount", "$gt": 1 } } } },
+    "context": null,
+    "expect_error": true
+  },
+  {
+    "name": "error-rel-group-conflict",
+    "schemas": [
+      {
+        "name": "Product", "collection": "products", "timestamps": false,
+        "fields": { "name": { "type": "string" }, "status": { "type": "string" } },
+        "relations": {
+          "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "productId" }
+        }
+      },
+      {
+        "name": "Order", "collection": "orders", "timestamps": false,
+        "fields": { "productId": { "type": "string" }, "amount": { "type": "float" } },
+        "relations": {}
+      }
+    ],
+    "gql": "Product($condition:@c0,$group:@g0){ status, n }",
+    "params": {
+      "c0": { "orders": { "$exists": true } },
+      "g0": { "by": ["status"], "agg": { "n": { "$count": "*" } } }
+    },
     "context": null,
     "expect_error": true
   }

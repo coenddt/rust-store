@@ -70,8 +70,19 @@ pub struct RowCol {
     pub is_array: bool,
     /// 是否为 `one` 关系（LEFT JOIN 后还原为对象或 `null`，而非数组）
     pub one: bool,
+    /// 沿 `json_path` 每一级关系的基数（`true` = `one`）。长度 = 关系级数
+    /// （`json_path.len() - 1`）；根标量列为空。嵌套关系靠它逐级决定「对象 / 数组」。
+    pub ones: Vec<bool>,
     /// 若为空：标量直接取该列；若非空：构造子文档
     pub sub_shape: Option<RowShape>,
+    /// 值恒「存在」：为 `null` 时也强制写入（不依赖 `__present` 哨兵）。用于归一聚合
+    /// 计算列（§9.2(2)）—— 空集 `$sum/$avg/$min/$max` 的语义是显式 `null`（§9.7），
+    /// 与 Mongo 输出逐行对齐。
+    pub always: bool,
+    /// §9.7「布尔归一」：该输出列对应 schema 的 `boolean` 字段 → 行还原时把 SQL 的
+    /// `0/1` 归一为 JSON `bool`（对齐 Mongo；PG 原生 `BOOLEAN` 已是 bool，归一为 no-op）。
+    /// 依据**schema 声明类型**而非驱动元数据，故对任意用户 DDL 都成立。
+    pub is_bool: bool,
 }
 
 impl RowShape {
@@ -92,7 +103,10 @@ impl RowShape {
                     "path": c.json_path,
                     "isArray": c.is_array,
                     "one": c.one,
+                    "ones": c.ones,
                     "subShape": c.sub_shape.as_ref().map(|s| s.to_value()).unwrap_or(Value::Null),
+                    "always": c.always,
+                    "bool": c.is_bool,
                 })
             })
             .collect();
@@ -110,7 +124,31 @@ impl RowCol {
             json_path: path.iter().map(|s| s.to_string()).collect(),
             is_array: false,
             one: false,
+            ones: Vec::new(),
             sub_shape: None,
+            always: false,
+            is_bool: false,
+        }
+    }
+
+    /// 标量列 + 布尔标记（§9.7）：来自 schema `boolean` 字段的输出列
+    pub fn scalar_bool(alias: &str, path: &[&str], is_bool: bool) -> Self {
+        let mut c = RowCol::scalar(alias, path);
+        c.is_bool = is_bool;
+        c
+    }
+
+    /// 归一聚合计算列（§9.2(2)）：根标量，且 `null` 也强制写入（见 [`RowCol::always`]）
+    pub fn computed(alias: &str, path: &[&str]) -> Self {
+        RowCol {
+            alias: alias.to_string(),
+            json_path: path.iter().map(|s| s.to_string()).collect(),
+            is_array: false,
+            one: false,
+            ones: Vec::new(),
+            sub_shape: None,
+            always: true,
+            is_bool: false,
         }
     }
 
@@ -120,7 +158,10 @@ impl RowCol {
             json_path: vec![alias.to_string()],
             is_array: true,
             one: false,
+            ones: vec![false],
             sub_shape: Some(sub_shape),
+            always: false,
+            is_bool: false,
         }
     }
 }

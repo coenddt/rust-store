@@ -13,6 +13,29 @@ pub(crate) fn param<'a>(params: &'a Map<String, Value>, r: Option<&String>) -> O
     params.get(key)
 }
 
+/// 收集 `$having` 引用的聚合别名（含 `$and` / `$or` / `$nor` 内部）；
+/// `is_agg` 判定某键是否为本块聚合别名（根级 `$group` 与关系聚合谓词共用同一遍历）。
+pub(crate) fn collect_having_agg_refs(
+    having: &Value,
+    is_agg: &dyn Fn(&str) -> bool,
+    out: &mut std::collections::HashSet<String>,
+) {
+    let Some(m) = having.as_object() else {
+        return;
+    };
+    for (k, v) in m {
+        if matches!(k.as_str(), "$and" | "$or" | "$nor") {
+            if let Some(arr) = v.as_array() {
+                for it in arr {
+                    collect_having_agg_refs(it, is_agg, out);
+                }
+            }
+        } else if !k.starts_with('$') && is_agg(k) {
+            out.insert(k.clone());
+        }
+    }
+}
+
 /// JS `x != null`：undefined / null 均视为缺席
 pub(crate) fn is_nullish(v: Option<&Value>) -> bool {
     match v {
@@ -29,12 +52,6 @@ pub(crate) fn is_nullish(v: Option<&Value>) -> bool {
 /// 由 `Option` 携带值，前提不再靠人工维护。
 pub(crate) fn non_nullish(v: Option<&Value>) -> Option<&Value> {
     v.filter(|x| !x.is_null())
-}
-
-pub(super) fn find_stage_idx(stages: &[Value], key: &str) -> Option<usize> {
-    stages
-        .iter()
-        .position(|s| s.as_object().map(|o| o.contains_key(key)).unwrap_or(false))
 }
 
 /// 按序追加 $sort/$skip/$limit

@@ -114,25 +114,6 @@
   },
   {
     "kind": "query",
-    "name": "q-custom-pipeline",
-    "schemas": [
-      {
-        "name": "Post", "collection": "posts", "timestamps": false,
-        "fields": { "title": { "type": "string" }, "status": { "type": "string" } },
-        "relations": {}
-      }
-    ],
-    "gql": "Post($pipeline:@p,$condition:@c0,$sort:@s0,$limit:@l){title}",
-    "params": {
-      "p": [{ "$match": { "status": "x" } }],
-      "c0": { "status": "y" },
-      "s0": { "title": 1 },
-      "l": 3
-    },
-    "context": null
-  },
-  {
-    "kind": "query",
     "name": "q-owner-inject",
     "schemas": [
       {
@@ -388,22 +369,6 @@
     ],
     "model": "Post",
     "filter": { "status": "draft" }
-  },
-  {
-    "kind": "aggregate",
-    "name": "agg-raw-pipeline",
-    "schemas": [
-      {
-        "name": "Post", "collection": "posts", "timestamps": false,
-        "fields": { "title": { "type": "string" } },
-        "relations": {}
-      }
-    ],
-    "model": "Post",
-    "pipeline": [
-      { "$match": { "status": "draft" } },
-      { "$group": { "_id": "$title", "n": { "$sum": 1 } } }
-    ]
   },
   {
     "kind": "insert_many",

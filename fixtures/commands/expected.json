@@ -401,39 +401,6 @@
     }
   },
   {
-    "name": "q-custom-pipeline",
-    "kind": "query",
-    "result": {
-      "collection": "posts",
-      "mode": "custom_pipeline",
-      "commands": [
-        {
-          "kind": "aggregate",
-          "collection": "posts",
-          "pipeline": [
-            {
-              "$match": {
-                "status": "y"
-              }
-            },
-            {
-              "$sort": {
-                "title": 1
-              }
-            },
-            {
-              "$limit": 3
-            }
-          ],
-          "source": "default",
-          "namespace": null
-        }
-      ],
-      "postprocess": null,
-      "sort": null
-    }
-  },
-  {
     "name": "q-owner-inject",
     "kind": "query",
     "result": {
@@ -873,7 +840,8 @@
           "_id": "P-CUSTOM",
           "title": "x",
           "createdAt": 1700000000000,
-          "updatedAt": 1700000000000
+          "updatedAt": 1700000000000,
+          "views": null
         },
         "source": "default",
         "namespace": null
@@ -972,33 +940,6 @@
     }
   },
   {
-    "name": "agg-raw-pipeline",
-    "kind": "aggregate",
-    "result": {
-      "command": {
-        "kind": "aggregate",
-        "collection": "posts",
-        "pipeline": [
-          {
-            "$match": {
-              "status": "draft"
-            }
-          },
-          {
-            "$group": {
-              "_id": "$title",
-              "n": {
-                "$sum": 1
-              }
-            }
-          }
-        ],
-        "source": "default",
-        "namespace": null
-      }
-    }
-  },
-  {
     "name": "im-basic",
     "kind": "insert_many",
     "result": {
@@ -1052,7 +993,8 @@
             "_id": "P1",
             "title": "a",
             "createdAt": 1700000000000,
-            "updatedAt": 1700000000000
+            "updatedAt": 1700000000000,
+            "views": null
           },
           {
             "title": "b",

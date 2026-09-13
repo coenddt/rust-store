@@ -365,6 +365,7 @@ fn prune_dot_subfields(doc: &mut Value, dot_fields: &[(String, Vec<String>)]) {
 /// 5. 递归下钻
 /// 6. 权限裁剪
 /// 7. 裁剪字段
+// 文档后处理需同时携带 schema / registry / ctx / 关系路径等上下文，拆结构体收益低
 #[allow(clippy::too_many_arguments)]
 pub fn process_node(
     doc: &mut Value,

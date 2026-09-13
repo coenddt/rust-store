@@ -61,8 +61,19 @@ pub(super) fn translate_upsert(
     let phs: Vec<String> = vals.iter().map(|v| binder.bind(v.clone())).collect();
 
     // 冲突时的 SET 赋值（仅 `$set`；`$inc`/`$unset` 亦允许）
+    // PG `ON CONFLICT … DO UPDATE` 中裸 `__present` 与 `EXCLUDED` 歧义 → RHS 限定目标表
+    let present_qualifier = if backend == Backend::Postgres {
+        Some(tname(backend, schema))
+    } else {
+        None
+    };
     let set_update = json!({ "$set": update.get("$set").cloned().unwrap_or(json!({})) });
-    let assigns = build_assignments(&mut binder, schema, &set_update)?;
+    let assigns = build_assignments(
+        &mut binder,
+        schema,
+        &set_update,
+        present_qualifier.as_deref(),
+    )?;
     if assigns.is_empty() {
         return Err("upsert 无冲突更新字段".to_string());
     }
@@ -89,6 +100,7 @@ pub(super) fn translate_upsert(
         );
         vec![write_with_returning(
             backend,
+            schema,
             text,
             &returning,
             binder.params,

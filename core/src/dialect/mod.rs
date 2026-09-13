@@ -50,6 +50,22 @@ pub(crate) fn scalar_column(schema: &Schema, field: &str) -> Option<String> {
     }
 }
 
+/// §9.7「布尔归一」：schema 字段是否为布尔类型（`boolean` 规范拼写 / `bool` 简写）。
+///
+/// 判定依据是 schema 的**声明类型**（不是驱动元数据，也不是物理列类型）——SQL 侧把布尔
+/// 存成 `TINYINT(1)` / `INTEGER` / `BOOLEAN` 都可能，唯一稳定的依据是 schema。命中即由
+/// [`row::restore_rows`] 在行还原时把 `0/1` 归一为 JSON `bool`。
+///
+/// 两种拼写都接受：core 的类型文档与 introspection 产出 `boolean`，而示例/用户 schema
+/// 常写 `bool`（如场景矩阵的 `paid` / `free`），二者语义相同。
+pub(crate) fn field_is_bool(schema: &Schema, field: &str) -> bool {
+    schema
+        .fields
+        .get(field)
+        .map(|f| f.field_type.eq_ignore_ascii_case("bool") || f.field_type.eq_ignore_ascii_case("boolean"))
+        .unwrap_or(false)
+}
+
 /// 支持的数据库后端
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
@@ -74,6 +90,19 @@ impl Backend {
         match self {
             Backend::Mysql => format!("`{}`", ident.replace('`', "``")),
             _ => format!("\"{}\"", ident.replace('"', "\"\"")),
+        }
+    }
+
+    /// 双精度浮点类型名（§9.7「数值归 double」）
+    ///
+    /// `SUM/AVG` 的结果在不同后端原生精度不同：MySQL `AVG(<int 列>)` 只保留 4 位小数
+    /// （`DECIMAL(scale+4)`），PG `AVG(<int 列>)` 返回精确 `numeric`，均与 Mongo `$avg`
+    /// 的 IEEE-754 double 存在差异。故 SQL 侧 `AVG` 前先把入参 `CAST` 到双精度。
+    pub fn double_type(&self) -> &'static str {
+        match self {
+            Backend::Mysql => "DOUBLE",
+            Backend::Postgres => "DOUBLE PRECISION",
+            Backend::Sqlite => "REAL",
         }
     }
 

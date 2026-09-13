@@ -5,11 +5,12 @@
 //! 四侧可复现。此测试把输入以 JSON 内联，作断言基准（无外部 golden；原 JS 参考实现已退役，
 //! 其黄金基准为冻结快照，复算校验见 `node tools/verify-fixtures.js`）。
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use rust_store_core::dialect::{
     introspect_to_schema_json, merge_schema, restore_rows_json, translate, Backend,
 };
+use rust_store_core::pipeline::{build_pipeline, parse_gql};
 use rust_store_core::schema::Registry;
 
 fn registry_with(schemas: &[Value]) -> Registry {
@@ -163,11 +164,13 @@ fn dialect_translate_supported_aggregate_has_no_unsupported() {
     );
 }
 
-/// `$lookup` 子 `$limit`（每父 top-N，需 LATERAL/窗口函数）→ 标记 `childLimit`，
-/// 且**不得**下推该 JOIN（否则会静默返回未截断的子集）。
+/// `$lookup` 子 `$limit`（每父 top-N）→ **窗口函数下推**
+/// （`ROW_NUMBER() OVER (PARTITION BY <fk> ORDER BY …)`），不再标记 `childLimit` 不支持；
+/// 跨后端 SQL 归一后语义一致。
 #[test]
-fn dialect_translate_child_limit_marked_unsupported() {
+fn dialect_translate_child_limit_pushed_down_as_window() {
     let registry = registry_with(&schemas());
+    let mut base: Option<String> = None;
     for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
         let out = translate(
             backend,
@@ -184,42 +187,33 @@ fn dialect_translate_child_limit_marked_unsupported() {
         )
         .expect("translate");
 
-        let unsupported = out
-            .get("unsupported")
-            .and_then(|v| v.as_array())
-            .expect("unsupported 数组");
         assert_eq!(
-            unsupported.len(),
-            1,
-            "[{:?}] 应恰一条 unsupported: {}",
+            out.get("unsupported")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len()),
+            Some(0),
+            "[{:?}] 子 limit 应已下推（无 unsupported）: {}",
             backend,
             out
         );
-        assert_eq!(
-            unsupported[0].get("code").and_then(|v| v.as_str()),
-            Some("childLimit"),
-            "[{:?}] code 应为 childLimit: {}",
-            backend,
-            out
-        );
-        // 不得包含对该子表的 JOIN（否则会返回未截断的子集）
         let text = out["stmts"][0]["text"].as_str().unwrap_or("");
         assert!(
-            !text.contains("JOIN"),
-            "[{:?}] 不应下推子 limit 的 JOIN: {}",
+            text.contains("ROW_NUMBER() OVER (PARTITION BY"),
+            "[{:?}] 应下推为窗口函数: {}",
             backend,
             text
         );
-        // 警告必须同时给出（Host 可读）
         assert!(
-            !out.get("warnings")
-                .and_then(|v| v.as_array())
-                .unwrap_or(&vec![])
-                .is_empty(),
-            "[{:?}] 应同时给 warning: {}",
+            text.contains("JOIN"),
+            "[{:?}] 应下推子表 JOIN: {}",
             backend,
-            out
+            text
         );
+        let norm = normalize(text);
+        match &base {
+            None => base = Some(norm),
+            Some(b) => assert_eq!(&norm, b, "[{:?}] 跨后端窗口下推 SQL 不一致", backend),
+        }
     }
 }
 
@@ -696,5 +690,451 @@ fn dialect_aggregate_sort_by_relation_uses_join_alias() {
     assert!(
         text.contains("ORDER BY t.\"amount\" DESC"),
         "标量排序应保持: {text}"
+    );
+}
+
+// ─── §9.2(1) 根级 `$group` / `$having` 的 SQL 下推 ───────────────
+
+/// `$group`（单键 by + 多 agg）→ `GROUP BY` + 聚合列；跨后端 SQL 归一后一致。
+#[test]
+fn dialect_aggregate_group_sql_parity() {
+    let registry = registry_with(&schemas());
+    let cmd = json!({ "kind": "aggregate", "collection": "posts", "pipeline": [
+        { "$match": { "status": "draft" } },
+        { "$group": { "_id": "$status", "n": { "$sum": 1 }, "total": { "$sum": "$views" } } },
+        { "$project": { "_id": 0, "n": 1, "status": "$_id", "total": 1 } }
+    ] });
+
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let out = translate(backend, &cmd, &registry).expect("group translate");
+        assert_eq!(
+            out["unsupported"].as_array().map(|a| a.len()),
+            Some(0),
+            "[{backend:?}] 可下推的分组聚合不应产生 unsupported: {out}"
+        );
+        let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.contains("COUNT(*)"),
+            "[{backend:?}] 应为 COUNT(*): {text}"
+        );
+        assert!(
+            text.contains("GROUP BY t.\"status\"") || text.contains("GROUP BY t.`status`"),
+            "[{backend:?}] 应按分组键 GROUP BY: {text}"
+        );
+        assert!(
+            text.contains("SUM("),
+            "[{backend:?}] 应为 SUM 聚合列: {text}"
+        );
+    }
+    assert_sql_parity("aggregate-group", &cmd);
+
+    // 行还原：分组结果无 `_id` 列 → 每行独立成篇（不得合并成一篇）
+    let out = translate(Backend::Sqlite, &cmd, &registry).expect("group translate");
+    let shape = out["stmts"][0]["rowShape"].clone();
+    let rows = json!([
+        { "b0": "draft", "a0": 3, "a1": 42 },
+        { "b0": "published", "a0": 7, "a1": null },
+    ]);
+    let restored = restore_rows_json(&shape, &rows).expect("restore");
+    let arr = restored.as_array().expect("数组");
+    assert_eq!(arr.len(), 2, "分组结果每行一篇文档: {restored}");
+    assert_eq!(arr[0].get("status"), Some(&json!("draft")));
+    assert_eq!(arr[0].get("n"), Some(&json!(3)));
+    // 空集语义（§9.7）：`$sum` → 显式 null（而非缺失键）
+    assert_eq!(arr[1].get("total"), Some(&Value::Null), "{restored}");
+}
+
+/// `$having` → `HAVING`（重复聚合表达式）；分组后 `$sort` → `ORDER BY`（照 by/agg 域解析）；
+/// `$limit` → `LIMIT`。
+#[test]
+fn dialect_aggregate_group_having_sort_limit() {
+    let registry = registry_with(&schemas());
+    let cmd = json!({ "kind": "aggregate", "collection": "posts", "pipeline": [
+        { "$group": { "_id": "$status", "n": { "$sum": 1 }, "total": { "$sum": "$views" } } },
+        { "$match": { "n": { "$gt": 1 } } },
+        { "$sort": { "total": -1 } },
+        { "$limit": 10 },
+        { "$project": { "_id": 0, "status": "$_id", "n": 1, "total": 1 } }
+    ] });
+
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let out = translate(backend, &cmd, &registry).expect("group having translate");
+        assert_eq!(
+            out["unsupported"].as_array().map(|a| a.len()),
+            Some(0),
+            "[{backend:?}] {out}"
+        );
+        let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+        // HAVING 引用聚合别名 → 必须重复聚合表达式（PG 不允许 HAVING 用 SELECT 别名）
+        assert!(text.contains("HAVING COUNT(*) >"), "[{backend:?}] {text}");
+        assert!(text.contains("ORDER BY SUM("), "[{backend:?}] {text}");
+        assert!(text.contains("DESC"), "[{backend:?}] {text}");
+        assert!(text.contains("LIMIT"), "[{backend:?}] {text}");
+    }
+    assert_sql_parity("aggregate-group-having", &cmd);
+}
+
+/// `$having` / 分组后 `$sort` 引用 **by 键**：core 产出的 pipeline 是 Mongo 形态
+/// （by 键已被改写为分组 `_id` / `_id.<key>`），SQL 侧须反向映射回分组键表达式 →
+/// 「Mongo 支持 ⇒ SQL 同样支持」，不得落到「未映射列」显式 Err。
+#[test]
+fn dialect_group_having_sort_by_key_is_supported() {
+    let registry = registry_with(&schemas());
+    let cmd = json!({ "kind": "aggregate", "collection": "posts", "pipeline": [
+        { "$group": { "_id": "$status", "n": { "$sum": 1 } } },
+        { "$match": { "_id": { "$eq": "published" } } },
+        { "$sort": { "_id": 1 } },
+        { "$project": { "_id": 0, "status": "$_id", "n": 1 } }
+    ] });
+
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let out = translate(backend, &cmd, &registry).expect("group having by-key translate");
+        assert_eq!(
+            out["unsupported"].as_array().map(|a| a.len()),
+            Some(0),
+            "[{backend:?}] {out}"
+        );
+        let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.contains("HAVING t."),
+            "[{backend:?}] HAVING 应引用分组键列: {text}"
+        );
+        assert!(
+            text.contains("ORDER BY t."),
+            "[{backend:?}] ORDER BY 应引用分组键列: {text}"
+        );
+    }
+    assert_sql_parity("aggregate-group-having-by-key", &cmd);
+}
+
+/// 全表单组（`by` 省略）→ 无 `GROUP BY`；Mongo 空集护栏 `$facet`/`$replaceRoot` 对 SQL 为 no-op。
+#[test]
+fn dialect_aggregate_group_all_rows() {
+    let registry = registry_with(&schemas());
+    let cmd = json!({ "kind": "aggregate", "collection": "posts", "pipeline": [
+        { "$group": { "_id": null, "n": { "$sum": 1 }, "total": { "$sum": "$views" } } },
+        { "$facet": { "__rows": [] } },
+        { "$replaceRoot": { "newRoot": { "$ifNull": [
+            { "$arrayElemAt": ["$__rows", 0] },
+            { "_id": null, "n": 0, "total": null }
+        ] } } },
+        { "$project": { "_id": 0, "n": 1, "total": 1 } }
+    ] });
+
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let out = translate(backend, &cmd, &registry).expect("group all-rows translate");
+        let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            !text.to_uppercase().contains("GROUP BY"),
+            "[{backend:?}] 全表单组不应有 GROUP BY: {text}"
+        );
+        assert!(text.contains("COUNT(*)"), "[{backend:?}] {text}");
+    }
+    assert_sql_parity("aggregate-group-all-rows", &cmd);
+}
+
+/// 分组 by 键为 object 点号路径：SQL 关系映射未把 object 子字段落为列 → 显式报错（绝不静默）。
+/// 注：`by` 含关系名由 pipeline 规划层拒绝（见 fixtures/pipeline `error-group-by-relation`）。
+#[test]
+fn dialect_group_object_dotted_key_is_rejected() {
+    let registry = registry_with(&[json!({
+        "name": "Course", "collection": "courses", "timestamps": false,
+        "fields": {
+            "status": { "type": "string" },
+            "meta": { "type": "object", "fields": { "level": { "type": "string" } } }
+        },
+        "relations": {}
+    })]);
+    let cmd = json!({ "kind": "aggregate", "collection": "courses", "pipeline": [
+        { "$group": { "_id": { "meta": { "level": "$meta.level" } },
+                      "n": { "$sum": 1 } } },
+        { "$project": { "_id": 0, "meta.level": "$_id.meta.level", "n": 1 } }
+    ] });
+    let err = translate(Backend::Postgres, &cmd, &registry)
+        .expect_err("object 点号路径分组键在 SQL 侧必须显式报错");
+    assert!(err.contains("meta.level"), "错误应指明分组键: {err}");
+}
+
+/// 分组结果行还原：by 键点号路径 → 嵌套对象（非关系列，不得塑形为数组）。
+#[test]
+fn dialect_group_dotted_key_restores_nested_object() {
+    let shape = json!({
+        "columns": [
+            { "alias": "b0", "path": ["status"],      "isArray": false, "always": true },
+            { "alias": "b1", "path": ["meta","level"], "isArray": false, "always": true },
+            { "alias": "a0", "path": ["n"],            "isArray": false, "always": true }
+        ],
+        "present": ""
+    });
+    let rows = json!([
+        { "b0": "draft", "b1": "gold", "a0": 2 },
+        { "b0": "draft", "b1": null,   "a0": 5 },
+    ]);
+    let restored = restore_rows_json(&shape, &rows).expect("restore");
+    let arr = restored.as_array().unwrap();
+    assert_eq!(arr.len(), 2, "每行一篇: {restored}");
+    assert_eq!(
+        arr[0].get("meta").and_then(|m| m.get("level")),
+        Some(&json!("gold")),
+        "点号路径应还原为嵌套对象: {restored}"
+    );
+    assert_eq!(
+        arr[1].get("meta").and_then(|m| m.get("level")),
+        Some(&Value::Null),
+        "by 键为 null 时也应输出该键（always）: {restored}"
+    );
+}
+
+// ─── §9.6 关系聚合谓词（跨表条件过滤 / semi-join）的 SQL 下推 ─────────────
+
+/// 用 core 规划出的 Mongo pipeline 驱动 SQL 翻译（与 Mongo 侧逐一对应，端到端一致）
+fn rp_cmd(model: &str, collection: &str, c0: Value) -> Value {
+    let registry = registry_with(&schemas());
+    let mut ast = parse_gql(&format!("{model}($condition:@c0){{ _id }}")).expect("GQL 解析失败");
+    let mut params = Map::new();
+    params.insert("c0".to_string(), c0);
+    let pipeline = build_pipeline(&mut ast, &params, &registry, None).expect("build_pipeline");
+    json!({ "kind": "aggregate", "collection": collection, "pipeline": pipeline })
+}
+
+/// `$count > N` → `EXISTS (... GROUP BY fk HAVING COUNT(*) > ?)`；跨后端归一一致。
+#[test]
+fn dialect_relation_predicate_count_exists() {
+    let cmd = rp_cmd(
+        "Order",
+        "orders",
+        json!({ "items": { "$count": { "$gt": 3 } } }),
+    );
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let out = translate(backend, &cmd, &registry_with(&schemas())).expect("translate");
+        assert_eq!(
+            out["unsupported"].as_array().map(|a| a.len()),
+            Some(0),
+            "[{backend:?}] 关系谓词应完全下推: {out}"
+        );
+        let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+        let norm = normalize(text);
+        assert!(
+            norm.contains("exists (select 1 from order_items c where c.orderid = t._id"),
+            "[{backend:?}] 应为 EXISTS 相关子查询: {text}"
+        );
+        assert!(
+            norm.contains("group by c.orderid having count(*) > ?"),
+            "[{backend:?}] 应为 GROUP BY + HAVING: {text}"
+        );
+        assert!(
+            !norm.contains("join"),
+            "[{backend:?}] semi-join 不得扇出为 JOIN: {text}"
+        );
+        let params = out["stmts"][0]["params"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(params, vec![json!(3)], "[{backend:?}] {out}");
+    }
+}
+
+/// 子 `filter` + `$sum` having → `WHERE … AND … GROUP BY … HAVING SUM(…) > ?`
+#[test]
+fn dialect_relation_predicate_filter_sum_having() {
+    let cmd = rp_cmd(
+        "Order",
+        "orders",
+        json!({ "items": {
+            "filter": { "sku": "x" },
+            "agg": { "s": { "$sum": "qty" } },
+            "having": { "s": { "$gt": 10 } }
+        } }),
+    );
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let out = translate(backend, &cmd, &registry_with(&schemas())).expect("translate");
+        let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+        let norm = normalize(text);
+        assert!(
+            norm.contains("c.sku = ?"),
+            "[{backend:?}] 子 filter 应下推为子查询 WHERE: {text}"
+        );
+        assert!(
+            norm.contains("having sum(c.qty) > ?"),
+            "[{backend:?}] having 应为 HAVING SUM: {text}"
+        );
+        let params = out["stmts"][0]["params"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(params, vec![json!("x"), json!(10)], "[{backend:?}] {out}");
+    }
+}
+
+/// anti-join：`$not` 包裹关系谓词 → `NOT EXISTS`；`$exists:false` 同义。
+#[test]
+fn dialect_relation_predicate_anti_join_not_exists() {
+    for c0 in [
+        json!({ "$not": { "items": { "$count": { "$gt": 3 } } } }),
+        json!({ "items": { "$exists": false } }),
+    ] {
+        let cmd = rp_cmd("Order", "orders", c0.clone());
+        for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+            let out = translate(backend, &cmd, &registry_with(&schemas())).expect("translate");
+            let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+            let norm = normalize(text);
+            assert!(
+                norm.contains("not exists (select 1 from order_items c"),
+                "[{backend:?}] 应为 NOT EXISTS: {text}"
+            );
+            assert!(
+                !norm.contains("not not exists"),
+                "[{backend:?}] 不得双重否定: {text}"
+            );
+        }
+    }
+}
+
+/// 标量条件 + 关系谓词并存：AND 合并、参数顺序与文本一致。
+#[test]
+fn dialect_relation_predicate_with_scalar_sibling() {
+    let cmd = rp_cmd(
+        "Order",
+        "orders",
+        json!({ "$and": [ { "code": "A" }, { "items": { "$exists": true } } ] }),
+    );
+    let out = translate(Backend::Postgres, &cmd, &registry_with(&schemas())).expect("translate");
+    let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("t.\"code\" = $1") && text.contains("EXISTS (SELECT 1"),
+        "标量条件与 EXISTS 应 AND 并存: {text}"
+    );
+    assert_eq!(
+        out["stmts"][0]["params"],
+        json!(["A", 0]),
+        "标量参数在前、EXISTS 的 HAVING 参数在后: {out}"
+    );
+}
+
+// ─── §9.7 布尔归一 / PG 浮点字面量类型标注（场景矩阵暴露的两个跨后端缺口）──
+
+/// §9.7「布尔归一」：schema 的 `boolean` 字段在 SQL 侧存为 `0/1`（MySQL `TINYINT(1)`、
+/// SQLite `INTEGER`）→ 行还原必须归一为 JSON `bool`，与 PostgreSQL 原生 `BOOLEAN`、
+/// MongoDB 的 `true/false` 类型一致（否则同一逻辑字段跨后端类型漂移）。
+#[test]
+fn dialect_boolean_column_restores_as_json_bool() {
+    // `paid` 用规范拼写 `boolean`，`free` 用简写 `bool`（示例 schema 的实际写法）—— 二者同等对待
+    let registry = registry_with(&[json!({
+        "name": "Enrollment", "collection": "enrollments", "timestamps": false,
+        "fields": {
+            "paid": { "type": "boolean" }, "free": { "type": "bool" },
+            "amount": { "type": "float" }
+        },
+        "relations": {}
+    })]);
+    let cmd = json!({ "kind": "find", "collection": "enrollments", "filter": {},
+                      "projection": { "_id": 1, "paid": 1, "free": 1, "amount": 1 } });
+
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let out = translate(backend, &cmd, &registry).expect("translate");
+        let shape = &out["stmts"][0]["rowShape"];
+        let cols = shape["columns"].as_array().expect("columns");
+        for bool_col in ["paid", "free"] {
+            let c = cols
+                .iter()
+                .find(|c| c["path"] == json!([bool_col]))
+                .unwrap_or_else(|| panic!("{bool_col} 列"));
+            assert_eq!(
+                c["bool"],
+                json!(true),
+                "[{backend:?}] schema 布尔字段必须标记（含 `bool` 简写）: {shape}"
+            );
+        }
+        let amount = cols
+            .iter()
+            .find(|c| c["path"] == json!(["amount"]))
+            .expect("amount 列");
+        assert_eq!(
+            amount["bool"],
+            json!(false),
+            "[{backend:?}] 非布尔字段不得被标记: {shape}"
+        );
+    }
+
+    // 还原：MySQL/SQLite 的 0/1 → true/false；非布尔列原样透传（不误伤）
+    let shape = &translate(Backend::Sqlite, &cmd, &registry).expect("translate")["stmts"][0]
+        ["rowShape"];
+    let rows = json!([
+        { "_id": "e1", "paid": 1,    "free": 0,    "amount": 3.5, "__present": ",paid,free,amount," },
+        { "_id": "e2", "paid": 0,    "free": 1,    "amount": 4,   "__present": ",paid,free,amount," },
+        { "_id": "e3", "paid": null, "free": null, "amount": 0,   "__present": ",paid,free,amount," },
+    ]);
+    let restored = restore_rows_json(shape, &rows).expect("restore");
+    assert_eq!(
+        restored,
+        json!([
+            { "_id": "e1", "paid": true,  "free": false, "amount": 3.5 },
+            { "_id": "e2", "paid": false, "free": true,  "amount": 4 },
+            { "_id": "e3", "paid": null,  "free": null,  "amount": 0 },
+        ]),
+        "0/1 应归一为 true/false，null 保持 null，非布尔列不变: {restored}"
+    );
+
+    // PG 原生 BOOLEAN → 已是 bool，归一为 no-op
+    let pg_shape = &translate(Backend::Postgres, &cmd, &registry).expect("translate")["stmts"][0]
+        ["rowShape"];
+    let pg_rows = json!([{ "_id": "e1", "paid": true, "free": false, "amount": 3.5 }]);
+    let pg_restored = restore_rows_json(pg_shape, &pg_rows).expect("restore");
+    assert_eq!(
+        pg_restored,
+        json!([{ "_id": "e1", "paid": true, "free": false, "amount": 3.5 }])
+    );
+}
+
+/// D1 回归：PostgreSQL 由**服务端按上下文**推断 `$n` 类型 —— `int_col > $1`（值 `2.5`）
+/// 会被推断为 `integer`，执行期报 `invalid input syntax for type integer: "2.5"`。
+/// core 对 PG 的非整数字面量显式标注 `CAST($n AS double precision)`，与 py 宿主 asyncpg
+/// 「Python float → float8」一致；MySQL/SQLite 与整数字面量不受影响。
+#[test]
+fn dialect_postgres_float_literal_gets_explicit_double_cast() {
+    let registry = registry_with(&schemas());
+
+    let float_cmd = json!({ "kind": "find", "collection": "posts",
+                            "filter": { "views": { "$gt": 2.5 } }, "projection": { "_id": 1 } });
+    let pg = translate(Backend::Postgres, &float_cmd, &registry).expect("translate");
+    let text = pg["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("CAST($1 AS double precision)"),
+        "PG 浮点字面量须显式标注双精度: {text}"
+    );
+
+    // 整数字面量不加 CAST（既有 SQL 与跨后端对拍保持原样）
+    let int_cmd = json!({ "kind": "find", "collection": "posts",
+                          "filter": { "views": { "$gte": 10 } }, "projection": { "_id": 1 } });
+    let pg_int = translate(Backend::Postgres, &int_cmd, &registry).expect("translate");
+    assert!(
+        !pg_int["stmts"][0]["text"].as_str().unwrap_or("").contains("CAST("),
+        "整数字面量不应加 CAST: {}",
+        pg_int["stmts"][0]["text"]
+    );
+
+    // MySQL / SQLite 保持 `?` 占位（动态类型，无需 CAST）
+    for backend in [Backend::Mysql, Backend::Sqlite] {
+        let out = translate(backend, &float_cmd, &registry).expect("translate");
+        assert!(
+            !out["stmts"][0]["text"].as_str().unwrap_or("").contains("CAST("),
+            "[{backend:?}] 不应引入 CAST: {}",
+            out["stmts"][0]["text"]
+        );
+    }
+
+    // `$in` 内的浮点元素同样标注（整数元素不标注）
+    let in_cmd = json!({ "kind": "find", "collection": "posts",
+                         "filter": { "views": { "$in": [2.5, 3] } }, "projection": { "_id": 1 } });
+    let pg_in = translate(Backend::Postgres, &in_cmd, &registry).expect("translate");
+    let in_text = pg_in["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        in_text.contains("CAST($1 AS double precision)") && in_text.contains("$2"),
+        "$in 中浮点元素须标注、整数元素保持: {in_text}"
+    );
+    assert_eq!(
+        pg_in["stmts"][0]["params"],
+        json!([2.5, 3]),
+        "参数值本身不变: {pg_in}"
     );
 }

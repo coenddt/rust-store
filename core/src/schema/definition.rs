@@ -33,7 +33,9 @@ pub struct ComputeDef {
     pub has_async_fn: bool,
     /// 回调标识：Host 经 FnRegistry 把它绑定到实现；缺省 = 计算列 key 名
     pub fn_ref: Option<String>,
-    pub lookup: Option<Value>,
+    /// 归一聚合算子（§9.2(2)）：`{"$count": "lessons"}` / `{"$sum": "lessons.duration"}`。
+    /// 取代旧的 `lookup` + `addFields` Mongo 专用形态；SQL / Mongo 走同一语法（执行下推优先）。
+    pub agg: Option<Value>,
     pub depends: Vec<String>,
     pub read: Option<Vec<String>>,
 }
@@ -46,7 +48,7 @@ pub struct Schema {
     pub timestamps: bool,
     pub fields: HashMap<String, FieldDef>,
     pub relations: HashMap<String, RelationDef>,
-    /// 保持注册顺序：`build_compute_lookup_stages` 的输出顺序依赖它
+    /// 保持注册顺序：`build_agg_stages` 的输出顺序依赖它
     pub computes: Vec<(String, ComputeDef)>,
     pub read: Option<Vec<String>>,
     pub write: Option<Vec<String>>,

@@ -337,32 +337,6 @@
     "error": true
   },
   {
-    "name": "federation-pipeline-cross-source",
-    "kind": "plan",
-    "error": true
-  },
-  {
-    "name": "federation-pipeline-single-source",
-    "kind": "plan",
-    "result": {
-      "v": 2,
-      "kind": "federated",
-      "root": "Post",
-      "sources": [
-        {
-          "key": "0",
-          "source": "default",
-          "model": "Post",
-          "mode": "custom_pipeline",
-          "namespace": null
-        }
-      ],
-      "edges": [],
-      "degraded": [],
-      "hasPostprocess": false
-    }
-  },
-  {
     "name": "federation-permission-denied",
     "kind": "plan",
     "error": true

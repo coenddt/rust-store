@@ -5,7 +5,7 @@ use serde_json::{json, Map, Value};
 use crate::permission::{merge_owner_condition, Context};
 use crate::pipeline::{param, parse_gql};
 use crate::schema::Registry;
-use crate::types::is_truthy;
+use crate::types::{has_relation_predicate, is_truthy};
 
 use super::cmd::{cmd_count_documents, num_value};
 use super::query::{plan_query_ast_mut, resolve_page, Page, QueryPlan};
@@ -69,10 +69,7 @@ pub fn plan_query_with_count(
     if wants_pagination && !ast.params.contains_key("limit") {
         ast.params
             .insert("limit".to_string(), "@__core_page_limit__".to_string());
-        params.insert(
-            "__core_page_limit__".to_string(),
-            num_value(page.page_size),
-        );
+        params.insert("__core_page_limit__".to_string(), num_value(page.page_size));
     }
 
     // 确保 GQL 实际使用上述分页值（GQL 已引用 $skip/$limit 时用推导值覆盖，防宿主参数漂移）
@@ -94,6 +91,17 @@ pub fn plan_query_with_count(
         .unwrap_or_else(|| json!({}));
     let count_filter =
         merge_owner_condition(schema, ctx, Some(count_filter)).unwrap_or_else(|| json!({}));
+
+    // §9.6 关系聚合谓词（`$condition` 中以**关系名**作键）无法用标量 `countDocuments` 表达：
+    // Mongo 会把它当成「字段等于该对象」、SQL 无对应列 → total 与 items 静默不一致。
+    // 显式 Err（D2：绝不静默给错数）。
+    if has_relation_predicate(schema, &count_filter) {
+        return Err(
+            "query_with_count 暂不支持关系聚合谓词条件（§9.6）：total 无法与 items 保持一致，\
+             请改用 query 并在调用方自行统计"
+                .to_string(),
+        );
+    }
 
     let query = plan_query_ast_mut(ast, &mut params, registry, ctx)?;
 

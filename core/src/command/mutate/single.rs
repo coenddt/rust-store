@@ -7,11 +7,11 @@ use crate::command::write::{check_write_perm, Probe};
 use crate::command::{ensure_context, ERR_NO_BATCH_WRITE, ERR_NO_DELETE, ERR_NO_WRITE};
 use crate::permission::Context;
 use crate::schema::Registry;
-use crate::types::validate_condition;
+use crate::types::{validate_condition, validate_condition_shape};
 
 use super::{
-    build_raw_update, build_set_data, find_one_and_update_options, has_raw_operators, is_blank_condition,
-    object_of,
+    build_raw_update, build_set_data, find_one_and_update_options, has_raw_operators,
+    is_blank_condition, object_of,
 };
 
 /// 更新一条（对应 JS `update`，`findOneAndUpdate` + returnDocument AFTER）。
@@ -36,6 +36,8 @@ pub fn plan_update(
     let schema = registry.get(schema_name)?;
     // 条件拒绝名单（缺陷 D-02）：update/remove 的条件绝不静默携带服务端执行操作符
     validate_condition(condition)?;
+    // §11.4（D2）：写路径条件与读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
+    validate_condition_shape(schema, condition)?;
     if let Some(cmd) = check_write_perm(schema, ctx, condition, ERR_NO_WRITE, probe)? {
         return Ok(json!({ "needsProbe": cmd }));
     }
@@ -76,6 +78,8 @@ pub fn plan_remove(
     let schema = registry.get(schema_name)?;
     // 条件拒绝名单（缺陷 D-02）：remove 条件命中拒绝名单即显式报错
     validate_condition(condition)?;
+    // §11.4（D2）：写路径条件与读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
+    validate_condition_shape(schema, condition)?;
     // R4/B-12：空条件（{} / null / 空逻辑组）批量删除一票否决，绝不落全表
     if is_blank_condition(condition) {
         return Err(ERR_NO_BATCH_WRITE.to_string());
