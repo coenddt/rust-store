@@ -17,7 +17,7 @@ const assert = require('node:assert/strict');
 const initSqlJs = require('sql.js');
 const path = require('node:path');
 
-const { Registry } = require('../dist/rust-store-node.node');
+const { Registry } = require('./_binding');
 
 const SQLITE_WASM = path.join(
   __dirname,

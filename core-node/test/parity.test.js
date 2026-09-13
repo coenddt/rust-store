@@ -21,7 +21,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
 
-const { Registry } = require('../dist/rust-store-node.node');
+const { Registry } = require('./_binding');
 const { fns, asyncFns } = require('../../tools/test-fns.js');
 
 const FIXTURES = path.join(__dirname, '..', '..', 'fixtures');
