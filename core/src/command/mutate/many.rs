@@ -8,6 +8,7 @@ use crate::command::{ensure_context, ERR_NO_BATCH_WRITE, ERR_NO_WRITE};
 use crate::computes::{apply_defaults_and_computes, FnRegistry};
 use crate::permission::{can_write_schema, Context};
 use crate::schema::Registry;
+use crate::types::validate_condition;
 
 use super::{build_raw_update, build_set_data, has_raw_operators, needs_new_id, IdCursor};
 
@@ -67,6 +68,8 @@ pub fn plan_update_many(
 ) -> Result<Value, String> {
     ensure_context(registry, ctx)?;
     let schema = registry.get(schema_name)?;
+    // 条件拒绝名单（缺陷 D-02）：updateMany 条件命中拒绝名单即显式报错
+    validate_condition(condition)?;
     if let Some(c) = ctx {
         let guest = c
             .roles

@@ -9,15 +9,16 @@ use rust_store_core::command::{
     plan_count as core_plan_count, plan_exists as core_plan_exists,
     plan_insert as core_plan_insert, plan_insert_many as core_plan_insert_many,
     plan_mutation as core_plan_mutation, plan_query as core_plan_query,
-    plan_query_one as core_plan_query_one,
-    plan_query_with_count as core_plan_query_with_count, plan_remove as core_plan_remove,
-    plan_update as core_plan_update, plan_update_many as core_plan_update_many,
-    plan_upsert as core_plan_upsert, resolve_page as core_resolve_page,
-    restore_sort_order as core_restore_sort_order, sorts_by_relation as core_sorts_by_relation,
-    Probe,
+    plan_query_one as core_plan_query_one, plan_query_with_count as core_plan_query_with_count,
+    plan_remove as core_plan_remove, plan_update as core_plan_update,
+    plan_update_many as core_plan_update_many, plan_upsert as core_plan_upsert,
+    resolve_page as core_resolve_page, restore_sort_order as core_restore_sort_order,
+    sorts_by_relation as core_sorts_by_relation, Probe,
 };
 use rust_store_core::computes::apply_defaults_and_computes as core_apply_defaults;
-use rust_store_core::pipeline::{build_pipeline, build_projection, parse_gql, token_to_value, tokenize};
+use rust_store_core::pipeline::{
+    build_pipeline, build_projection, parse_gql, token_to_value, tokenize,
+};
 
 use crate::convert::{ctx_from, err, params_from, py_to_json, to_py, value_list};
 use crate::fns::PyFnBridge;
@@ -69,8 +70,7 @@ impl Registry {
         let schema = self.core.get(&ast.model).map_err(err)?;
         let pipeline =
             build_pipeline(&mut ast, &params, &self.core, context.as_ref()).map_err(err)?;
-        let projection =
-            build_projection(&ast, schema, context.as_ref()).unwrap_or(Value::Null);
+        let projection = build_projection(&ast, schema, context.as_ref()).unwrap_or(Value::Null);
 
         to_py(
             py,
@@ -428,8 +428,9 @@ impl Registry {
             _ => None,
         };
         let context = ctx_from(ctx)?;
-        let out = core_plan_update_many(&model, &self.core, context.as_ref(), &condition, &data, now)
-            .map_err(err)?;
+        let out =
+            core_plan_update_many(&model, &self.core, context.as_ref(), &condition, &data, now)
+                .map_err(err)?;
         to_py(py, with_route_override(out, ro.as_ref()))
     }
 
@@ -572,9 +573,8 @@ impl Registry {
             _ => None,
         };
         let context = ctx_from(ctx)?;
-        let out =
-            core_plan_mutation(&model, &self.core, context.as_ref(), &data, now, &new_ids)
-                .map_err(err)?;
+        let out = core_plan_mutation(&model, &self.core, context.as_ref(), &data, now, &new_ids)
+            .map_err(err)?;
         to_py(py, with_route_override(out, ro.as_ref()))
     }
 

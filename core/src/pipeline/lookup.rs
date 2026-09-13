@@ -4,7 +4,7 @@ use serde_json::{json, Map, Value};
 
 use crate::permission::{get_readable_computes, Context};
 use crate::schema::{Registry, RelationDef, Schema};
-use crate::types::is_truthy;
+use crate::types::{is_truthy, validate_condition};
 
 use super::ast::RelAst;
 use super::util::{append_order, is_nullish, non_nullish, param};
@@ -98,7 +98,10 @@ fn ns_lookup_stages(
     let mut stages = Vec::new();
     for (n_name, n_ast) in &rel_ast.relations {
         let n_def = rel_schema.relations.get(n_name).ok_or_else(|| {
-            format!("关系 \"{}\" 未在 schema \"{}\" 中定义", n_name, rel_schema.name)
+            format!(
+                "关系 \"{}\" 未在 schema \"{}\" 中定义",
+                n_name, rel_schema.name
+            )
         })?;
         let n_schema = registry.get(&n_def.model)?;
         stages.push(build_lookup(
@@ -145,10 +148,19 @@ pub fn build_lookup(
 
     // ── 递归保护（分两套深度限制） ──
     let has_paginated = !is_nullish(skip_val.as_ref()) || !is_nullish(limit_val.as_ref());
-    let next_paginated = if has_paginated { paginated + 1 } else { paginated };
+    let next_paginated = if has_paginated {
+        paginated + 1
+    } else {
+        paginated
+    };
     if depth >= MAX_DEPTH || (has_paginated && paginated >= MAX_PAGINATED_DEPTH) {
         // 返回空 $lookup（只做外键匹配，不继续嵌套），pipeline 不崩溃
-        return Ok(build_empty_lookup(rel_name, rel_def, rel_schema, source_schema));
+        return Ok(build_empty_lookup(
+            rel_name,
+            rel_def,
+            rel_schema,
+            source_schema,
+        ));
     }
 
     let is_array = is_array_local_field(source_schema, &local_key);
@@ -157,6 +169,8 @@ pub fn build_lookup(
     // $match: 外键关联 + 附加条件
     let match_expr = rel_match_expr(&foreign_key, &let_var, is_array);
     if let Some(cond) = non_nullish(condition.as_ref()) {
+        // 关系附加条件同样过拒绝名单（缺陷 D-02）
+        validate_condition(cond)?;
         stages.push(json!({ "$match": { "$and": [match_expr, cond] } }));
     } else {
         stages.push(json!({ "$match": match_expr }));
@@ -170,7 +184,12 @@ pub fn build_lookup(
         .map(|o| o.keys().any(|k| k.contains('.')))
         .unwrap_or(false);
     if !sorts_by_nested {
-        append_order(&mut stages, sort.as_ref(), skip_val.as_ref(), limit_val.as_ref());
+        append_order(
+            &mut stages,
+            sort.as_ref(),
+            skip_val.as_ref(),
+            limit_val.as_ref(),
+        );
     }
 
     // 嵌套 relations
@@ -185,7 +204,12 @@ pub fn build_lookup(
 
     // sort / skip / limit（兜底：仅在嵌套 $lookup 未提前执行时追加）
     if sorts_by_nested {
-        append_order(&mut stages, sort.as_ref(), skip_val.as_ref(), limit_val.as_ref());
+        append_order(
+            &mut stages,
+            sort.as_ref(),
+            skip_val.as_ref(),
+            limit_val.as_ref(),
+        );
     }
 
     // $project: 只返回请求的字段 + 计算列 fn 的 depends
@@ -213,7 +237,9 @@ pub fn build_compute_lookup_stages(schema: &Schema) -> Vec<Value> {
     let mut stages = Vec::new();
     for (key, comp) in &schema.computes {
         let Some(lookup) = &comp.lookup else { continue };
-        let Some(lo) = lookup.as_object() else { continue };
+        let Some(lo) = lookup.as_object() else {
+            continue;
+        };
         let Some(from) = lo.get("from").filter(|v| is_truthy(v)) else {
             continue;
         };

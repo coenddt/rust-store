@@ -69,7 +69,9 @@ pub struct RowCol {
 
 impl RowShape {
     pub fn empty() -> Self {
-        RowShape { columns: Vec::new() }
+        RowShape {
+            columns: Vec::new(),
+        }
     }
 
     pub fn to_value(&self) -> Value {

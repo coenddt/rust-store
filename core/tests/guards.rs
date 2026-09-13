@@ -35,7 +35,13 @@ fn params_of(extra: Value) -> Map<String, Value> {
 
 #[test]
 fn timestamps_accepts_bool_and_units() {
-    for v in [json!(true), json!(false), json!("ms"), json!("s"), Value::Null] {
+    for v in [
+        json!(true),
+        json!(false),
+        json!("ms"),
+        json!("s"),
+        Value::Null,
+    ] {
         let mut reg = Registry::new();
         reg.register(&base_schema(v.clone()))
             .unwrap_or_else(|e| panic!("timestamps = {} 应可注册: {}", v, e));
@@ -73,8 +79,8 @@ fn user_pipeline_disabled_blocks_all_plan_paths() {
     let mut reg = registry_with(base_schema(json!(true)));
     reg.set_allow_user_pipeline(false);
 
-    let err = plan_query(PIPELINE_GQL, &pipeline_params(), &reg, None)
-        .expect_err("plan_query 应报错");
+    let err =
+        plan_query(PIPELINE_GQL, &pipeline_params(), &reg, None).expect_err("plan_query 应报错");
     assert!(err.contains("已被禁用"), "错误信息异常: {}", err);
 
     let err = plan_query_with_count(PIPELINE_GQL, &pipeline_params(), &reg, None)
@@ -182,7 +188,10 @@ const PLAIN_GQL: &str = "Post{ title }";
 
 fn no_ctx_err(label: &str, result: Result<impl Sized + std::fmt::Debug, String>) {
     let err = result.expect_err(&format!("{label} 在 require_context 下应报错"));
-    assert!(err.starts_with(ERR_NO_CONTEXT), "{label} 应报 ERR_NO_CONTEXT: {err}");
+    assert!(
+        err.starts_with(ERR_NO_CONTEXT),
+        "{label} 应报 ERR_NO_CONTEXT: {err}"
+    );
 }
 
 #[test]
@@ -199,8 +208,14 @@ fn require_context_blocks_read_paths_without_ctx() {
     let mut reg = registry_with(base_schema(json!(true)));
     reg.set_require_context(true);
 
-    no_ctx_err("plan_query", plan_query(PLAIN_GQL, &params_of(json!({})), &reg, None));
-    no_ctx_err("plan_query_one", plan_query_one(PLAIN_GQL, &params_of(json!({})), &reg, None));
+    no_ctx_err(
+        "plan_query",
+        plan_query(PLAIN_GQL, &params_of(json!({})), &reg, None),
+    );
+    no_ctx_err(
+        "plan_query_one",
+        plan_query_one(PLAIN_GQL, &params_of(json!({})), &reg, None),
+    );
     no_ctx_err(
         "plan_query_with_count",
         plan_query_with_count(PLAIN_GQL, &params_of(json!({})), &reg, None),
@@ -230,7 +245,16 @@ fn require_context_blocks_write_paths_without_ctx() {
     );
     no_ctx_err(
         "plan_update",
-        plan_update("Post", &reg, None, &json!({}), &json!({ "title": "y" }), &json!({}), 0, Probe::NotProbed),
+        plan_update(
+            "Post",
+            &reg,
+            None,
+            &json!({}),
+            &json!({ "title": "y" }),
+            &json!({}),
+            0,
+            Probe::NotProbed,
+        ),
     );
     no_ctx_err(
         "plan_update_many",
@@ -242,7 +266,16 @@ fn require_context_blocks_write_paths_without_ctx() {
     );
     no_ctx_err(
         "plan_upsert",
-        plan_upsert("Post", &reg, None, &json!({}), &json!({ "title": "z" }), &json!({}), 0, "p2"),
+        plan_upsert(
+            "Post",
+            &reg,
+            None,
+            &json!({}),
+            &json!({ "title": "z" }),
+            &json!({}),
+            0,
+            "p2",
+        ),
     );
 }
 
@@ -255,8 +288,17 @@ fn system_context_passes_require_context() {
 
     plan_query(PLAIN_GQL, &params_of(json!({})), &reg, Some(&sys))
         .unwrap_or_else(|e| panic!("系统上下文读应放行: {e}"));
-    plan_insert("Post", &reg, Some(&sys), &json!({ "title": "x" }), 0, "p1", None)
-        .unwrap_or_else(|e| panic!("系统上下文写应放行: {e}"));
+    // 显式提供 _id（D-03：无 idPrefix 的 schema 必须显式给 _id；本测试只验证权限守卫）
+    plan_insert(
+        "Post",
+        &reg,
+        Some(&sys),
+        &json!({ "_id": "post_x", "title": "x" }),
+        0,
+        "p1",
+        None,
+    )
+    .unwrap_or_else(|e| panic!("系统上下文写应放行: {e}"));
 }
 
 #[test]

@@ -19,14 +19,16 @@ permissions:
 
 jobs:
   core:
-    name: core (clippy + test)
+    name: core (fmt + clippy + test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: fmt（rustfmt 格式门禁，评测 m-8-2）
+        run: cargo fmt --all -- --check
       - name: clippy（零告警门禁）
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test（仅 core crate；绑定层 parity 见 node-binding / py-binding）

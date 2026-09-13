@@ -34,7 +34,9 @@ pub fn translate_write(
     let namespace = cmd.get("namespace").and_then(|v| v.as_str());
     // 结构 schema 按 (source, collection) 定位（override 回落见 `get_for_command`）；
     // 表名限定跟随命令 namespace（§6：定位由命令决定，结构由 Registry 决定）
-    let mut schema = registry.get_for_command(source, namespace, collection)?.clone();
+    let mut schema = registry
+        .get_for_command(source, namespace, collection)?
+        .clone();
     if let Some(ns) = namespace {
         schema.namespace = Some(ns.to_string());
     }
@@ -46,12 +48,19 @@ pub fn translate_write(
             Ok(vec![build_insert(backend, schema, &doc)])
         }
         "insertMany" => {
-            let docs = cmd.get("docs").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let docs = cmd
+                .get("docs")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
             // 多条 → 一条 VALUES (...) 多组
             if docs.is_empty() {
                 return Err("insertMany 无文档".to_string());
             }
-            let upsert_by_id = cmd.get("upsertById").and_then(|v| v.as_bool()).unwrap_or(false);
+            let upsert_by_id = cmd
+                .get("upsertById")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             build_insert_many(backend, schema, &docs, upsert_by_id)
         }
         "updateMany" => {
@@ -68,8 +77,13 @@ pub fn translate_write(
         "deleteMany" => {
             let filter = cmd.get("filter").cloned().unwrap_or(json!({}));
             let mut seq = 0usize;
-            let wh = build_filter(&filter, backend, "t", &col_map(schema), &mut seq);
-            let where_sql = if wh.text.is_empty() { String::new() } else { format!(" WHERE {}", wh.text) };
+            // 写路径无告警通道（None）：filter 中出现无法表达的语义组合时直接报错（见 filter::Warnings）
+            let wh = build_filter(&filter, backend, "t", &col_map(schema), &mut seq, None)?;
+            let where_sql = if wh.text.is_empty() {
+                String::new()
+            } else {
+                format!(" WHERE {}", wh.text)
+            };
             let text = format!("DELETE FROM {} AS t{}", tname(backend, schema), where_sql);
             Ok(vec![SqlStmt::write(text, wh.params)])
         }
@@ -90,7 +104,10 @@ struct Binder {
 
 impl Binder {
     fn new(backend: Backend) -> Self {
-        Binder { backend, params: Vec::new() }
+        Binder {
+            backend,
+            params: Vec::new(),
+        }
     }
 
     fn bind(&mut self, v: Value) -> String {
@@ -124,7 +141,12 @@ fn returning_cols(schema: &Schema) -> Vec<String> {
     let mut cols: Vec<String> = schema
         .fields
         .keys()
-        .filter(|f| !matches!(schema.fields.get(f.as_str()).map(|d| d.field_type.as_str()), Some("object") | Some("array")))
+        .filter(|f| {
+            !matches!(
+                schema.fields.get(f.as_str()).map(|d| d.field_type.as_str()),
+                Some("object") | Some("array")
+            )
+        })
         .filter(|f| f.as_str() != "_id")
         .cloned()
         .collect();
@@ -136,7 +158,10 @@ fn returning_cols(schema: &Schema) -> Vec<String> {
 /// 回读列 → RowShape（标量直接还原到 `[field]`）
 fn returning_shape(cols: &[String]) -> RowShape {
     RowShape {
-        columns: cols.iter().map(|c| RowCol::scalar(c, &[c.as_str()])).collect(),
+        columns: cols
+            .iter()
+            .map(|c| RowCol::scalar(c, &[c.as_str()]))
+            .collect(),
     }
 }
 
@@ -158,7 +183,11 @@ fn build_insert(backend: Backend, schema: &Schema, doc: &Value) -> SqlStmt {
             ),
         };
     }
-    let cols_sql = cols.iter().map(|c| q(backend, c)).collect::<Vec<_>>().join(", ");
+    let cols_sql = cols
+        .iter()
+        .map(|c| q(backend, c))
+        .collect::<Vec<_>>()
+        .join(", ");
     let mut binder = Binder::new(backend);
     let phs: Vec<String> = cols
         .iter()
@@ -188,7 +217,11 @@ fn build_insert_many(
     if cols.is_empty() {
         return Err("insertMany 无标量可写字段".to_string());
     }
-    let cols_sql = cols.iter().map(|c| q(backend, c)).collect::<Vec<_>>().join(", ");
+    let cols_sql = cols
+        .iter()
+        .map(|c| q(backend, c))
+        .collect::<Vec<_>>()
+        .join(", ");
     let mut binder = Binder::new(backend);
     let mut groups: Vec<String> = Vec::new();
     for doc in docs {
@@ -217,7 +250,12 @@ fn build_insert_many(
                         .map(|c| format!("{} = EXCLUDED.{}", q(backend, c), q(backend, c)))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    format!("{} ON CONFLICT ({}) DO UPDATE SET {}", text, q(backend, "_id"), sets)
+                    format!(
+                        "{} ON CONFLICT ({}) DO UPDATE SET {}",
+                        text,
+                        q(backend, "_id"),
+                        sets
+                    )
                 }
             }
             Backend::Mysql => {
@@ -260,7 +298,11 @@ fn scalar_cols(schema: &Schema, doc: &Value) -> Vec<String> {
 /// 支持的操作符：`$set`（`col = ?`）、`$inc`（`col = COALESCE(col, 0) + ?`）、
 /// `$unset`（`col = NULL`）；`$setOnInsert` 由 upsert 分支单独处理，此处忽略。
 /// 其余操作符（`$push` / `$addToSet` / `$pull` …）无法安全映射为标量 UPDATE → 报错。
-fn build_assignments(binder: &mut Binder, schema: &Schema, update: &Value) -> Result<Vec<String>, String> {
+fn build_assignments(
+    binder: &mut Binder,
+    schema: &Schema,
+    update: &Value,
+) -> Result<Vec<String>, String> {
     let Some(obj) = update.as_object() else {
         return Err("update 必须是对象".to_string());
     };
@@ -271,50 +313,76 @@ fn build_assignments(binder: &mut Binder, schema: &Schema, update: &Value) -> Re
     for (op, val) in obj {
         match op.as_str() {
             "$set" => {
-                let Some(fields) = val.as_object() else { continue };
+                let Some(fields) = val.as_object() else {
+                    continue;
+                };
                 for (k, v) in fields {
                     if v.is_null() {
                         continue;
                     }
-                    let Some(col) = scalar_col(schema, k) else { continue };
+                    let Some(col) = scalar_col(schema, k) else {
+                        continue;
+                    };
                     let ph = binder.bind(v.clone());
                     assigns.push(format!("{} = {}", binder.backend.quote_ident(&col), ph));
                 }
             }
             "$inc" => {
-                let Some(fields) = val.as_object() else { continue };
+                let Some(fields) = val.as_object() else {
+                    continue;
+                };
                 for (k, v) in fields {
-                    let Some(col) = scalar_col(schema, k) else { continue };
+                    let Some(col) = scalar_col(schema, k) else {
+                        continue;
+                    };
                     let qc = binder.backend.quote_ident(&col);
                     let ph = binder.bind(v.clone());
                     assigns.push(format!("{} = COALESCE({}, 0) + {}", qc, qc, ph));
                 }
             }
             "$unset" => {
-                let Some(fields) = val.as_object() else { continue };
+                let Some(fields) = val.as_object() else {
+                    continue;
+                };
                 for k in fields.keys() {
-                    let Some(col) = scalar_col(schema, k) else { continue };
+                    let Some(col) = scalar_col(schema, k) else {
+                        continue;
+                    };
                     assigns.push(format!("{} = NULL", binder.backend.quote_ident(&col)));
                 }
             }
             // upsert 专用，非 upsert 路径忽略
             "$setOnInsert" => continue,
-            _ => return Err(format!("translate: 不支持的操作符 {}（写路径仅支持 $set/$inc/$unset）", op)),
+            _ => {
+                return Err(format!(
+                    "translate: 不支持的操作符 {}（写路径仅支持 $set/$inc/$unset）",
+                    op
+                ))
+            }
         }
     }
     Ok(assigns)
 }
 
 /// `WHERE` 片段（沿用统一 filter 翻译；占位序号接续 SET 参数）
-fn where_of(binder: &mut Binder, schema: &Schema, filter: &Value) -> String {
+/// 缺陷 D-02：不可翻译条件现在显式报错，绝不静默丢条件
+fn where_of(binder: &mut Binder, schema: &Schema, filter: &Value) -> Result<String, String> {
     let mut seq = binder.seq();
-    let wh = build_filter(filter, binder.backend, "t", &col_map(schema), &mut seq);
+    // 写路径无告警通道（None）：filter 中出现无法表达的语义组合时直接报错（见 filter::Warnings）
+    let wh = build_filter(
+        filter,
+        binder.backend,
+        "t",
+        &col_map(schema),
+        &mut seq,
+        None,
+    )?;
     binder.params.extend(wh.params);
-    if wh.text.is_empty() {
+    Ok(if wh.text.is_empty() {
         String::new()
     } else {
         format!(" WHERE {}", wh.text)
-    }
+    })
 }
 
 fn translate_update_many(
@@ -328,7 +396,7 @@ fn translate_update_many(
     if assigns.is_empty() {
         return Err("没有提供要更新的字段".to_string());
     }
-    let where_sql = where_of(&mut binder, schema, filter);
+    let where_sql = where_of(&mut binder, schema, filter)?;
     let text = format!(
         "UPDATE {} AS t SET {}{}",
         tname(backend, schema),
@@ -345,7 +413,10 @@ fn translate_find_one_and_update(
     update: &Value,
     options: &Value,
 ) -> Result<Vec<SqlStmt>, String> {
-    let upsert = options.get("upsert").and_then(|v| v.as_bool()).unwrap_or(false);
+    let upsert = options
+        .get("upsert")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if upsert {
         return translate_upsert(backend, schema, filter, update);
     }
@@ -355,7 +426,7 @@ fn translate_find_one_and_update(
     if assigns.is_empty() {
         return Err("没有提供要更新的字段".to_string());
     }
-    let where_sql = where_of(&mut binder, schema, filter);
+    let where_sql = where_of(&mut binder, schema, filter)?;
     let update_text = format!(
         "UPDATE {} AS t SET {}{}",
         tname(backend, schema),
@@ -365,7 +436,11 @@ fn translate_find_one_and_update(
 
     let cols = returning_cols(schema);
     if backend.supports_returning() {
-        let ret = cols.iter().map(|c| q(backend, c)).collect::<Vec<_>>().join(", ");
+        let ret = cols
+            .iter()
+            .map(|c| q(backend, c))
+            .collect::<Vec<_>>()
+            .join(", ");
         let mut stmt = SqlStmt::write(format!("{} RETURNING {}", update_text, ret), binder.params);
         stmt.is_write = true;
         stmt.row_shape = Some(returning_shape(&cols));
@@ -381,7 +456,7 @@ fn translate_find_one_and_update(
             .collect::<Vec<_>>()
             .join(", ");
         let mut read_binder = Binder::new(backend);
-        let where_sql_s = where_of(&mut read_binder, schema, filter);
+        let where_sql_s = where_of(&mut read_binder, schema, filter)?;
         let select_text = format!(
             "SELECT {} FROM {} t{}",
             select_list,
@@ -418,7 +493,9 @@ fn translate_upsert(
     }
     if let Some(o) = update.get("$setOnInsert").and_then(|v| v.as_object()) {
         for (k, v) in o {
-            let Some(col) = scalar_col(schema, k) else { continue };
+            let Some(col) = scalar_col(schema, k) else {
+                continue;
+            };
             if v.is_null() || cols.iter().any(|c| c == &col) {
                 continue;
             }
@@ -428,7 +505,9 @@ fn translate_upsert(
     }
     if let Some(o) = update.get("$set").and_then(|v| v.as_object()) {
         for (k, v) in o {
-            let Some(col) = scalar_col(schema, k) else { continue };
+            let Some(col) = scalar_col(schema, k) else {
+                continue;
+            };
             if v.is_null() || cols.iter().any(|c| c == &col) {
                 continue;
             }
@@ -441,7 +520,11 @@ fn translate_upsert(
     }
 
     let mut binder = Binder::new(backend);
-    let cols_sql = cols.iter().map(|c| q(backend, c)).collect::<Vec<_>>().join(", ");
+    let cols_sql = cols
+        .iter()
+        .map(|c| q(backend, c))
+        .collect::<Vec<_>>()
+        .join(", ");
     let phs: Vec<String> = vals.iter().map(|v| binder.bind(v.clone())).collect();
 
     // 冲突时的 SET 赋值（仅 `$set`；`$inc`/`$unset` 亦允许）
@@ -455,8 +538,16 @@ fn translate_upsert(
     let mut stmts: Vec<SqlStmt> = Vec::new();
 
     if backend.supports_returning() {
-        let target_sql = target.iter().map(|c| q(backend, c)).collect::<Vec<_>>().join(", ");
-        let ret = returning.iter().map(|c| q(backend, c)).collect::<Vec<_>>().join(", ");
+        let target_sql = target
+            .iter()
+            .map(|c| q(backend, c))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ret = returning
+            .iter()
+            .map(|c| q(backend, c))
+            .collect::<Vec<_>>()
+            .join(", ");
         let text = format!(
             "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {} RETURNING {}",
             tname(backend, schema),
@@ -488,7 +579,7 @@ fn translate_upsert(
             .collect::<Vec<_>>()
             .join(", ");
         let mut read_binder = Binder::new(backend);
-        let where_sql = where_of(&mut read_binder, schema, filter);
+        let where_sql = where_of(&mut read_binder, schema, filter)?;
         let select_text = format!(
             "SELECT {} FROM {} t{}",
             select_list,
@@ -514,7 +605,11 @@ fn translate_upsert(
 fn upsert_target_pairs(schema: &Schema, filter: &Value) -> Result<Vec<(String, Value)>, String> {
     let cond = match filter.as_object() {
         Some(o) => {
-            if let Some(first) = o.get("$or").and_then(|v| v.as_array()).and_then(|a| a.first()) {
+            if let Some(first) = o
+                .get("$or")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+            {
                 first.as_object().cloned().unwrap_or_default()
             } else {
                 o.clone()
@@ -527,7 +622,9 @@ fn upsert_target_pairs(schema: &Schema, filter: &Value) -> Result<Vec<(String, V
         if k.starts_with('$') {
             continue;
         }
-        let Some(col) = scalar_col(schema, k) else { continue };
+        let Some(col) = scalar_col(schema, k) else {
+            continue;
+        };
         if v.is_object() {
             return Err(format!("upsert 条件 {} 需为等值（唯一键）条件", k));
         }

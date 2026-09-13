@@ -110,7 +110,9 @@ fn fill_nested_objects(doc: &mut Value, schema: &Schema, needed: &[String]) {
                 if !is_object_field(field) {
                     continue;
                 }
-                let Some(fd) = field.fields.clone() else { continue };
+                let Some(fd) = field.fields.clone() else {
+                    continue;
+                };
                 let Some(sub) = doc.as_object_mut().and_then(|o| o.get_mut(key)) else {
                     continue;
                 };
@@ -143,7 +145,9 @@ pub fn run_computes(
     }
     // 补计算列默认值：fn 返回 nullish 且 type 有零值时
     for entry in &cache.fn_list {
-        let Some(o) = doc.as_object_mut() else { continue };
+        let Some(o) = doc.as_object_mut() else {
+            continue;
+        };
         let absent = o.get(&entry.key).map(|v| v.is_null()).unwrap_or(true);
         if absent {
             if let Some(d) = cache.compute_defaults.get(&entry.key) {

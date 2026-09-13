@@ -148,10 +148,7 @@ fn run_exists(fx: &Value) -> Result<Value, String> {
     let registry = build_registry(fx)?;
     let condition = fx.get("condition").cloned().unwrap_or_else(|| json!({}));
     let command = plan_exists(model_of(fx), &registry, &condition)?;
-    let found = fx
-        .get("foundDoc")
-        .map(|v| !v.is_null())
-        .unwrap_or(false);
+    let found = fx.get("foundDoc").map(|v| !v.is_null()).unwrap_or(false);
     let collection = command.get("collection").cloned().unwrap_or(Value::Null);
     Ok(json!({
         "command": command,
@@ -198,7 +195,11 @@ fn run_case(fx: &Value) -> Result<Value, String> {
 
 /// 黄金基准形如 `{name, kind, result}`；报错用例则为 `{name, kind, error: true}`
 fn golden_result(golden: &Value) -> Value {
-    if golden.get("error").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if golden
+        .get("error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         json!({ "error": true })
     } else {
         golden.get("result").cloned().unwrap_or(Value::Null)
@@ -217,7 +218,10 @@ fn parity_commands_with_js_reference() {
     let mut failures: Vec<String> = Vec::new();
 
     for (fx, golden) in cases.iter().zip(goldens.iter()) {
-        let name = fx.get("name").and_then(|v| v.as_str()).unwrap_or("<unnamed>");
+        let name = fx
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<unnamed>");
         let gname = golden
             .get("name")
             .and_then(|v| v.as_str())

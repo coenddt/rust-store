@@ -197,10 +197,7 @@ fn override_walk(v: &mut Value, src: Option<&str>, ns_present: bool, ns: Option<
                     map.insert("source".to_string(), json!(s));
                 }
                 if ns_present {
-                    map.insert(
-                        "namespace".to_string(),
-                        ns.cloned().unwrap_or(Value::Null),
-                    );
+                    map.insert("namespace".to_string(), ns.cloned().unwrap_or(Value::Null));
                 }
             }
             for (_, child) in map.iter_mut() {

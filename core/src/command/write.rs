@@ -5,7 +5,7 @@ use serde_json::{json, Map, Value};
 use crate::computes::{apply_defaults_and_computes, FnRegistry};
 use crate::permission::{can_write_schema, evaluate, filter_writable_data, Context, Doc};
 use crate::schema::{Registry, Schema};
-use crate::types::is_truthy;
+use crate::types::{is_truthy, validate_condition};
 
 use super::cmd::{cmd_aggregate, cmd_count_documents, cmd_find_one, cmd_insert_one};
 use super::{ensure_context, ERR_NO_WRITE};
@@ -61,9 +61,18 @@ pub(super) fn build_insert_doc(
         })
         .unwrap_or_default();
 
-    // 自动生成 ID（仅在 schema 配了 idPrefix 且未提供有效 _id 时）
-    if !doc.get("_id").map(is_truthy).unwrap_or(false) && !schema.id_prefix.is_empty() {
-        doc.insert("_id".to_string(), json!(new_id));
+    // 自动生成 ID（仅在 schema 配了 idPrefix 且未提供有效 _id 时）；
+    // 无 idPrefix 且无 _id → 显式报错（缺陷 D-03）：静默产出「无 _id 文档」会让
+    // Host 返回 _id=undefined，且 Mongo 自动 ObjectId 会触发跨绑定序列化崩溃
+    if !doc.get("_id").map(is_truthy).unwrap_or(false) {
+        if !schema.id_prefix.is_empty() {
+            doc.insert("_id".to_string(), json!(new_id));
+        } else {
+            return Err(format!(
+                "schema \"{}\" 未配置 idPrefix 且未提供有效 _id：请显式提供 _id，或为 schema 配置 idPrefix",
+                schema.name
+            ));
+        }
     }
 
     // 自动设置 createdBy（creator 权限场景）
@@ -89,12 +98,10 @@ pub fn plan_exists(
     registry: &Registry,
     condition: &Value,
 ) -> Result<Value, String> {
+    // 条件拒绝名单（缺陷 D-02）
+    validate_condition(condition)?;
     let schema = registry.get(schema_name)?;
-    Ok(cmd_find_one(
-        schema,
-        condition,
-        Some(&json!({ "_id": 1 })),
-    ))
+    Ok(cmd_find_one(schema, condition, Some(&json!({ "_id": 1 }))))
 }
 
 /// 统计数量（对应 JS `count`）：filter 为 nullish 时用 `{}`
@@ -103,6 +110,10 @@ pub fn plan_count(
     registry: &Registry,
     filter: Option<&Value>,
 ) -> Result<Value, String> {
+    if let Some(f) = filter {
+        // 条件拒绝名单（缺陷 D-02）
+        validate_condition(f)?;
+    }
     let schema = registry.get(schema_name)?;
     let filter = match filter {
         None | Some(Value::Null) => json!({}),

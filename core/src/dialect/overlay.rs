@@ -13,8 +13,14 @@ pub fn merge_schema(base: &Value, overlay: &Value) -> Result<Value, String> {
     // base 按 model 名索引
     let mut out: Vec<Value> = Vec::new();
     for b in &base_arr {
-        let name = b.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let over = overlay_arr.iter().find(|o| o.get("name").and_then(|v| v.as_str()) == Some(name.as_str()));
+        let name = b
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let over = overlay_arr
+            .iter()
+            .find(|o| o.get("name").and_then(|v| v.as_str()) == Some(name.as_str()));
         out.push(match over {
             Some(o) => merge_one(b, o)?,
             None => b.clone(),
@@ -22,8 +28,14 @@ pub fn merge_schema(base: &Value, overlay: &Value) -> Result<Value, String> {
     }
     // overlay 中 base 没有的新 model
     for o in &overlay_arr {
-        let name = o.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let exists = base_arr.iter().any(|b| b.get("name").and_then(|v| v.as_str()) == Some(name.as_str()));
+        let name = o
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let exists = base_arr
+            .iter()
+            .any(|b| b.get("name").and_then(|v| v.as_str()) == Some(name.as_str()));
         if !exists {
             out.push(o.clone());
         }
@@ -35,8 +47,16 @@ pub fn merge_schema(base: &Value, overlay: &Value) -> Result<Value, String> {
 fn merge_one(base: &Value, overlay: &Value) -> Result<Value, String> {
     let mut out = base.clone();
     let b = base.as_object().cloned().unwrap_or_default();
-    let b_fields = b.get("fields").and_then(|f| f.as_object()).cloned().unwrap_or_default();
-    let b_rels = b.get("relations").and_then(|f| f.as_object()).cloned().unwrap_or_default();
+    let b_fields = b
+        .get("fields")
+        .and_then(|f| f.as_object())
+        .cloned()
+        .unwrap_or_default();
+    let b_rels = b
+        .get("relations")
+        .and_then(|f| f.as_object())
+        .cloned()
+        .unwrap_or_default();
 
     if let Some(o) = overlay.as_object() {
         // 字段并集
@@ -75,10 +95,12 @@ fn merge_one(base: &Value, overlay: &Value) -> Result<Value, String> {
 
         // overlay 优先的 computes / indexes
         if let Some(c) = o.get("computes") {
-            out.as_object_mut().map(|m| m.insert("computes".to_string(), c.clone()));
+            out.as_object_mut()
+                .map(|m| m.insert("computes".to_string(), c.clone()));
         }
         if let Some(i) = o.get("indexes") {
-            out.as_object_mut().map(|m| m.insert("indexes".to_string(), i.clone()));
+            out.as_object_mut()
+                .map(|m| m.insert("indexes".to_string(), i.clone()));
         }
     }
     Ok(out)

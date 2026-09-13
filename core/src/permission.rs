@@ -237,10 +237,7 @@ pub fn should_inject_owner_condition(schema: &Schema, ctx: Option<&Context>) -> 
     };
     let read = schema.read.clone().unwrap_or_default();
     let real_roles: Vec<&String> = read.iter().filter(|r| *r != "creator").collect();
-    if real_roles
-        .iter()
-        .any(|r| effective.iter().any(|x| x == *r))
-    {
+    if real_roles.iter().any(|r| effective.iter().any(|x| x == *r)) {
         return false;
     }
     read.iter().any(|r| r == "creator")
@@ -296,7 +293,9 @@ pub fn filter_writable_data(schema: &Schema, ctx: Option<&Context>, data: &Value
     let mut result = Map::new();
     for (key, val) in obj {
         let root = key.split('.').next().unwrap_or(key);
-        if writable.contains(root) {
+        // `_id` 是文档标识而非普通数据字段，豁免写权限过滤（D-03：否则
+        // 「显式提供 _id」路径在有权限过滤的上下文中永远不可达）
+        if key == "_id" || writable.contains(root) {
             result.insert(key.clone(), val.clone());
         }
     }

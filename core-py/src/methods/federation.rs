@@ -37,8 +37,8 @@ impl Registry {
         let params = params_from(params)?;
         let context = ctx_from(ctx)?;
         let ds_cfg = py_to_json_opt(ds_config)?;
-        let out =
-            core_plan_federated(&gql, &params, &self.core, context.as_ref(), &ds_cfg).map_err(err)?;
+        let out = core_plan_federated(&gql, &params, &self.core, context.as_ref(), &ds_cfg)
+            .map_err(err)?;
         to_py(py, out)
     }
 

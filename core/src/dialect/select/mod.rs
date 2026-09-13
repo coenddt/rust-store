@@ -33,7 +33,9 @@ pub fn translate_select(
     let namespace = cmd.get("namespace").and_then(|v| v.as_str());
     // 结构 schema 按 (source, collection) 定位（override 回落见 `get_for_command`）；
     // 表名限定跟随命令 namespace（§6：定位由命令决定，结构由 Registry 决定）
-    let mut schema = registry.get_for_command(source, namespace, collection)?.clone();
+    let mut schema = registry
+        .get_for_command(source, namespace, collection)?
+        .clone();
     if let Some(ns) = namespace {
         schema.namespace = Some(ns.to_string());
     }
@@ -43,18 +45,43 @@ pub fn translate_select(
         "countDocuments" => {
             let filter = cmd.get("filter").cloned().unwrap_or(json!({}));
             let mut seq = 0usize;
-            let wh = build_filter(&filter, backend, "t", &col_fn(schema), &mut seq);
-            let where_sql = if wh.text.is_empty() { String::new() } else { format!(" WHERE {}", wh.text) };
-            let text = format!("SELECT COUNT(*) FROM {} t{}", tname(backend, schema), where_sql);
+            let wh = build_filter(
+                &filter,
+                backend,
+                "t",
+                &col_fn(schema),
+                &mut seq,
+                Some(warnings),
+            )?;
+            let where_sql = if wh.text.is_empty() {
+                String::new()
+            } else {
+                format!(" WHERE {}", wh.text)
+            };
+            let text = format!(
+                "SELECT COUNT(*) FROM {} t{}",
+                tname(backend, schema),
+                where_sql
+            );
             Ok(vec![SqlStmt::select(text, wh.params, RowShape::empty())])
         }
         "find" | "findOne" => {
             let filter = cmd.get("filter").cloned().unwrap_or(json!({}));
             let projection = cmd.get("projection").cloned();
-            translate_find(backend, schema, &filter, projection.as_ref())
+            translate_find(
+                backend,
+                schema,
+                &filter,
+                projection.as_ref(),
+                Some(warnings),
+            )
         }
         "aggregate" => {
-            let pipeline = cmd.get("pipeline").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let pipeline = cmd
+                .get("pipeline")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
             translate_aggregate(backend, schema, &pipeline, registry, warnings, unsupported)
         }
         _ => Err(format!("translate: 未知命令 kind = {}", kind)),
@@ -70,20 +97,27 @@ pub(in crate::dialect::select) fn col_fn(schema: &Schema) -> impl Fn(&str) -> Op
 }
 
 /// 投影字段：null / 全 1 → 所有标量字段；否则取值为「非 0」的字段
-pub(in crate::dialect::select) fn projection_fields(schema: &Schema, projection: Option<&Value>) -> Vec<String> {
+pub(in crate::dialect::select) fn projection_fields(
+    schema: &Schema,
+    projection: Option<&Value>,
+) -> Vec<String> {
     match projection {
         None | Some(Value::Null) => schema.fields.keys().cloned().collect(),
-        Some(p) => p.as_object()
+        Some(p) => p
+            .as_object()
             .map(|o| {
                 let on: Vec<String> = o
                     .iter()
                     .filter(|(_, v)| {
-                        v.as_i64().map(|n| n != 0).unwrap_or(false)
-                            || v.as_bool() == Some(true)
+                        v.as_i64().map(|n| n != 0).unwrap_or(false) || v.as_bool() == Some(true)
                     })
                     .map(|(k, _)| k.clone())
                     .collect();
-                if on.is_empty() { schema.fields.keys().cloned().collect() } else { on }
+                if on.is_empty() {
+                    schema.fields.keys().cloned().collect()
+                } else {
+                    on
+                }
             })
             .unwrap_or_else(|| schema.fields.keys().cloned().collect()),
     }

@@ -46,7 +46,10 @@ fn collect_at_path<'a>(docs: &'a mut [Value], path: &[String], out: &mut Vec<&'a
 }
 
 fn as_str_field(v: &Value, key: &str) -> String {
-    v.get(key).and_then(|x| x.as_str()).unwrap_or("").to_string()
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 /// 合并各源结果 → 嵌套文档数组

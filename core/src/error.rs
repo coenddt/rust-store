@@ -86,7 +86,12 @@ mod tests {
     #[test]
     fn classify_maps_sentinels_to_variants() {
         // 权限族（四个哨兵全量穷举）→ Permission
-        for m in [ERR_PERMISSION, ERR_NO_WRITE, ERR_NO_DELETE, ERR_NO_BATCH_WRITE] {
+        for m in [
+            ERR_PERMISSION,
+            ERR_NO_WRITE,
+            ERR_NO_DELETE,
+            ERR_NO_BATCH_WRITE,
+        ] {
             let e = CoreError::classify(m.to_string());
             assert_eq!(e, CoreError::Permission(m.to_string()));
             assert_eq!(e.code(), "permission");

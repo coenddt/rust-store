@@ -13,7 +13,12 @@ pub(super) struct Join {
 }
 
 /// 从 schema.relations 解析 $lookup JOIN 键
-pub(super) fn resolve_join(schema: &Schema, registry: &Registry, alias: &str, from: &str) -> Option<Join> {
+pub(super) fn resolve_join(
+    schema: &Schema,
+    registry: &Registry,
+    alias: &str,
+    from: &str,
+) -> Option<Join> {
     let make = |name: &str, d: &crate::schema::RelationDef| Join {
         rel_name: name.to_string(),
         alias: alias.to_string(),
@@ -28,7 +33,11 @@ pub(super) fn resolve_join(schema: &Schema, registry: &Registry, alias: &str, fr
     // 按 model/collection 匹配
     schema.relations.iter().find_map(|(name, d)| {
         let ok = d.model == from
-            || registry.get(&d.model).ok().map(|s| s.collection == from).unwrap_or(false);
+            || registry
+                .get(&d.model)
+                .ok()
+                .map(|s| s.collection == from)
+                .unwrap_or(false);
         if ok {
             Some(make(name, d))
         } else {

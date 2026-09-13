@@ -4,9 +4,8 @@ use pyo3::prelude::*;
 use serde_json::Value;
 
 use rust_store_core::dialect::{
-    introspect_to_schema_json as core_introspect_to_schema_json,
-    merge_schema as core_merge_schema, restore_rows_json as core_restore_rows_json,
-    translate as core_dialect_translate, Backend,
+    introspect_to_schema_json as core_introspect_to_schema_json, merge_schema as core_merge_schema,
+    restore_rows_json as core_restore_rows_json, translate as core_dialect_translate, Backend,
 };
 
 use crate::convert::{err, py_to_json, to_py};
@@ -26,7 +25,10 @@ impl Registry {
             Some(v) => py_to_json(v)?,
             None => Value::Null,
         };
-        to_py(py, core_dialect_translate(backend, &cmd, &self.core).map_err(err)?)
+        to_py(
+            py,
+            core_dialect_translate(backend, &cmd, &self.core).map_err(err)?,
+        )
     }
 
     #[pyo3(signature = (shape, rows))]
@@ -59,7 +61,10 @@ impl Registry {
             Some(v) => py_to_json(v)?,
             None => Value::Null,
         };
-        to_py(py, core_introspect_to_schema_json(&rows, &backend).map_err(err)?)
+        to_py(
+            py,
+            core_introspect_to_schema_json(&rows, &backend).map_err(err)?,
+        )
     }
 
     #[pyo3(signature = (base, overlay))]

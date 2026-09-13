@@ -95,13 +95,16 @@ impl Parser {
             }
             let name = self.consume("id", None)?.value;
             let has_paren = matches!(self.peek(), Some(t) if t.kind == "p" && t.value == "(");
+            // 关系名后「参数列表 + 选择集」可同时出现（README 记载语法，
+            // 缺陷 D-01：has_brace 必须在消费完参数之后再采样，否则
+            // `Rel($limit:@l){f}` 的 `{` 会被误判为下一个字段导致解析失败）
+            let prm = if has_paren {
+                self.parse_params()?
+            } else {
+                HashMap::new()
+            };
             let has_brace = matches!(self.peek(), Some(t) if t.kind == "p" && t.value == "{");
             if has_paren || has_brace {
-                let prm = if has_paren {
-                    self.parse_params()?
-                } else {
-                    HashMap::new()
-                };
                 let (f, r) = if has_brace {
                     self.parse_body()?
                 } else {

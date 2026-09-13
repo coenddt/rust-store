@@ -44,7 +44,11 @@ fn loc_of(schema: &Schema) -> Loc {
 /// - 双方都是 SQL → 下推（同/跨 namespace 都行，qualified 表名）；
 /// - 其余（Mongo，或 kind 未知）→ 仅同 namespace 下推（`$lookup` 不能跨 db；
 ///   kind 未知时保守不跨 ns 下推，宁拆勿错）。
-fn can_pushdown(parent: &Schema, child: &Schema, ds_cfg: &DataSourceConfig) -> Result<bool, String> {
+fn can_pushdown(
+    parent: &Schema,
+    child: &Schema,
+    ds_cfg: &DataSourceConfig,
+) -> Result<bool, String> {
     if parent.source() != child.source() {
         return Ok(false);
     }
@@ -409,6 +413,10 @@ pub(crate) fn unit_index(sources: &[Value]) -> HashMap<String, usize> {
     sources
         .iter()
         .enumerate()
-        .filter_map(|(i, s)| s.get("key").and_then(|k| k.as_str()).map(|k| (k.to_string(), i)))
+        .filter_map(|(i, s)| {
+            s.get("key")
+                .and_then(|k| k.as_str())
+                .map(|k| (k.to_string(), i))
+        })
         .collect()
 }

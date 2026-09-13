@@ -32,7 +32,7 @@ fn pg_cross_ns_schemas() -> Vec<Value> {
     vec![
         json!({
             "name": "Order", "collection": "orders", "timestamps": false,
-            "datasource": "pg", "namespace": "app_a",
+            "datasource": "pg", "namespace": "app_a", "idPrefix": "ord",
             "fields": { "code": { "type": "string" } },
             "relations": {
                 "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
@@ -40,7 +40,7 @@ fn pg_cross_ns_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "OrderItem", "collection": "order_items", "timestamps": false,
-            "datasource": "pg", "namespace": "app_b",
+            "datasource": "pg", "namespace": "app_b", "idPrefix": "itm",
             "fields": { "orderId": { "type": "string" }, "sku": { "type": "string" } },
             "relations": {}
         }),
@@ -52,7 +52,7 @@ fn mongo_cross_db_schemas() -> Vec<Value> {
     vec![
         json!({
             "name": "User", "collection": "users", "timestamps": false,
-            "datasource": "mongodb_main",
+            "datasource": "mongodb_main", "idPrefix": "usr",
             "fields": { "name": { "type": "string" } },
             "relations": {
                 "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "userId" }
@@ -60,7 +60,7 @@ fn mongo_cross_db_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "Order", "collection": "orders", "timestamps": false,
-            "datasource": "mongodb_main", "namespace": "orders_db",
+            "datasource": "mongodb_main", "namespace": "orders_db", "idPrefix": "ord",
             "fields": { "userId": { "type": "string" }, "code": { "type": "string" } },
             "relations": {}
         }),
@@ -88,12 +88,23 @@ fn edges_of(plan: &Value) -> Vec<Value> {
 fn b5_pg_cross_namespace_pushdown_single_unit_qualified_join() {
     let registry = registry_of(&pg_cross_ns_schemas());
     let ds = json!({ "sources": { "pg": "postgres" } });
-    let plan = plan_federated("Order{code, items{sku}}", &Default::default(), &registry, None, &ds)
-        .expect("联邦规划失败");
+    let plan = plan_federated(
+        "Order{code, items{sku}}",
+        &Default::default(),
+        &registry,
+        None,
+        &ds,
+    )
+    .expect("联邦规划失败");
 
     // 同 source（SQL）跨 namespace → 物理下推：单取数单元，无 join 边
     let sources = sources_of(&plan);
-    assert_eq!(sources.len(), 1, "SQL 跨 schema 应下推为单单元，实际: {}", plan);
+    assert_eq!(
+        sources.len(),
+        1,
+        "SQL 跨 schema 应下推为单单元，实际: {}",
+        plan
+    );
     assert_eq!(sources[0]["source"], "pg");
     assert_eq!(sources[0]["namespace"], "app_a");
     assert!(edges_of(&plan).is_empty(), "下推后不应有内存 join 边");
@@ -130,8 +141,14 @@ fn b5_pg_cross_namespace_pushdown_single_unit_qualified_join() {
 fn b6_mongo_cross_namespace_strips_to_memory_federation() {
     let registry = registry_of(&mongo_cross_db_schemas());
     let ds = json!({ "sources": { "mongodb_main": "mongo" } });
-    let plan = plan_federated("User{name, orders{code}}", &Default::default(), &registry, None, &ds)
-        .expect("联邦规划失败");
+    let plan = plan_federated(
+        "User{name, orders{code}}",
+        &Default::default(),
+        &registry,
+        None,
+        &ds,
+    )
+    .expect("联邦规划失败");
 
     // Mongo 跨 db：$lookup 不能跨库 → 拆为两个取数单元 + 一条 join 边
     let sources = sources_of(&plan);
@@ -155,8 +172,14 @@ fn b6_mongo_same_namespace_still_pushdowns_lookup() {
     schemas[1].as_object_mut().unwrap().remove("namespace");
     let registry = registry_of(&schemas);
     let ds = json!({ "sources": { "mongodb_main": "mongo" } });
-    let plan = plan_federated("User{name, orders{code}}", &Default::default(), &registry, None, &ds)
-        .expect("联邦规划失败");
+    let plan = plan_federated(
+        "User{name, orders{code}}",
+        &Default::default(),
+        &registry,
+        None,
+        &ds,
+    )
+    .expect("联邦规划失败");
 
     let sources = sources_of(&plan);
     assert_eq!(sources.len(), 1, "Mongo 同库应 $lookup 下推: {}", plan);
@@ -224,14 +247,12 @@ fn b7_mutation_pg_cross_namespace_steps_carry_namespace() {
 
 #[test]
 fn b8_route_override_same_gql_different_tenants() {
-    let registry = registry_of(&[
-        json!({
-            "name": "User", "collection": "users", "timestamps": false,
-            "datasource": "pg", "namespace": "app",
-            "fields": { "name": { "type": "string" } },
-            "relations": {}
-        }),
-    ]);
+    let registry = registry_of(&[json!({
+        "name": "User", "collection": "users", "timestamps": false,
+        "datasource": "pg", "namespace": "app",
+        "fields": { "name": { "type": "string" } },
+        "relations": {}
+    })]);
 
     let plan_t42 = plan_query("User{...}", &Default::default(), &registry, None)
         .map(|p| {
@@ -250,7 +271,10 @@ fn b8_route_override_same_gql_different_tenants() {
 
     for (plan, tenant) in [(&plan_t42, "tenant_42"), (&plan_t7, "tenant_7")] {
         for c in plan["commands"].as_array().expect("应有命令") {
-            assert_eq!(c["source"], "pg", "只 override namespace 时 source 保留声明");
+            assert_eq!(
+                c["source"], "pg",
+                "只 override namespace 时 source 保留声明"
+            );
             assert_eq!(c["namespace"], tenant);
         }
     }

@@ -48,7 +48,10 @@ pub fn tokenize(gql: &str) -> Vec<Token> {
                 v.push(chars[i]);
                 i += 1;
             }
-            tokens.push(Token { kind: "id", value: v });
+            tokens.push(Token {
+                kind: "id",
+                value: v,
+            });
             continue;
         }
         // 参数引用 @xxx
@@ -59,7 +62,10 @@ pub fn tokenize(gql: &str) -> Vec<Token> {
                 v.push(chars[i]);
                 i += 1;
             }
-            tokens.push(Token { kind: "ref", value: v });
+            tokens.push(Token {
+                kind: "ref",
+                value: v,
+            });
             continue;
         }
         i += 1; // 跳过未知字符

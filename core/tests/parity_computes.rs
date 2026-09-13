@@ -163,7 +163,10 @@ fn parity_computes_with_js_reference() {
     let mut failures: Vec<String> = Vec::new();
 
     for (fx, golden) in cases.iter().zip(goldens.iter()) {
-        let name = fx.get("name").and_then(|v| v.as_str()).unwrap_or("<unnamed>");
+        let name = fx
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<unnamed>");
         let gname = golden
             .get("name")
             .and_then(|v| v.as_str())

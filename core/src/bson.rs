@@ -90,7 +90,11 @@ pub fn canonicalize(v: &Value) -> Value {
                     };
                 }
             }
-            Value::Object(o.iter().map(|(k, x)| (k.clone(), canonicalize(x))).collect())
+            Value::Object(
+                o.iter()
+                    .map(|(k, x)| (k.clone(), canonicalize(x)))
+                    .collect(),
+            )
         }
         other => other.clone(),
     }

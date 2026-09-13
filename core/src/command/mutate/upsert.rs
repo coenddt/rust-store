@@ -7,7 +7,7 @@ use crate::command::write::has_creator_permission;
 use crate::command::{ensure_context, ERR_NO_WRITE};
 use crate::permission::{can_write_schema, filter_writable_data, Context};
 use crate::schema::{Registry, Schema};
-use crate::types::is_truthy;
+use crate::types::{is_truthy, validate_condition};
 
 use super::{has_trim_str, object_of, remove_undefined};
 
@@ -99,7 +99,12 @@ pub(in crate::command) fn build_upsert_update(
 }
 
 /// type:'one' 子文档的 updateDoc（对应 JS `_upsertOne`，无 createdBy 自动填充）
-pub(in crate::command) fn upsert_one_update(schema: &Schema, data: &Value, new_id: &str, now: i64) -> Value {
+pub(in crate::command) fn upsert_one_update(
+    schema: &Schema,
+    data: &Value,
+    new_id: &str,
+    now: i64,
+) -> Value {
     let mut set_data = object_of(&remove_undefined(data));
     let mut set_on_insert = Map::new();
 
@@ -114,10 +119,7 @@ pub(in crate::command) fn upsert_one_update(schema: &Schema, data: &Value, new_i
 
     if schema.timestamps {
         set_data.insert("updatedAt".to_string(), json!(now));
-        let created = data
-            .get("createdAt")
-            .cloned()
-            .unwrap_or_else(|| json!(now));
+        let created = data.get("createdAt").cloned().unwrap_or_else(|| json!(now));
         set_on_insert.insert("createdAt".to_string(), created);
     }
     set_data.remove("createdAt");
@@ -152,6 +154,8 @@ pub fn plan_upsert(
 ) -> Result<Value, String> {
     ensure_context(registry, ctx)?;
     let schema = registry.get(schema_name)?;
+    // 条件拒绝名单（缺陷 D-02）：upsert 条件命中拒绝名单即显式报错
+    validate_condition(condition)?;
     if !can_write_schema(schema, ctx) {
         return Err(ERR_NO_WRITE.to_string());
     }
@@ -176,8 +180,7 @@ pub fn plan_upsert(
         if has_trim_str(&id) {
             set_on_insert.insert("_id".to_string(), id);
         }
-    } else if !schema.id_prefix.is_empty()
-        && !condition.get("_id").map(is_truthy).unwrap_or(false)
+    } else if !schema.id_prefix.is_empty() && !condition.get("_id").map(is_truthy).unwrap_or(false)
     {
         set_on_insert.insert("_id".to_string(), json!(new_id));
     }

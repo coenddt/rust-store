@@ -23,7 +23,9 @@ pub fn select_async_fns(schema: &Schema, ctx: Option<&Context>) -> Vec<ComputeEn
         None => selected.extend(cache.async_fn_list.iter().cloned()),
         Some(c) => {
             for entry in &cache.async_fn_list {
-                let rl = schema.compute(&entry.key).and_then(|comp| comp.read.as_ref());
+                let rl = schema
+                    .compute(&entry.key)
+                    .and_then(|comp| comp.read.as_ref());
                 match rl {
                     Some(roles) => {
                         if evaluate(Some(c), Some(roles), Doc::Missing) {

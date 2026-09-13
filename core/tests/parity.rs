@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use rust_store_core::permission::context_from_value;
-use rust_store_core::pipeline::{build_pipeline, build_projection, parse, token_to_value, tokenize};
+use rust_store_core::pipeline::{
+    build_pipeline, build_projection, parse, token_to_value, tokenize,
+};
 use rust_store_core::schema::Registry;
 
 fn fixtures_dir() -> PathBuf {
@@ -70,7 +72,10 @@ fn parity_with_js_reference() {
     let mut failures: Vec<String> = Vec::new();
 
     for (fx, golden) in cases.iter().zip(goldens.iter()) {
-        let name = fx.get("name").and_then(|v| v.as_str()).unwrap_or("<unnamed>");
+        let name = fx
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<unnamed>");
         let gname = golden
             .get("name")
             .and_then(|v| v.as_str())

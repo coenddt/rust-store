@@ -20,7 +20,9 @@ mod upsert;
 pub use many::{plan_insert_many, plan_update_many};
 pub use single::{plan_archive_docs, plan_remove, plan_update};
 pub use upsert::plan_upsert;
-pub(in crate::command) use upsert::{build_upsert_conditions, build_upsert_update, upsert_one_update};
+pub(in crate::command) use upsert::{
+    build_upsert_conditions, build_upsert_update, upsert_one_update,
+};
 
 // ─── 共享小工具 ──────────────────────────────────────────────
 //

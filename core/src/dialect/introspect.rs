@@ -28,15 +28,35 @@ use super::Backend;
 ///
 /// 输出：schemaJSON 数组（每个 `Schema` 一个 def，可直接传给 `Registry::register`）。
 pub fn schema_def_from_rows(rows: &Value) -> Result<Value, String> {
-    let tables = rows.get("tables").and_then(|t| t.as_array()).cloned().unwrap_or_default();
-    let columns = rows.get("columns").and_then(|c| c.as_array()).cloned().unwrap_or_default();
-    let fks = rows.get("fks").and_then(|c| c.as_array()).cloned().unwrap_or_default();
+    let tables = rows
+        .get("tables")
+        .and_then(|t| t.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let columns = rows
+        .get("columns")
+        .and_then(|c| c.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let fks = rows
+        .get("fks")
+        .and_then(|c| c.as_array())
+        .cloned()
+        .unwrap_or_default();
     // 索引仅作元数据（铁律 6：绝不写 DDL 回库），此解析结果暂不参与 schema 生成
-    let _indexes = rows.get("indexes").and_then(|c| c.as_array()).cloned().unwrap_or_default();
+    let _indexes = rows
+        .get("indexes")
+        .and_then(|c| c.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     let mut defs: Vec<Value> = Vec::new();
     for t in &tables {
-        let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let name = t
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if name.is_empty() {
             continue;
         }
@@ -53,26 +73,51 @@ pub fn schema_def_from_rows(rows: &Value) -> Result<Value, String> {
         let mut relations_map = Map::new();
 
         for c in &table_cols {
-            let col = c.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let db_type = c.get("type").and_then(|v| v.as_str()).unwrap_or("").to_uppercase();
+            let col = c
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let db_type = c
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_uppercase();
             let required = c.get("notnull").and_then(|v| v.as_i64()).unwrap_or(0) != 0;
             let is_pk = c.get("pk").and_then(|v| v.as_i64()).unwrap_or(0) != 0;
             if is_pk {
-                fields_map.insert("_id".to_string(), json!({ "type": "string", "required": true }));
-                // 主键列可能非 _id 命名：映射后再补原始列
-                if col != "_id" {
-                    fields_map.insert("__pk_col".to_string(), json!(col));
-                }
+                fields_map.insert(
+                    "_id".to_string(),
+                    json!({ "type": "string", "required": true }),
+                );
+                // 主键列可能非 _id 命名：统一映射为 _id 字段。此前此处会补写 "__pk_col": "<原列名>"
+                // 裸字符串键 —— 既被 normalize_fields 误判为「类型简写」产出幻影字段，全库又无任何
+                // 消费方，已删除（评测 m-8-1）；如未来需要记录物理主键列，应以对象形态的字段定义承载
                 continue;
             }
-            fields_map.insert(col.clone(), json!({ "type": db_field_type(&col, &db_type), "required": required }));
+            fields_map.insert(
+                col.clone(),
+                json!({ "type": db_field_type(&col, &db_type), "required": required }),
+            );
         }
 
         // 外键 → 关系；被引用表的主键列名（默认 _id）为 foreignField
         for f in &table_fks {
-            let col = f.get("column").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let ref_table = f.get("refTable").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let ref_column = f.get("refColumn").and_then(|v| v.as_str()).unwrap_or("_id").to_string();
+            let col = f
+                .get("column")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let ref_table = f
+                .get("refTable")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let ref_column = f
+                .get("refColumn")
+                .and_then(|v| v.as_str())
+                .unwrap_or("_id")
+                .to_string();
             if col.is_empty() || ref_table.is_empty() {
                 continue;
             }
@@ -119,13 +164,21 @@ pub fn schema_def_from_rows(rows: &Value) -> Result<Value, String> {
     // 第二轮：把反向 `__rev_<refTable>` 关系归一到被引用表的 `relations` 里
     let mut by_name: Map<String, Value> = Map::new();
     for d in &defs {
-        let n = d.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let n = d
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         by_name.insert(n, d.clone());
     }
     // 收集反向关系
     let mut rev_rels: Vec<(String, String, Value)> = Vec::new(); // (target_table, rel_name, rel_def)
     for d in &defs {
-        let n = d.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let n = d
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let rels = d.get("relations").and_then(|r| r.as_object());
         if let Some(rels) = rels {
             for (k, v) in rels {
@@ -169,7 +222,15 @@ fn db_field_type(col: &str, db_type: &str) -> &'static str {
         return "array";
     }
     match db_type {
-        t if t.contains("INT") || t.contains("NUMERIC") || t.contains("DECIMAL") || t.contains("REAL") || t.contains("FLOAT") || t.contains("DOUBLE") => "number",
+        t if t.contains("INT")
+            || t.contains("NUMERIC")
+            || t.contains("DECIMAL")
+            || t.contains("REAL")
+            || t.contains("FLOAT")
+            || t.contains("DOUBLE") =>
+        {
+            "number"
+        }
         t if t.contains("BOOL") => "boolean",
         t if t.contains("DATE") || t.contains("TIME") || t.contains("TIMESTAMP") => "date",
         _ => "string",

@@ -5,7 +5,9 @@ use napi::Result;
 use napi_derive::napi;
 use serde_json::{json, Value};
 
-use rust_store_core::command::{prepare_query as core_prepare_query, strip_query as core_strip_query};
+use rust_store_core::command::{
+    prepare_query as core_prepare_query, strip_query as core_strip_query,
+};
 use rust_store_core::computes::{
     collect_rel_deps, merge_depends_into_ast, process_node as core_process_node, select_async_fns,
     strip_dep_injected as core_strip_dep_injected, InjectInfo,
@@ -22,7 +24,13 @@ impl Registry {
 
     /// 逐条后处理文档（默认值 → 同步 fn → 递归下钻 → 权限裁剪），返回 `{doc}`
     #[napi]
-    pub fn process_node(&self, env: Env, gql: String, doc: Value, ctx: Option<Value>) -> Result<Value> {
+    pub fn process_node(
+        &self,
+        env: Env,
+        gql: String,
+        doc: Value,
+        ctx: Option<Value>,
+    ) -> Result<Value> {
         let mut ast = parse_gql(&gql).map_err(err)?;
         let schema = self.core.get(&ast.model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);

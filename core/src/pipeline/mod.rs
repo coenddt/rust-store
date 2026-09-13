@@ -25,8 +25,8 @@ mod token;
 mod util;
 
 pub use ast::{Ast, RelAst};
-pub use build::{build_pipeline, flatten_object_fields};
 pub(crate) use build::flatten_object_fields_impl;
+pub use build::{build_pipeline, flatten_object_fields};
 pub use lookup::{build_add_fields, build_compute_lookup_stages, build_empty_lookup, build_lookup};
 pub use parse::{parse, parse_gql};
 pub use projection::build_projection;

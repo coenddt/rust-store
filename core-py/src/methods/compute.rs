@@ -3,7 +3,9 @@
 use pyo3::prelude::*;
 use serde_json::{json, Value};
 
-use rust_store_core::command::{prepare_query as core_prepare_query, strip_query as core_strip_query};
+use rust_store_core::command::{
+    prepare_query as core_prepare_query, strip_query as core_strip_query,
+};
 use rust_store_core::computes::{
     collect_rel_deps, merge_depends_into_ast, process_node as core_process_node, select_async_fns,
     strip_dep_injected as core_strip_dep_injected, InjectInfo,

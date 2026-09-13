@@ -108,7 +108,13 @@ fn run_postprocess(fx: &Value) -> Result<Value, String> {
         .cloned()
         .unwrap_or_default();
 
-    finalize_query(&pp, &mut items, &registry, Some(&TestFnRegistry), ctx.as_ref())?;
+    finalize_query(
+        &pp,
+        &mut items,
+        &registry,
+        Some(&TestFnRegistry),
+        ctx.as_ref(),
+    )?;
     Ok(json!({ "items": items }))
 }
 
@@ -153,7 +159,11 @@ fn run_case(fx: &Value) -> Result<Value, String> {
 
 /// 黄金基准形如 `{name, kind, result}`；报错用例则为 `{name, kind, error: true}`
 fn golden_result(golden: &Value) -> Value {
-    if golden.get("error").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if golden
+        .get("error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         json!({ "error": true })
     } else {
         golden.get("result").cloned().unwrap_or(Value::Null)
@@ -172,7 +182,10 @@ fn parity_fnfns_with_js_reference() {
     let mut failures: Vec<String> = Vec::new();
 
     for (fx, golden) in cases.iter().zip(goldens.iter()) {
-        let name = fx.get("name").and_then(|v| v.as_str()).unwrap_or("<unnamed>");
+        let name = fx
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<unnamed>");
         let gname = golden
             .get("name")
             .and_then(|v| v.as_str())

@@ -64,12 +64,17 @@ pub struct Schema {
 
 impl Schema {
     pub fn compute(&self, name: &str) -> Option<&ComputeDef> {
-        self.computes.iter().find(|(k, _)| k == name).map(|(_, c)| c)
+        self.computes
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, c)| c)
     }
 
     /// 解析后的数据源名（缺省 `default`）
     pub fn source(&self) -> &str {
-        self.datasource.as_deref().unwrap_or(crate::datasource::DEFAULT_SOURCE)
+        self.datasource
+            .as_deref()
+            .unwrap_or(crate::datasource::DEFAULT_SOURCE)
     }
 
     /// 解析后的 namespace（空串归一为 `None`）
@@ -128,10 +133,16 @@ impl Registry {
             Some(Value::Bool(false)) => false,
             Some(Value::String(s)) if s == "ms" || s == "s" => true,
             Some(Value::String(s)) => {
-                return Err(format!("timestamps 仅支持 true/false/'ms'/'s'，实际 {:?}", s))
+                return Err(format!(
+                    "timestamps 仅支持 true/false/'ms'/'s'，实际 {:?}",
+                    s
+                ))
             }
             Some(other) => {
-                return Err(format!("timestamps 仅支持 true/false/'ms'/'s'，实际 {}", other))
+                return Err(format!(
+                    "timestamps 仅支持 true/false/'ms'/'s'，实际 {}",
+                    other
+                ))
             }
         };
 
@@ -318,11 +329,7 @@ impl Registry {
         let ns = namespace.filter(|s| !s.is_empty());
         self.schemas
             .values()
-            .find(|s| {
-                s.collection == collection
-                    && s.source() == source
-                    && s.ns() == ns
-            })
+            .find(|s| s.collection == collection && s.source() == source && s.ns() == ns)
             .ok_or_else(|| {
                 format!(
                     "Schema 未定位（source = {}, namespace = {:?}, collection = {}）",

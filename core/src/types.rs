@@ -48,3 +48,37 @@ pub fn str_list(v: Option<&Value>) -> Option<Vec<String>> {
         _ => None,
     }
 }
+
+// ─── 条件拒绝名单（缺陷 D-02） ───────────────────────────────
+
+/// 服务端执行类操作符拒绝名单：这些键会触发数据库端 JS/表达式执行
+/// （SQL 侧会被静默丢条件返回全量，Mongo 侧会服务端执行），任何路径
+/// 都不允许进入规划，命中即显式报错。
+const FORBIDDEN_COND_OPS: [&str; 3] = ["$where", "$function", "$accumulator"];
+
+/// 校验查询/写入条件：递归遍历条件树，命中拒绝名单即显式报错。
+///
+/// 覆盖顶层逻辑组（`$and`/`$or`/`$nor`）、字段级操作符对象与嵌套数组内的
+/// 任意深度 —— 防止 `$where` 等载荷借嵌套结构绕过校验。
+pub fn validate_condition(filter: &Value) -> Result<(), String> {
+    match filter {
+        Value::Object(map) => {
+            for (k, v) in map {
+                if FORBIDDEN_COND_OPS.contains(&k.as_str()) {
+                    return Err(format!(
+                        "条件包含被拒绝的操作符 {k}（服务端执行类，命中拒绝名单）：请改用结构化条件"
+                    ));
+                }
+                validate_condition(v)?;
+            }
+            Ok(())
+        }
+        Value::Array(arr) => {
+            for v in arr {
+                validate_condition(v)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}

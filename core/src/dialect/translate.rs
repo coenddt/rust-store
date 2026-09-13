@@ -21,11 +21,7 @@ use super::Backend;
 /// ```
 /// `unsupported` 非空表示存在无法安全下推的组合（如 `$lookup` 子 `$limit` 每父 top-N）；
 /// 此时 `stmts` 不含该段，Host 必须兜底（拒绝或降级重查），**绝不返回错误结果**。
-pub fn translate(
-    backend: Backend,
-    cmd: &Value,
-    registry: &Registry,
-) -> Result<Value, String> {
+pub fn translate(backend: Backend, cmd: &Value, registry: &Registry) -> Result<Value, String> {
     let mut warnings: Vec<String> = Vec::new();
     let mut unsupported: Vec<Value> = Vec::new();
     let kind = cmd.get("kind").and_then(|v| v.as_str()).unwrap_or("");

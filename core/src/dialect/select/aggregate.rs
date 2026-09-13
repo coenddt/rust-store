@@ -38,13 +38,28 @@ pub(super) fn translate_aggregate(
 
     for stage in pipeline {
         if let Some(m) = stage.get("$match") {
-            let wh = build_filter(m, backend, "t", &col_fn(schema), &mut param_seq);
+            let wh = build_filter(
+                m,
+                backend,
+                "t",
+                &col_fn(schema),
+                &mut param_seq,
+                Some(&mut *warnings),
+            )?;
             if !wh.text.is_empty() {
                 root_wheres.push(wh);
             }
         } else if let Some(lo) = stage.get("$lookup") {
-            let alias = lo.get("as").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let from = lo.get("from").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let alias = lo
+                .get("as")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let from = lo
+                .get("from")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             // 每父 top-N（子 $sort/$skip/$limit）需窗口函数 / LATERAL 才能下推。
             // 若只发 LEFT JOIN 会静默返回\"未截断\"的子集 —— 违反「绝不静默产生错误结果」，
             // 故不下推该 JOIN，改为标记 `_unsupported:"childLimit"`，由 Host 决定兜底策略。
@@ -74,7 +89,11 @@ pub(super) fn translate_aggregate(
                 for (k, dir) in o {
                     if let Some(c) = col_fn(schema)(k) {
                         let d = dir.as_i64().unwrap_or(1);
-                        root_order.push(format!("t.{} {}", q(backend, &c), if d >= 0 { "ASC" } else { "DESC" }));
+                        root_order.push(format!(
+                            "t.{} {}",
+                            q(backend, &c),
+                            if d >= 0 { "ASC" } else { "DESC" }
+                        ));
                     }
                 }
             }
@@ -127,7 +146,10 @@ pub(super) fn translate_aggregate(
         let rel_schema = match registry.get(&j.model) {
             Ok(s) => s,
             Err(e) => {
-                warnings.push(format!("$lookup 关系 {} 目标不可定位，跳过 JOIN: {}", j.alias, e));
+                warnings.push(format!(
+                    "$lookup 关系 {} 目标不可定位，跳过 JOIN: {}",
+                    j.alias, e
+                ));
                 continue;
             }
         };
@@ -141,11 +163,21 @@ pub(super) fn translate_aggregate(
         ));
         let rel_cols = projection_fields(rel_schema, None);
         for rf in rel_cols {
-            if rel_schema.fields.get(&rf).map(|f| f.field_type == "object" || f.field_type == "array").unwrap_or(false) {
+            if rel_schema
+                .fields
+                .get(&rf)
+                .map(|f| f.field_type == "object" || f.field_type == "array")
+                .unwrap_or(false)
+            {
                 continue;
             }
             let alias_col = format!("{}_{}_{}", j.alias, i, rf);
-            cols_sql.push(format!("{}.{} AS {}", r, q(backend, &rf), q(backend, &alias_col)));
+            cols_sql.push(format!(
+                "{}.{} AS {}",
+                r,
+                q(backend, &rf),
+                q(backend, &alias_col)
+            ));
             // 聚合数组：路径 rel_name.rf
             columns.push(RowCol {
                 alias: alias_col,
@@ -156,15 +188,25 @@ pub(super) fn translate_aggregate(
         }
     }
 
-    let where_sql = if root_wheres.is_empty() { String::new() } else {
-        let text = root_wheres.iter().map(|w| w.text.clone()).collect::<Vec<_>>().join(" AND ");
+    let where_sql = if root_wheres.is_empty() {
+        String::new()
+    } else {
+        let text = root_wheres
+            .iter()
+            .map(|w| w.text.clone())
+            .collect::<Vec<_>>()
+            .join(" AND ");
         for w in &root_wheres {
             all_params.extend(w.params.clone());
         }
         format!(" WHERE {}", text)
     };
 
-    let order_sql = if root_order.is_empty() { String::new() } else { format!(" ORDER BY {}", root_order.join(", ")) };
+    let order_sql = if root_order.is_empty() {
+        String::new()
+    } else {
+        format!(" ORDER BY {}", root_order.join(", "))
+    };
 
     // LIMIT/OFFSET 需参数
     let mut limit_params: Vec<Value> = Vec::new();
@@ -192,13 +234,23 @@ pub(super) fn translate_aggregate(
             }
         }
     } else if root_offset > 0 {
-        // 仅 offset
+        // 仅 offset（无 limit）：「跳过前 N 行、取到末尾」没有跨后端统一写法，必须按后端分开生成 ——
+        // PostgreSQL/MySQL 的 LIMIT 均不接受负数（PG：`LIMIT must not be negative`；MySQL：参数错误），
+        // 此前的统一 `LIMIT -1 OFFSET` 在这两端会生成无法执行的 SQL（评测 M-8-1）。
         match backend {
             Backend::Postgres => {
-                limit_sql = format!(" LIMIT -1 OFFSET ${}", param_seq + 1);
+                // PostgreSQL 合法惯用法：省略 LIMIT，只写 OFFSET
+                // （占位序号游标到此已无后续消费，无需递增）
+                limit_sql = format!(" OFFSET ${}", param_seq + 1);
                 limit_params.push(json!(root_offset));
             }
-            _ => {
+            Backend::Mysql => {
+                // MySQL 合法惯用法（官方文档「取到末尾」）：用超过最大行数的大数 LIMIT（2^64-1）+ OFFSET
+                limit_sql = " LIMIT 18446744073709551615 OFFSET ?".to_string();
+                limit_params.push(json!(root_offset));
+            }
+            Backend::Sqlite => {
+                // SQLite 官方语义：`LIMIT -1` 即「不限制行数」，合法，保留
                 limit_sql = " LIMIT -1 OFFSET ?".to_string();
                 limit_params.push(json!(root_offset));
             }
@@ -206,14 +258,18 @@ pub(super) fn translate_aggregate(
     }
     all_params.extend(limit_params);
 
-    let select_list = if cols_sql.is_empty() { q(backend, "_id") } else { cols_sql.join(", ") };
+    let select_list = if cols_sql.is_empty() {
+        q(backend, "_id")
+    } else {
+        cols_sql.join(", ")
+    };
     let text = format!(
         "SELECT {} FROM {}{}{}{}",
-        select_list,
-        from_sql,
-        where_sql,
-        order_sql,
-        limit_sql,
+        select_list, from_sql, where_sql, order_sql, limit_sql,
     );
-    Ok(vec![SqlStmt::select(text, all_params, RowShape { columns })])
+    Ok(vec![SqlStmt::select(
+        text,
+        all_params,
+        RowShape { columns },
+    )])
 }

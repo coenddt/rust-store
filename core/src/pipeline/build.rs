@@ -4,7 +4,7 @@ use serde_json::{json, Map, Value};
 
 use crate::permission::Context;
 use crate::schema::{Registry, Schema};
-use crate::types::is_truthy;
+use crate::types::{is_truthy, validate_condition};
 
 use super::ast::{Ast, RelAst};
 use super::lookup::{build_add_fields, build_compute_lookup_stages, build_lookup};
@@ -59,11 +59,16 @@ fn custom_pipeline_branch(
     root_sort: Option<&Value>,
     root_skip: Option<&Value>,
     root_limit: Option<&Value>,
-) -> Value {
+) -> Result<Value, String> {
     if let Some(arr) = root_pipeline.as_array() {
         stages.extend(arr.iter().cloned());
     }
     if let Some(v) = non_nullish(root_condition) {
+        // 根 $condition 覆盖同样不允许携带拒绝名单操作符（缺陷 D-02）
+        validate_condition(v)?;
+        // 缺陷修复：$condition 与 $sort/$skip/$limit 同为根参数，按「覆盖/追加」
+        // 语义应用到 pipeline（与 JS 参考实现对拍一致），否则用户 $match 保留、
+        // 根条件被静默丢弃
         override_or_append(stages, "$match", v.clone());
     }
     if let Some(v) = non_nullish(root_sort) {
@@ -75,7 +80,7 @@ fn custom_pipeline_branch(
     if let Some(v) = non_nullish(root_limit) {
         override_or_append(stages, "$limit", v.clone());
     }
-    Value::Array(std::mem::take(stages))
+    Ok(Value::Array(std::mem::take(stages)))
 }
 
 /// 标准 GQL：逐层展开根 relations 为 $lookup（one 关系附加 $unwind）
@@ -87,10 +92,12 @@ fn root_lookup_stages(
     registry: &Registry,
 ) -> Result<(), String> {
     for (rel_name, rel_ast) in &ast.relations {
-        let rel_def = schema
-            .relations
-            .get(rel_name)
-            .ok_or_else(|| format!("关系 \"{}\" 未在 schema \"{}\" 中定义", rel_name, schema.name))?;
+        let rel_def = schema.relations.get(rel_name).ok_or_else(|| {
+            format!(
+                "关系 \"{}\" 未在 schema \"{}\" 中定义",
+                rel_name, schema.name
+            )
+        })?;
         let rel_schema = registry.get(&rel_def.model)?;
         stages.push(build_lookup(
             rel_name, rel_ast, params, rel_def, rel_schema, schema, 0, 0, registry,
@@ -121,14 +128,14 @@ pub fn build_pipeline(
     let root_pipeline = param(params, ast.params.get("pipeline")).cloned();
 
     if let Some(pipe) = non_nullish(root_pipeline.as_ref()).filter(|v| v.is_array()) {
-        return Ok(custom_pipeline_branch(
+        return custom_pipeline_branch(
             &mut stages,
             pipe,
             root_condition.as_ref(),
             root_sort.as_ref(),
             root_skip.as_ref(),
             root_limit.as_ref(),
-        ));
+        );
     }
 
     // ── 标准 GQL 模式 ──
@@ -136,6 +143,8 @@ pub fn build_pipeline(
     flatten_object_fields(ast, schema);
 
     if let Some(cond) = non_nullish(root_condition.as_ref()) {
+        // 条件拒绝名单校验（缺陷 D-02：$where 等载荷显式报错，绝不静默传递）
+        validate_condition(cond)?;
         stages.push(json!({ "$match": cond }));
     }
 

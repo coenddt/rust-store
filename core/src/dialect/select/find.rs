@@ -16,9 +16,10 @@ pub(super) fn translate_find(
     schema: &Schema,
     filter: &Value,
     projection: Option<&Value>,
+    warnings: crate::dialect::filter::Warnings<'_>,
 ) -> Result<Vec<SqlStmt>, String> {
     let mut seq = 0usize;
-    let wh = build_filter(filter, backend, "t", &col_fn(schema), &mut seq);
+    let wh = build_filter(filter, backend, "t", &col_fn(schema), &mut seq, warnings)?;
     let mut selected = projection_fields(schema, projection);
     // Mongo find 默认返回 `_id`（仅当显式 `_id: 0` 时排除）
     let id_excluded = projection
@@ -37,9 +38,17 @@ pub(super) fn translate_find(
             columns.push(RowCol::scalar(&c, &[f.as_str()]));
         }
     }
-    let select_list = if cols_sql.is_empty() { q(backend, "_id") } else { cols_sql.join(", ") };
+    let select_list = if cols_sql.is_empty() {
+        q(backend, "_id")
+    } else {
+        cols_sql.join(", ")
+    };
     let from = tname(backend, schema);
-    let where_sql = if wh.text.is_empty() { String::new() } else { format!(" WHERE {}", wh.text) };
+    let where_sql = if wh.text.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", wh.text)
+    };
     Ok(vec![SqlStmt::select(
         format!("SELECT {} FROM {} t{}", select_list, from, where_sql),
         wh.params,

@@ -5,9 +5,8 @@ use napi_derive::napi;
 use serde_json::Value;
 
 use rust_store_core::dialect::{
-    introspect_to_schema_json as core_introspect_to_schema_json,
-    merge_schema as core_merge_schema, restore_rows_json as core_restore_rows_json,
-    translate as core_dialect_translate, Backend,
+    introspect_to_schema_json as core_introspect_to_schema_json, merge_schema as core_merge_schema,
+    restore_rows_json as core_restore_rows_json, translate as core_dialect_translate, Backend,
 };
 
 use crate::convert::err;

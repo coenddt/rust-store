@@ -115,7 +115,9 @@ fn merge_path(obj: &mut Map<String, Value>, path: &[String], val: Value) {
         return;
     }
     let head = path[0].clone();
-    let entry = obj.entry(head.clone()).or_insert_with(|| Value::Object(Map::new()));
+    let entry = obj
+        .entry(head.clone())
+        .or_insert_with(|| Value::Object(Map::new()));
     if let Value::Object(m) = entry {
         merge_path(m, &path[1..], val);
     }
@@ -134,19 +136,43 @@ pub fn restore_rows_json(shape: &Value, rows: &Value) -> Result<Value, String> {
 impl RowShape {
     /// 从绑定层传入的 JSON 解析（与 `to_value` 对称）
     pub fn from_value(v: &Value) -> Result<RowShape, String> {
-        let obj = v.get("columns").and_then(|c| c.as_array()).ok_or("rowShape 缺少 columns")?;
+        let obj = v
+            .get("columns")
+            .and_then(|c| c.as_array())
+            .ok_or("rowShape 缺少 columns")?;
         let mut columns = Vec::new();
         for c in obj {
-            let alias = c.get("alias").and_then(|a| a.as_str()).ok_or("列缺 alias")?.to_string();
-            let path: Vec<String> = c.get("path")
+            let alias = c
+                .get("alias")
+                .and_then(|a| a.as_str())
+                .ok_or("列缺 alias")?
+                .to_string();
+            let path: Vec<String> = c
+                .get("path")
                 .and_then(|p| p.as_array())
-                .map(|arr| arr.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|s| s.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             let is_array = c.get("isArray").and_then(|b| b.as_bool()).unwrap_or(false);
-            let sub_shape = c.get("subShape")
-                .and_then(|s| if s.is_null() { None } else { Some(RowShape::from_value(s)) })
+            let sub_shape = c
+                .get("subShape")
+                .and_then(|s| {
+                    if s.is_null() {
+                        None
+                    } else {
+                        Some(RowShape::from_value(s))
+                    }
+                })
                 .transpose()?;
-            columns.push(RowCol { alias, json_path: path, is_array, sub_shape });
+            columns.push(RowCol {
+                alias,
+                json_path: path,
+                is_array,
+                sub_shape,
+            });
         }
         Ok(RowShape { columns })
     }

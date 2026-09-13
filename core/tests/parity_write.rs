@@ -21,8 +21,8 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 
 use rust_store_core::command::{
-    plan_archive_docs, plan_insert_many, plan_mutation, plan_remove, plan_update,
-    plan_update_many, plan_upsert, Probe,
+    plan_archive_docs, plan_insert_many, plan_mutation, plan_remove, plan_update, plan_update_many,
+    plan_upsert, Probe,
 };
 use rust_store_core::computes::apply_defaults_and_computes;
 use rust_store_core::permission::context_from_value;
@@ -180,7 +180,10 @@ fn run_update_many(fx: &Value) -> Result<Value, String> {
         .get("command")
         .cloned()
         .ok_or_else(|| format!("plan_update_many 未产出命令: {}", out))?;
-    let modified_count = fx.get("modifiedCount").and_then(|v| v.as_i64()).unwrap_or(0);
+    let modified_count = fx
+        .get("modifiedCount")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     Ok(json!({ "command": command, "returns": { "modifiedCount": modified_count } }))
 }
 
@@ -193,7 +196,13 @@ fn run_remove(fx: &Value) -> Result<Value, String> {
         .cloned()
         .unwrap_or_default();
 
-    let out = plan_remove(model_of(fx), &registry, ctx_of(fx).as_ref(), &condition, Probe::NotProbed)?;
+    let out = plan_remove(
+        model_of(fx),
+        &registry,
+        ctx_of(fx).as_ref(),
+        &condition,
+        Probe::NotProbed,
+    )?;
     let find_command = out.get("findCommand").cloned().unwrap_or(Value::Null);
     let delete_command = out
         .get("deleteCommand")
@@ -270,7 +279,14 @@ fn run_mutation(fx: &Value) -> Result<Value, String> {
         })
         .unwrap_or_default();
 
-    let out = plan_mutation(model_of(fx), &registry, ctx_of(fx).as_ref(), &data, now_of(fx), &new_ids)?;
+    let out = plan_mutation(
+        model_of(fx),
+        &registry,
+        ctx_of(fx).as_ref(),
+        &data,
+        now_of(fx),
+        &new_ids,
+    )?;
     let steps = out
         .get("steps")
         .and_then(|v| v.as_array())
@@ -326,7 +342,11 @@ fn run_case(fx: &Value) -> Result<Value, String> {
 
 /// 黄金基准形如 `{name, kind, result}`；报错用例则为 `{name, kind, error: true}`
 fn golden_result(golden: &Value) -> Value {
-    if golden.get("error").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if golden
+        .get("error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         json!({ "error": true })
     } else {
         golden.get("result").cloned().unwrap_or(Value::Null)
@@ -345,7 +365,10 @@ fn parity_write_with_js_reference() {
     let mut failures: Vec<String> = Vec::new();
 
     for (fx, golden) in cases.iter().zip(goldens.iter()) {
-        let name = fx.get("name").and_then(|v| v.as_str()).unwrap_or("<unnamed>");
+        let name = fx
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<unnamed>");
         let gname = golden
             .get("name")
             .and_then(|v| v.as_str())

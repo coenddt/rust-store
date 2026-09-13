@@ -52,9 +52,7 @@ impl InjectInfo {
         for (name, inj) in &self.relations {
             let v = match inj {
                 Injected::All => Value::String("__all__".to_string()),
-                Injected::Fields(f) => {
-                    Value::Array(f.iter().cloned().map(Value::String).collect())
-                }
+                Injected::Fields(f) => Value::Array(f.iter().cloned().map(Value::String).collect()),
             };
             m.insert(name.clone(), v);
         }
@@ -134,10 +132,7 @@ pub fn collect_rel_deps(schema: &Schema) -> Result<Vec<RelDep>, String> {
 }
 
 /// 把关系字段需求合并注入到 AST（对应 JS `_injectIntoAst`）
-pub fn inject_into_ast(
-    relations: &mut Vec<(String, RelAst)>,
-    rel_deps: &[RelDep],
-) -> InjectInfo {
+pub fn inject_into_ast(relations: &mut Vec<(String, RelAst)>, rel_deps: &[RelDep]) -> InjectInfo {
     let mut info = InjectInfo::default();
 
     for dep in rel_deps {
@@ -152,7 +147,8 @@ pub fn inject_into_ast(
                     }
                 }
                 if !added.is_empty() {
-                    info.relations.push((dep.name.clone(), Injected::Fields(added)));
+                    info.relations
+                        .push((dep.name.clone(), Injected::Fields(added)));
                 }
             }
             None => {
@@ -193,7 +189,9 @@ pub fn strip_dep_injected(items: &mut [Value], info: &InjectInfo) {
         return;
     }
     for item in items.iter_mut() {
-        let Some(o) = item.as_object_mut() else { continue };
+        let Some(o) = item.as_object_mut() else {
+            continue;
+        };
         for (rel_name, injected) in &info.relations {
             match injected {
                 Injected::All => {

@@ -162,7 +162,11 @@ fn run_case(fx: &Value) -> Result<Value, String> {
 
 /// 黄金基准形如 `{name, kind, result}`；报错用例则为 `{name, kind, error: true}`
 fn golden_result(golden: &Value) -> Value {
-    if golden.get("error").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if golden
+        .get("error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         json!({ "error": true })
     } else {
         golden.get("result").cloned().unwrap_or(Value::Null)
@@ -181,7 +185,10 @@ fn parity_federation_with_reference() {
     let mut failures: Vec<String> = Vec::new();
 
     for (fx, golden) in cases.iter().zip(goldens.iter()) {
-        let name = fx.get("name").and_then(|v| v.as_str()).unwrap_or("<unnamed>");
+        let name = fx
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<unnamed>");
         let gname = golden
             .get("name")
             .and_then(|v| v.as_str())
@@ -253,5 +260,9 @@ fn merge_rejects_oversized_source() {
     let results = vec![json!([{ "_id": "u1" }]), Value::Array(oversized)];
 
     let err = merge_federated(&plan, &results).expect_err("超上限应报错");
-    assert!(err.contains("超过联邦内存 join 上限"), "错误信息异常: {}", err);
+    assert!(
+        err.contains("超过联邦内存 join 上限"),
+        "错误信息异常: {}",
+        err
+    );
 }

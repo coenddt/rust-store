@@ -101,7 +101,10 @@ impl DataSourceConfig {
     }
 
     pub fn get(&self, name: &str) -> Option<DataSource> {
-        self.sources.iter().find(|(n, _)| n == name).map(|(_, s)| *s)
+        self.sources
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, s)| *s)
     }
 
     /// 解析 schema 声明的 source 名 → [`DataSource`]
@@ -131,9 +134,18 @@ mod tests {
         .unwrap();
 
         assert_eq!(cfg.resolve(None).unwrap(), DataSource::Mongo);
-        assert_eq!(cfg.resolve(Some("mysql1")).unwrap(), DataSource::Sql(Backend::Mysql));
-        assert_eq!(cfg.resolve(Some("pg1")).unwrap(), DataSource::Sql(Backend::Postgres));
-        assert_eq!(cfg.resolve(Some("lite")).unwrap(), DataSource::Sql(Backend::Sqlite));
+        assert_eq!(
+            cfg.resolve(Some("mysql1")).unwrap(),
+            DataSource::Sql(Backend::Mysql)
+        );
+        assert_eq!(
+            cfg.resolve(Some("pg1")).unwrap(),
+            DataSource::Sql(Backend::Postgres)
+        );
+        assert_eq!(
+            cfg.resolve(Some("lite")).unwrap(),
+            DataSource::Sql(Backend::Sqlite)
+        );
     }
 
     #[test]

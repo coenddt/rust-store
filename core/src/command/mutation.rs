@@ -18,8 +18,8 @@ use crate::schema::Registry;
 
 use super::cmd::{cmd_find_one_and_update, cmd_insert_one};
 use super::mutate::{
-    build_upsert_conditions, build_upsert_update, needs_new_id, upsert_one_update, IdCursor,
-    object_of,
+    build_upsert_conditions, build_upsert_update, needs_new_id, object_of, upsert_one_update,
+    IdCursor,
 };
 use super::write::build_insert_doc;
 use super::{ensure_context, step_id_placeholder, ERR_NO_WRITE};
@@ -124,9 +124,10 @@ fn plan_mutation_node(
             continue;
         }
         // checked 索引：数据键未在 relations 定义时显式报错，绝不 panic
-        let rel_def = schema.relations.get(rel_name).ok_or_else(|| {
-            format!("模型 {} 的数据含未定义关系字段 {}", schema_name, rel_name)
-        })?;
+        let rel_def = schema
+            .relations
+            .get(rel_name)
+            .ok_or_else(|| format!("模型 {} 的数据含未定义关系字段 {}", schema_name, rel_name))?;
         let rel_schema = registry.get(&rel_def.model)?;
 
         if rel_def.rel_type == "one" {
@@ -152,8 +153,7 @@ fn plan_mutation_node(
             let update_doc = upsert_one_update(rel_schema, &child_val, new_id, now);
             let filter = json!({ rel_def.foreign_field.clone(): parent_ph });
             let fu_options = json!({ "upsert": true, "returnDocument": "after" });
-            let cmd =
-                cmd_find_one_and_update(rel_schema, &filter, &update_doc, &fu_options);
+            let cmd = cmd_find_one_and_update(rel_schema, &filter, &update_doc, &fu_options);
             steps.push(json!({ "model": rel_def.model, "command": cmd }));
         } else if rel_def.rel_type == "many" {
             let arr: Vec<Value> = match rel_val {
@@ -166,7 +166,15 @@ fn plan_mutation_node(
                 }
                 let mut c = object_of(&child);
                 c.insert(rel_def.foreign_field.clone(), json!(parent_ph));
-                plan_mutation_node(&rel_def.model, registry, ctx, &Value::Object(c), now, ids, steps)?;
+                plan_mutation_node(
+                    &rel_def.model,
+                    registry,
+                    ctx,
+                    &Value::Object(c),
+                    now,
+                    ids,
+                    steps,
+                )?;
             }
         }
         // 其他 type：JS 无分支，静默跳过

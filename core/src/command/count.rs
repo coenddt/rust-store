@@ -20,7 +20,12 @@ pub struct CountQueryPlan {
 
 impl CountQueryPlan {
     pub fn to_value(&self) -> Value {
-        let mut m = self.query.to_value().as_object().cloned().unwrap_or_default();
+        let mut m = self
+            .query
+            .to_value()
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
         m.insert("countCommand".to_string(), self.count_command.clone());
         if let Some(o) = self.page.to_value().as_object() {
             for (k, v) in o {
@@ -68,7 +73,8 @@ pub fn plan_query_with_count(
         .and_then(|r| param(&params, Some(r)).cloned())
         .filter(is_truthy)
         .unwrap_or_else(|| json!({}));
-    count_filter = merge_owner_condition(schema, ctx, Some(count_filter)).unwrap_or_else(|| json!({}));
+    count_filter =
+        merge_owner_condition(schema, ctx, Some(count_filter)).unwrap_or_else(|| json!({}));
 
     let count_command = cmd_count_documents(schema, &count_filter);
 
