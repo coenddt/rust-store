@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "rust-store-py"
-version = "2.0.1"
+version = "2.0.2"
 description = "Python binding (PyO3) for the rust-store multi-backend data engine: GQL parsing, permissions, computed columns and SQL dialect translation for MongoDB, MySQL, SQLite and PostgreSQL"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,8 @@ license-files = ["LICENSE"]
 keywords = [
   "rust-store", "pyo3", "binding", "gql", "data-layer",
   "multi-backend", "mongodb", "mysql", "sqlite", "postgresql",
-  "sql-dialect", "query-planner", "orm-alternative", "rust",
+  "sql-dialect", "query-planner", "query-validation", "orm-alternative",
+  "ai-agent", "rust",
 ]
 authors = [
     { name = "leo", email = "coen_ddt@qq.com" },

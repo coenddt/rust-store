@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: "If you use rust-store in your work, please cite it as below."
+title: "rust-store: multi-backend data engine core (GQL planning, permissions, SQL dialect translation)"
+abstract: >-
+  A pure-logic Rust core with no IO, clock or randomness: it parses the MongoDB-style GQL tree
+  dialect, applies role and field-level permission checks, injects owner conditions, resolves
+  computed columns, plans one native command per backend and translates that command to
+  parameterized MongoDB, MySQL, SQLite and PostgreSQL. Exposed to Node.js through the napi-rs
+  binding rust-store-node and to Python through the PyO3 binding rust-store-py; the hosts
+  nodejs-store and py-store own driver IO.
+type: software
+authors:
+  - name: "leo"
+    email: "coen_ddt@qq.com"
+repository-code: "https://github.com/coenddt/rust-store"
+url: "https://github.com/coenddt/rust-store"
+license: MIT
+version: "2.0.2"
+date-released: "2026-09-14"
+keywords:
+  - rust
+  - multi-backend
+  - mongodb
+  - mysql
+  - sqlite
+  - postgresql
+  - query-planner
+  - sql-dialect
+  - gql
+  - rbac
+  - napi-rs
+  - pyo3
+  - computed-columns
+  - federation

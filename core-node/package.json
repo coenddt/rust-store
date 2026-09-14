@@ -1,6 +1,6 @@
 {
   "name": "rust-store-node",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Node.js binding (napi-rs) for the rust-store multi-backend data engine: GQL parsing, permissions, computed columns and SQL dialect translation for MongoDB, MySQL, SQLite and PostgreSQL",
   "main": "index.js",
   "types": "index.d.ts",
@@ -48,7 +48,9 @@
     "postgresql",
     "sql-dialect",
     "query-planner",
+    "query-validation",
     "orm-alternative",
+    "ai-agent",
     "rust"
   ],
   "author": "leo <coen_ddt@qq.com>",
@@ -66,10 +68,10 @@
     "sql.js": "^1.8.0"
   },
   "optionalDependencies": {
-    "rust-store-node-win32-x64-msvc": "2.0.1",
-    "rust-store-node-linux-x64-gnu": "2.0.1",
-    "rust-store-node-linux-arm64-gnu": "2.0.1",
-    "rust-store-node-darwin-x64": "2.0.1",
-    "rust-store-node-darwin-arm64": "2.0.1"
+    "rust-store-node-win32-x64-msvc": "2.0.2",
+    "rust-store-node-linux-x64-gnu": "2.0.2",
+    "rust-store-node-linux-arm64-gnu": "2.0.2",
+    "rust-store-node-darwin-x64": "2.0.2",
+    "rust-store-node-darwin-arm64": "2.0.2"
   }
 }

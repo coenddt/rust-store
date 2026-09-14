@@ -1,6 +1,6 @@
 {
   "name": "rust-store-node-win32-x64-msvc",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "os": [
     "win32"
   ],
@@ -26,7 +26,9 @@
     "postgresql",
     "sql-dialect",
     "query-planner",
+    "query-validation",
     "orm-alternative",
+    "ai-agent",
     "rust"
   ],
   "author": "leo <coen_ddt@qq.com>",

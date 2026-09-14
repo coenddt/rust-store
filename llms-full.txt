@@ -428,3 +428,24 @@ dot-paths in `$group.by`), which is why those cases are errors only on the SQL s
 **Can I use it from Rust directly?**
 Yes — `rust-store-core` is a plain Rust library (`publish = false`, depend on it by path).
 Register schemas, plan queries, translate commands, then execute with your own driver.
+
+---
+
+## 12. Scenario walkthroughs
+
+Step-by-step use cases live in
+[`doc/use-cases/`](https://github.com/coenddt/rust-store/tree/main/doc/use-cases):
+
+1. **Embed the core in a Rust service** — `rust-store-core` as a path dependency: register
+   schemas, plan a query, translate it to SQL, hand the command to your own driver.
+2. **Natural language → query compiler** — turn model output into a reviewable plan: compile GQL
+   to a plan *before* anything touches a database, and classify rejections by stable error
+   prefixes.
+3. **One dialect across four databases** — write GQL once, plan to MongoDB command JSON, then
+   translate the same command to parameterized MySQL / PostgreSQL / SQLite.
+4. **Node.js / Python parity** — one Rust core, two bindings: camelCase vs snake_case is the only
+   difference, and parity suites plus golden fixtures keep it that way.
+5. **Reuse the permission model** — keep ownership and role checks in the schema: the context
+   shape, the `creator` pseudo-role, owner-condition injection, and the `routeOverride` caveat.
+6. **SQL pushdown limits by dialect** — what MongoDB, MySQL, PostgreSQL and SQLite each push down
+   natively, what degrades to `degraded` events, and what the engine refuses outright.

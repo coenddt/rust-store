@@ -12,6 +12,8 @@ through a small example built **only from documented APIs**. Read them alongside
 | [02](02-natural-language-to-query-compiler.md) | Natural language → query compiler | Turn model output into a reviewable plan: compile GQL to a plan *before* anything touches a database, and classify rejections by stable error prefixes. |
 | [03](03-one-dialect-across-four-databases.md) | One dialect across four databases | Write GQL once, plan to MongoDB command JSON, then translate the same command to parameterized MySQL / PostgreSQL / SQLite. |
 | [04](04-node-python-parity.md) | Node.js / Python parity | One Rust core, two bindings: camelCase vs snake_case is the only difference, and parity suites plus golden fixtures keep it that way. |
+| [05](05-reuse-the-permission-model.md) | Reuse the permission model | Embed the core and keep ownership and role checks in the schema: the context shape, the `creator` pseudo-role, owner-condition injection, and the `routeOverride` caveat. |
+| [06](06-sql-pushdown-limits-by-dialect.md) | SQL pushdown limits by dialect | What MongoDB, MySQL, PostgreSQL and SQLite each push down natively, what degrades to `degraded` events, and what the engine refuses outright. |
 
 ## See also
 

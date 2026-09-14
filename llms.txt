@@ -20,6 +20,7 @@
 ## Docs
 
 - [README](https://github.com/coenddt/rust-store#readme): architecture, API reference, GQL capabilities, dialects, permission model, parity testing, gotchas
+- [Use cases](https://github.com/coenddt/rust-store/tree/main/doc/use-cases): six scenario walkthroughs — embed the core in a Rust service, natural language → query compiler, one dialect across four databases, Node.js / Python parity, reuse the permission model, SQL pushdown limits by dialect
 - [Chinese README](https://github.com/coenddt/rust-store/blob/main/README.zh-CN.md): 中文文档
 - [CHANGELOG](https://github.com/coenddt/rust-store/blob/main/CHANGELOG.md)
 
