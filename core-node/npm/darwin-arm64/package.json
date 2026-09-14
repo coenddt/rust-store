@@ -1,6 +1,6 @@
 {
   "name": "rust-store-node-darwin-arm64",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "os": [
     "darwin"
   ],
@@ -32,7 +32,7 @@
     "rust"
   ],
   "author": "leo <coen_ddt@qq.com>",
-  "homepage": "https://github.com/coenddt/rust-store#readme",
+  "homepage": "https://coenddt.github.io/rust-store/",
   "license": "MIT",
   "engines": {
     "node": ">=18"
