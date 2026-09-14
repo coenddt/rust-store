@@ -2,8 +2,17 @@
 name = "rust-store-core"
 version = "2.0.4"
 edition = "2021"
-description = "rust-store 语言无关核心：GQL 解析 / 权限 / 计算列 / 命令规划 / SQL 方言翻译（纯逻辑，无 IO）"
-publish = false
+description = "One data engine for MongoDB, MySQL, PostgreSQL and SQLite: a MongoDB-style GQL query language, permission checks, computed columns, command planning and SQL dialect translation. Pure logic, no IO."
+# license 供 crates.io 展示 SPDX 标识；license-file 让 MIT 原文随 .crate 一同分发
+# （MIT 要求副本携带许可声明）。两者同时给出时 cargo 会提示「只需其一」，此处为有意为之。
+license = "MIT"
+license-file = "../LICENSE"
+repository = "https://github.com/coenddt/rust-store"
+homepage = "https://coenddt.github.io/rust-store/"
+documentation = "https://docs.rs/rust-store-core"
+readme = "README.md"
+keywords = ["gql", "mongodb", "sql", "query-builder", "multi-database"]
+categories = ["database", "database-implementations", "parser-implementations"]
 
 [lib]
 name = "rust_store_core"

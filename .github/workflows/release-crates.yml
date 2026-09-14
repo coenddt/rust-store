@@ -1,0 +1,38 @@
+name: release-crates
+
+# 发布 rust-store-core 到 crates.io（docs.rs 会自动构建 API 文档）。
+#
+# 凭证：仓库 Secret `CARGO_REGISTRY_TOKEN`（crates.io 的 API token，scope 勾选
+#       publish-new / publish-update）。crates.io 暂不支持按仓库 OIDC 免 token 发布，
+#       故此处沿用长期 token；PyPI 侧仍走 Trusted Publishing，两者互不影响。
+#
+# 触发：推 v* tag，或手动 dispatch（手动触发只做 `cargo publish --dry-run`，不真正上传）。
+#
+# 注：core 的 `readme` / `license-file` 指向包上级目录（../LICENSE），cargo 会把它们
+#     拷进 .crate 包内，因此单 crate 可以自举，无需整仓打包。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: crates.io publish (rust-store-core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify the package could be published
+        run: cargo publish -p rust-store-core --dry-run
+
+      - name: Publish (tag only)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: cargo publish -p rust-store-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

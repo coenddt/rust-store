@@ -2,6 +2,7 @@
 
 **A single Rust core engine for multi-backend data access — GQL parsing, permission checks, computed columns, command planning and SQL dialect translation, exposed to Node.js and Python through native bindings.**
 
+![crates.io](https://img.shields.io/crates/v/rust-store-core)
 ![npm version](https://img.shields.io/npm/v/rust-store-node)
 ![PyPI version](https://img.shields.io/pypi/v/rust-store-py)
 ![license](https://img.shields.io/badge/license-MIT-blue)
@@ -114,12 +115,13 @@ npm i rust-store-node          # Node binding; platform natives ship as optional
 pip install rust-store-py      # Python binding (maturin wheel)
 ```
 
-Rust library (path dependency — the crates are not published to crates.io):
+Rust library:
 
-```toml
-[dependencies]
-rust-store-core = { path = "path/to/rust-store/core" }
+```bash
+cargo add rust-store-core     # pure logic: GQL → command JSON → SQL, no IO
 ```
+
+API docs are built automatically on [docs.rs](https://docs.rs/rust-store-core). Working from a checkout instead? Use a path dependency: `rust-store-core = { path = "path/to/rust-store/core" }`.
 
 Build toolchain for development: Rust stable (edition 2021) with `cargo` / `clippy` / `rustfmt`; `napi-rs` CLI for `core-node`; `maturin >= 1.7, < 2.0` for `core-py`.
 

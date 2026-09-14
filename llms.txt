@@ -4,14 +4,14 @@
 
 `rust-store` is the engine behind [`nodejs-store`](https://github.com/coenddt/nodejs-store) and [`py-store`](https://github.com/coenddt/py-store). It holds **no database driver and performs no IO**: it compiles GQL (and writes) into backend-agnostic MongoDB command JSON for the host to execute, and translates those commands into parameterized SQL for MySQL / PostgreSQL / SQLite. Same semantics in Node.js and Python by construction.
 
-- Crates: `rust-store-core` (pure logic), `rust-store-node` (napi-rs → npm `rust-store-node`), `rust-store-py` (PyO3 → PyPI `rust-store-py`)
+- Crates: [`rust-store-core`](https://crates.io/crates/rust-store-core) (pure logic), `rust-store-node` (napi-rs → npm `rust-store-node`), `rust-store-py` (PyO3 → PyPI `rust-store-py`)
 - Backends: MongoDB, MySQL, SQLite, PostgreSQL
 - License: MIT
 
 ## When to use it
 
 - Building, debugging or extending the `nodejs-store` / `py-store` hosts — this is where GQL parsing, permissions and dialect translation live
-- Using the same query dialect from a Rust service (`rust-store-core` as a path dependency)
+- Using the same query dialect from a Rust service (`cargo add rust-store-core`)
 - Building a host/binding for another language (the core is language-agnostic; `core-node` and `core-py` are worked examples of the JSON command contract)
 - Guaranteeing parity between a Node service and a Python service
 - Moving permission and computed-column logic out of application code into the schema
@@ -20,6 +20,8 @@
 ## Docs
 
 - [Documentation site](https://coenddt.github.io/rust-store/): the scenario walkthroughs as individual, indexable pages — the fastest way in
+- [crates.io: rust-store-core](https://crates.io/crates/rust-store-core): the pure-logic Rust library — `cargo add rust-store-core`; use it directly from a Rust service
+- [docs.rs: rust-store-core](https://docs.rs/rust-store-core): auto-generated API reference for every public function
 - [README](https://github.com/coenddt/rust-store#readme): architecture, API reference, GQL capabilities, dialects, permission model, parity testing, gotchas
 - [Use cases](https://github.com/coenddt/rust-store/tree/main/doc/use-cases): six scenario walkthroughs — embed the core in a Rust service, natural language → query compiler, one dialect across four databases, Node.js / Python parity, reuse the permission model, SQL pushdown limits by dialect
 - [Chinese README](https://github.com/coenddt/rust-store/blob/main/README.zh-CN.md): 中文文档
