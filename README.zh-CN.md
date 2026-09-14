@@ -2,6 +2,12 @@
 
 **多后端数据访问的单一 Rust 核心引擎 —— GQL 解析、权限校验、计算列、命令规划与 SQL 方言翻译，经原生绑定同时服务 Node.js 与 Python。**
 
+![npm version](https://img.shields.io/npm/v/rust-store-node)
+![PyPI version](https://img.shields.io/pypi/v/rust-store-py)
+![license](https://img.shields.io/badge/license-MIT-blue)
+![rust](https://img.shields.io/badge/rust-stable-orange)
+![bindings](https://img.shields.io/badge/bindings-napi--rs%20%7C%20PyO3-blueviolet)
+
 > English docs: [README.md](README.md)
 
 `rust-store` 是 [`nodejs-store`](https://github.com/coenddt/nodejs-store) 与 [`py-store`](https://github.com/coenddt/py-store) 共享的引擎。它**不持有任何数据库驱动、不做任何 IO**：把一条查询（GQL）或一次写入编译为后端无关的**命令**（MongoDB 命令 JSON）交给宿主执行，并把命令翻译为 MySQL / PostgreSQL / SQLite 的参数化 SQL。
@@ -42,6 +48,15 @@
 1. **无 IO、无时钟、无随机源。** core 永不打开连接、永不读取系统时钟。`now` 与 `newId(s)` 一律由宿主传入 —— 这正是引擎确定、跨语言可复现的根源。
 2. **显式优于静默。** 任何无法安全翻译的东西都会报错，或产出结构化的 `unsupported` + warning。引擎绝不产出悄悄缺一段的 SQL。
 3. **JSON in，JSON out。** 绑定层只做转换与转发，不新增行为，因此 Node.js 与 Python 不可能语义漂移。
+
+### 与其他具体项目的区别
+
+仅为定位说明，基于这些项目在撰写时的公开文档 —— 请以你自己的需求为准去核实。
+
+- **对比 `sqlx` / Diesel / SeaORM** —— 它们是直接访问 SQL 数据库的 Rust 数据库工具集与 ORM。`rust-store-core` 从不开连接：它只规划命令并翻译方言，产出的命令 JSON 由 Node.js 或 Python 宿主执行。正因如此，同一引擎才能以完全相同的语义同时服务两种宿主。
+- **对比「把这一层写两遍」** —— 通常的替代做法是写一份 JavaScript 实现再加一份 Python 重写实现，二者会随时间产生漂移。而这里是一个 Rust core 通过纯 JSON 桥被绑定两次（`napi-rs`、`PyO3`），并由 `core/tests/parity*.rs` 以及 `fixtures/` 中的黄金夹具强制两个绑定保持一致。
+- **对比 `transports` 式「一个 core、多个绑定」的项目** —— 跨绑定共享一个 Rust core，是序列化/传输层已被验证的模式。`rust-store` 把这一模式应用到了*数据访问语义*上：一套 GQL、一个权限引擎与四种 SQL/Mongo 方言，落在两个语言绑定之后。
+- **对比「在宿主语言里做」** —— 在 JavaScript *和* Python 里各实现一遍 GQL 解析、权限与四种 SQL 方言，意味着两条代码路径、两处 bug 面、两套边界情况。Rust core 让边界变得明确：纯逻辑集中在一处，IO 留在各宿主中。
 
 ## 何时使用
 

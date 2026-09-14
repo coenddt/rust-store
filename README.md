@@ -2,6 +2,12 @@
 
 **A single Rust core engine for multi-backend data access — GQL parsing, permission checks, computed columns, command planning and SQL dialect translation, exposed to Node.js and Python through native bindings.**
 
+![npm version](https://img.shields.io/npm/v/rust-store-node)
+![PyPI version](https://img.shields.io/pypi/v/rust-store-py)
+![license](https://img.shields.io/badge/license-MIT-blue)
+![rust](https://img.shields.io/badge/rust-stable-orange)
+![bindings](https://img.shields.io/badge/bindings-napi--rs%20%7C%20PyO3-blueviolet)
+
 `rust-store` is the engine behind [`nodejs-store`](https://github.com/coenddt/nodejs-store) and [`py-store`](https://github.com/coenddt/py-store). It contains **no database driver and performs no IO**: it turns a query (GQL) or a write into a backend-agnostic **command** (MongoDB command JSON) for its host to execute, and translates those commands into parameterized SQL for MySQL / PostgreSQL / SQLite.
 
 > 中文文档见 [README.zh-CN.md](README.zh-CN.md)。
@@ -42,6 +48,15 @@ A multi-backend data engine written once in Rust and shared by every host langua
 1. **No IO, no clock, no randomness.** The core never opens a connection and never reads the system clock. `now` and `newId(s)` are always passed in by the host — this is what makes the engine deterministic and cross-language reproducible.
 2. **Explicit over silent.** Anything that cannot be translated safely raises an error or emits a structured `unsupported` + warning. The engine never produces SQL that is quietly missing a clause.
 3. **JSON in, JSON out.** Bindings only convert and forward; they add no behaviour, so Node.js and Python cannot drift apart semantically.
+
+### How it differs from specific projects
+
+Positioning only, based on those projects' public documentation at the time of writing — verify against your own requirements.
+
+- **vs `sqlx` / Diesel / SeaORM** — those are Rust database toolkits and ORMs that talk to SQL databases directly. `rust-store-core` never opens a connection: it plans a command and translates dialects, and the resulting command JSON is executed by the Node.js or Python host. That is what lets one engine serve both hosts with identical semantics.
+- **vs writing the layer twice** — the usual alternative is a JavaScript implementation plus a Python re-implementation, which drifts over time. Here a single Rust core is bound twice (`napi-rs`, `PyO3`) over JSON-only bridges, and `core/tests/parity*.rs` plus the golden fixtures in `fixtures/` enforce that the two bindings stay identical.
+- **vs `transports`-style "one core, several bindings" projects** — sharing a Rust core across bindings is a proven pattern for serialization/transport layers. `rust-store` applies it to *data access semantics*: one GQL, one permission engine and four SQL/Mongo dialects behind two language bindings.
+- **vs doing it in the host language** — implementing GQL parsing, permissions and four SQL dialects in JavaScript *and* Python means two code paths, two bug surfaces and two sets of edge cases. The Rust core makes the boundary explicit: pure logic in one place, IO in the hosts.
 
 ## When to use it
 
