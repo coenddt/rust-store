@@ -2,7 +2,7 @@
 name = "rust-store-core"
 version = "2.0.0"
 edition = "2021"
-description = "rust-store 语言无关核心（Phase 1：GQL 解析 / Pipeline / Projection 纯逻辑）"
+description = "rust-store 语言无关核心：GQL 解析 / 权限 / 计算列 / 命令规划 / SQL 方言翻译（纯逻辑，无 IO）"
 publish = false
 
 [lib]

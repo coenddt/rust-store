@@ -1,0 +1,38 @@
+# rust-store
+
+> A single Rust core engine for multi-backend data access — GQL parsing, permission checks, computed columns, command planning and SQL dialect translation, exposed to Node.js and Python through native bindings.
+
+`rust-store` is the engine behind [`nodejs-store`](https://github.com/coenddt/nodejs-store) and [`py-store`](https://github.com/coenddt/py-store). It holds **no database driver and performs no IO**: it compiles GQL (and writes) into backend-agnostic MongoDB command JSON for the host to execute, and translates those commands into parameterized SQL for MySQL / PostgreSQL / SQLite. Same semantics in Node.js and Python by construction.
+
+- Crates: `rust-store-core` (pure logic), `rust-store-node` (napi-rs → npm `rust-store-node`), `rust-store-py` (PyO3 → PyPI `rust-store-py`)
+- Backends: MongoDB, MySQL, SQLite, PostgreSQL
+- License: MIT
+
+## When to use it
+
+- Building, debugging or extending the `nodejs-store` / `py-store` hosts — this is where GQL parsing, permissions and dialect translation live
+- Using the same query dialect from a Rust service (`rust-store-core` as a path dependency)
+- Building a host/binding for another language (the core is language-agnostic; `core-node` and `core-py` are worked examples of the JSON command contract)
+- Guaranteeing parity between a Node service and a Python service
+- Moving permission and computed-column logic out of application code into the schema
+- Building an AI / natural-language query layer (planning is a pure `gql → plan` function)
+
+## Docs
+
+- [README](https://github.com/coenddt/rust-store#readme): architecture, API reference, GQL capabilities, dialects, permission model, parity testing, gotchas
+- [Chinese README](https://github.com/coenddt/rust-store/blob/main/README.zh-CN.md): 中文文档
+- [CHANGELOG](https://github.com/coenddt/rust-store/blob/main/CHANGELOG.md)
+
+## Concepts
+
+- [Core principles](https://github.com/coenddt/rust-store#what-it-is): no IO / no clock / no randomness; explicit over silent; JSON in, JSON out
+- [API reference](https://github.com/coenddt/rust-store#api-reference): `Registry` plan methods, permissions, computes, dialect translation, federation
+- [GQL capabilities](https://github.com/coenddt/rust-store#gql-capabilities): relations, `$group` / `$having`, relation aggregate predicates (semi/anti-join), computed columns
+- [Backends and dialects](https://github.com/coenddt/rust-store#backends-and-dialects): the four targets and what is Mongo-only
+- [Permission model](https://github.com/coenddt/rust-store#permission-model): schema / field / relation / computed-column level, `creator`, system context
+- [Boundaries and gotchas](https://github.com/coenddt/rust-store#boundaries-and-gotchas): error prefixes, `__present` sentinel, U1–U4 rules, federation `degraded`
+
+## Optional
+
+- `text-to-query` skill: natural language → GQL + params
+- [nodejs-store](https://github.com/coenddt/nodejs-store) / [py-store](https://github.com/coenddt/py-store): the two production hosts
