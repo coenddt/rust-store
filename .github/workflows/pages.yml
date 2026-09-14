@@ -1,0 +1,59 @@
+name: pages
+
+# Builds and publishes the documentation site on GitHub Pages.
+#
+# The site is generated from doc/use-cases/ and README.md at build time (see
+# .github/pages/assemble.sh); nothing here is duplicated in the repository.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'doc/use-cases/**'
+      - 'README.md'
+      - 'llms.txt'
+      - '.github/pages/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble site source
+        env:
+          REPO_SLUG: ${{ github.repository }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+          BASEURL: https://coenddt.github.io/rust-store
+        run: bash .github/pages/assemble.sh
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./_site_src
+          destination: ./_site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

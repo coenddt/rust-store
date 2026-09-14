@@ -12,6 +12,8 @@
 
 > 中文文档见 [README.zh-CN.md](README.zh-CN.md)。
 
+**Documentation site:** <https://coenddt.github.io/rust-store/> — every scenario walkthrough with runnable code and the engine's exact limits, one indexable page per scenario.
+
 ---
 
 ## Table of contents

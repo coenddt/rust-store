@@ -18,3 +18,8 @@ __pycache__/
 # Node
 node_modules/
 npm-debug.log*
+
+# GitHub Pages build artifacts (see .github/pages/assemble.sh)
+/_config.yml
+/_site/
+/_site_src/

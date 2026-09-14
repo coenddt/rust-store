@@ -1,0 +1,30 @@
+title: "rust-store"
+tagline: "One Rust core for multi-backend data access, bound to Node.js and Python"
+description: >-
+  rust-store is a Rust core engine that performs no IO: it parses GQL, enforces permissions,
+  resolves computed columns, plans queries and mutations into backend-agnostic MongoDB commands,
+  and translates those commands into parameterized MySQL, PostgreSQL and SQLite. It is exposed
+  to Node.js through napi-rs and to Python through PyO3.
+url: "https://coenddt.github.io"
+baseurl: "/rust-store"
+repository: "coenddt/rust-store"
+registry_url: "https://www.npmjs.com/package/rust-store-node"
+registry_label: "npm"
+install: "cargo add rust-store-core"
+lang: en
+
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - vendor

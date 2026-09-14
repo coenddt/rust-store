@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="{{ page.lang | default: site.lang | default: 'en' }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if page.title %}{{ page.title }} · {% endif %}{{ site.title }}</title>
+<meta name="description" content="{{ page.description | default: site.description | strip_newlines }}">
+<link rel="canonical" href="{{ site.url }}{{ site.baseurl }}{{ page.url }}">
+<meta property="og:type" content="article">
+<meta property="og:title" content="{% if page.title %}{{ page.title }} · {% endif %}{{ site.title }}">
+<meta property="og:description" content="{{ page.description | default: site.description | strip_newlines }}">
+<meta property="og:url" content="{{ site.url }}{{ site.baseurl }}{{ page.url }}">
+<meta name="twitter:card" content="summary">
+<link rel="alternate" type="text/plain" href="{{ site.baseurl }}/llms.txt" title="llms.txt">
+<style>
+  :root { --fg:#1b2430; --muted:#5b6b7c; --line:#e3e8ee; --accent:#0b6bcb; --bg:#ffffff; --code-bg:#0f172a; --code-fg:#e6edf6; }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .wrap { max-width: 52rem; margin: 0 auto; padding: 0 1.25rem 4rem; }
+  header.site { border-bottom:1px solid var(--line); background:#fbfcfe; }
+  header.site .wrap { padding-top:1rem; padding-bottom:1rem; display:flex; flex-wrap:wrap; gap:.5rem 1.25rem; align-items:baseline; }
+  header.site a { color:var(--fg); text-decoration:none; }
+  header.site .brand { font-weight:700; letter-spacing:-.01em; }
+  header.site nav { display:flex; gap:1.25rem; font-size:.9rem; }
+  header.site nav a { color:var(--muted); }
+  header.site nav a:hover { color:var(--accent); }
+  main { padding-top:2rem; }
+  h1 { font-size:1.9rem; line-height:1.25; letter-spacing:-.02em; margin:0 0 1rem; }
+  h2 { font-size:1.3rem; margin:2.25rem 0 .75rem; padding-bottom:.3rem; border-bottom:1px solid var(--line); }
+  h3 { font-size:1.05rem; margin:1.75rem 0 .5rem; }
+  a { color:var(--accent); }
+  p, li { color:var(--fg); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.875em; }
+  :not(pre) > code { background:#eef2f7; border:1px solid var(--line); border-radius:4px; padding:.08em .3em; }
+  pre { background:var(--code-bg); color:var(--code-fg); padding:1rem 1.1rem; border-radius:8px; overflow-x:auto; font-size:.85rem; line-height:1.55; }
+  pre code { color:inherit; }
+  .highlight { background:transparent; }
+  .highlight pre { margin:0; }
+  table { border-collapse:collapse; width:100%; margin:1rem 0; font-size:.92rem; display:block; overflow-x:auto; }
+  th, td { border:1px solid var(--line); padding:.5rem .7rem; text-align:left; vertical-align:top; }
+  th { background:#f5f8fb; }
+  blockquote { margin:1rem 0; padding:.1rem 1rem; border-left:3px solid var(--line); color:var(--muted); }
+  hr { border:0; border-top:1px solid var(--line); margin:2rem 0; }
+  footer.site { border-top:1px solid var(--line); margin-top:3rem; padding:1.25rem 0 2rem; color:var(--muted); font-size:.875rem; }
+  footer.site a { color:var(--muted); }
+</style>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "{{ site.title }}",
+  "description": "{{ site.description | strip_newlines }}",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Linux, macOS, Windows",
+  "url": "{{ site.url }}{{ site.baseurl }}/",
+  "codeRepository": "https://github.com/{{ site.repository }}",
+  "license": "https://opensource.org/licenses/MIT",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="{{ site.baseurl }}/">{{ site.title }}</a>
+    <nav>
+      <a href="{{ site.baseurl }}/use-cases/">Use cases</a>
+      <a href="{{ site.baseurl }}/readme.html">Docs</a>
+      <a href="https://github.com/{{ site.repository }}">GitHub</a>
+      <a href="{{ site.registry_url }}">{{ site.registry_label }}</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap">
+{{ content }}
+</main>
+<footer class="site">
+  <div class="wrap">
+    <p>{{ site.title }} — {{ site.tagline }}. MIT licensed. Source: <a href="https://github.com/{{ site.repository }}">github.com/{{ site.repository }}</a>.</p>
+  </div>
+</footer>
+</body>
+</html>
