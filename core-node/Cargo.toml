@@ -1,6 +1,6 @@
 [package]
 name = "rust-store-node"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2021"
 description = "rust-store 的 Node 绑定（napi-rs）：把 core 的 Command 契约暴露给 JS Host"
 publish = false

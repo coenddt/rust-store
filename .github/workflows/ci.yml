@@ -49,7 +49,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core-node
-      - run: npm ci
+      # 用 npm install 而非 npm ci：optionalDependencies 把平台子包钉在当前版本，
+      # 而该版本的平台子包要由 release-npm.yml 的 publish job（napi prepublish）才发布，
+      # lockfile 不可能先记录它的 integrity → npm ci 会因 package.json 与 lock 不同步而失败。
+      - run: npm install
       - name: Build binding（debug 构建，parity 不测性能）
         run: npx napi build --platform
       - name: Node 宿主 parity 对拍

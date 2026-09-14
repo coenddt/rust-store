@@ -53,7 +53,11 @@ jobs:
         with:
           node-version: 20
           registry-url: 'https://registry.npmjs.org'
-      - run: npm ci
+      # npm install 而非 npm ci：平台子包被 optionalDependencies 钉在当前版本，
+      # 而该版本要等本工作流 publish job 的 napi prepublish 才产出，lockfile 无法预先
+      # 记录其 integrity；npm ci 会因 package.json 与 lock 不同步直接失败。
+      # 未发布的平台包在 install 阶段只会告警（optional 语义），不影响后续构建。
+      - run: npm install
       - name: Build binding
         run: npx napi build --platform --release --target ${{ matrix.target }}
       - name: Upload prebuild
@@ -81,7 +85,8 @@ jobs:
         with:
           node-version: 20
           registry-url: 'https://registry.npmjs.org'
-      - run: npm ci
+      # 同 build job：见上面对 npm install 的说明。
+      - run: npm install
       - uses: actions/download-artifact@v4
         with:
           path: core-node/artifacts
