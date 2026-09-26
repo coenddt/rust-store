@@ -32,7 +32,10 @@ pub(super) fn with_route_override(
     route_override: &Option<Value>,
     registry: &rust_store_core::schema::Registry,
 ) -> Result<Value> {
-    let present = route_override.as_ref().map(|v| !v.is_null()).unwrap_or(false);
+    let present = route_override
+        .as_ref()
+        .map(|v| !v.is_null())
+        .unwrap_or(false);
     ensure_route_override_allowed(registry, present).map_err(err)?;
     if let Some(ov) = route_override.as_ref().filter(|v| !v.is_null()) {
         core_apply_route_override(&mut plan, ov);

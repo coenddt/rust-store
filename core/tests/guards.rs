@@ -182,7 +182,10 @@ fn user_pipeline_rejected_in_text2query() {
 
 #[test]
 fn user_pipeline_write_stages_rejected_in_both_profiles() {
-    for stage in [json!({ "$out": "dest" }), json!({ "$merge": { "into": "dest" } })] {
+    for stage in [
+        json!({ "$out": "dest" }),
+        json!({ "$merge": { "into": "dest" } }),
+    ] {
         let params = params_of(json!({ "p0": [stage.clone()] }));
 
         // standard 档：档位放行 → 落到阶段安全校验（R3，拒绝写副作用）
@@ -191,12 +194,14 @@ fn user_pipeline_write_stages_rejected_in_both_profiles() {
         assert!(err.contains("写副作用"), "应点明写副作用拒绝: {err}");
 
         // text2query 档：档位收缩优先（`$pipeline` 直通整体禁用），亦为显式 Err
-        let err = plan_query(PIPELINE_GQL, &params, &t2q_registry(), Some(&Context::system()))
-            .expect_err("text2query 档 `$pipeline` 整体禁用（含写副作用阶段）");
-        assert!(
-            err.starts_with(ERR_TEXT2QUERY),
-            "应携带档位哨兵前缀: {err}"
-        );
+        let err = plan_query(
+            PIPELINE_GQL,
+            &params,
+            &t2q_registry(),
+            Some(&Context::system()),
+        )
+        .expect_err("text2query 档 `$pipeline` 整体禁用（含写副作用阶段）");
+        assert!(err.starts_with(ERR_TEXT2QUERY), "应携带档位哨兵前缀: {err}");
     }
 }
 
@@ -589,8 +594,13 @@ fn rel_pred_filter_shape_allowed_in_standard() {
         json!({ "meta": { "level": "beginner" } }),
         json!({ "meta.seo.title": "看Rust" }),
     ] {
-        plan_query(REL_PRED_GQL, &rel_pred(filter.clone()), &shape_registry(), None)
-            .unwrap_or_else(|e| panic!("standard 档关系谓词 filter {filter} 应放行: {e}"));
+        plan_query(
+            REL_PRED_GQL,
+            &rel_pred(filter.clone()),
+            &shape_registry(),
+            None,
+        )
+        .unwrap_or_else(|e| panic!("standard 档关系谓词 filter {filter} 应放行: {e}"));
     }
 }
 
@@ -604,8 +614,13 @@ fn rel_pred_filter_shape_rejected_in_text2query() {
     ] {
         let mut reg = shape_registry();
         reg.set_profile(Profile::Text2Query);
-        let err = plan_query(REL_PRED_GQL, &rel_pred(filter), &reg, Some(&Context::system()))
-            .expect_err("text2query 档关系谓词 filter 必须显式报错");
+        let err = plan_query(
+            REL_PRED_GQL,
+            &rel_pred(filter),
+            &reg,
+            Some(&Context::system()),
+        )
+        .expect_err("text2query 档关系谓词 filter 必须显式报错");
         assert!(err.contains(code), "应报 {code}：{err}");
     }
 }
@@ -1306,8 +1321,15 @@ fn write_paths_reject_u1_in_text2query() {
         .expect_err("plan_remove 数组字段条件应显式报错");
     assert!(err.contains("U1"), "plan_remove 应报 U1: {err}");
 
-    let err = plan_update_many("Course", &reg, Some(&ctx), &cond, &json!({ "title": "x" }), 0)
-        .expect_err("plan_update_many 数组字段条件应显式报错");
+    let err = plan_update_many(
+        "Course",
+        &reg,
+        Some(&ctx),
+        &cond,
+        &json!({ "title": "x" }),
+        0,
+    )
+    .expect_err("plan_update_many 数组字段条件应显式报错");
     assert!(err.contains("U1"), "plan_update_many 应报 U1: {err}");
 
     let err = plan_upsert(

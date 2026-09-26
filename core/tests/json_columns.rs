@@ -87,7 +87,10 @@ fn u3_object_dotted_filter_pushes_json_extract() {
 
     let pg = translate(Backend::Postgres, &cmd, &reg()).unwrap();
     let text = pg["stmts"][0]["text"].as_str().unwrap();
-    assert!(text.contains("(t.\"meta\" #>> '{seo,title}')"), "PG U3: {text}");
+    assert!(
+        text.contains("(t.\"meta\" #>> '{seo,title}')"),
+        "PG U3: {text}"
+    );
 
     let my = translate(Backend::Mysql, &cmd, &reg()).unwrap();
     let text = my["stmts"][0]["text"].as_str().unwrap();
@@ -114,7 +117,10 @@ fn u4_object_dotted_sort_pushes_json_extract() {
 
     let pg = translate(Backend::Postgres, &cmd, &reg()).unwrap();
     let text = pg["stmts"][0]["text"].as_str().unwrap();
-    assert!(text.contains("ORDER BY (t.\"meta\" #>> '{level}') ASC"), "PG U4: {text}");
+    assert!(
+        text.contains("ORDER BY (t.\"meta\" #>> '{level}') ASC"),
+        "PG U4: {text}"
+    );
 }
 
 /// 写入：object 字段序列化为 JSON 文本参数（跨后端落 JSON 列）
@@ -127,7 +133,9 @@ fn insert_object_field_serialized_as_json_text() {
     let out = translate(Backend::Sqlite, &cmd, &reg()).unwrap();
     let params = out["stmts"][0]["params"].as_array().unwrap();
     assert!(
-        params.iter().any(|p| p.as_str() == Some("{\"level\":\"a\"}")),
+        params
+            .iter()
+            .any(|p| p.as_str() == Some("{\"level\":\"a\"}")),
         "object 字段应序列化为 JSON 文本: {params:?}"
     );
 }
@@ -167,9 +175,7 @@ fn u1_array_contains_pushes_native_predicate() {
     let sq = translate(Backend::Sqlite, &cmd, &reg()).unwrap();
     let text = sq["stmts"][0]["text"].as_str().unwrap();
     assert!(
-        text.contains(
-            "EXISTS (SELECT 1 FROM json_each(t.\"tags\") WHERE json_each.value = ?)"
-        ),
+        text.contains("EXISTS (SELECT 1 FROM json_each(t.\"tags\") WHERE json_each.value = ?)"),
         "SQLite U1: {text}"
     );
     let params = sq["stmts"][0]["params"].as_array().unwrap();
@@ -196,7 +202,10 @@ fn u1_array_whole_equality_pushes_json_value_eq() {
 
     let pg = translate(Backend::Postgres, &cmd, &reg()).unwrap();
     let text = pg["stmts"][0]["text"].as_str().unwrap();
-    assert!(text.contains("t.\"tags\" = $1::jsonb"), "PG U1 整体等值: {text}");
+    assert!(
+        text.contains("t.\"tags\" = $1::jsonb"),
+        "PG U1 整体等值: {text}"
+    );
 
     let sq = translate(Backend::Sqlite, &cmd, &reg()).unwrap();
     let text = sq["stmts"][0]["text"].as_str().unwrap();
@@ -222,12 +231,16 @@ fn u2_object_equality_pushes_json_value_eq_and_warns() {
     );
     let params = sq["stmts"][0]["params"].as_array().unwrap();
     assert!(
-        params.iter().any(|p| p.as_str() == Some("{\"level\":\"a\"}")),
+        params
+            .iter()
+            .any(|p| p.as_str() == Some("{\"level\":\"a\"}")),
         "U2 参数应为对象 JSON 文本: {params:?}"
     );
     let warnings = sq["warnings"].as_array().unwrap();
     assert!(
-        warnings.iter().any(|w| w.as_str().unwrap_or("").contains("键序")),
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap_or("").contains("键序")),
         "U2 必须产出跨后端键序差异告警（禁静默）: {warnings:?}"
     );
 

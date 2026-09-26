@@ -33,11 +33,11 @@ pub use build::{build_pipeline, flatten_object_fields};
 pub use lookup::{build_agg_stages, build_empty_lookup, build_lookup};
 pub use parse::{parse, parse_gql};
 pub use projection::{build_pipeline_projection, build_projection};
+pub(crate) use relation_filter::merge_and;
 pub use relation_filter::{
     nested_rel_name_from_as, rel_name_from_as, NestedRelFilter, RelPredicate, RelationFilterPlan,
     REL_NESTED_PREFIX, REL_PRED_PREFIX,
 };
-pub(crate) use relation_filter::merge_and;
 pub use token::{token_to_value, tokenize, Token};
 pub(crate) use util::{is_nullish, param};
 

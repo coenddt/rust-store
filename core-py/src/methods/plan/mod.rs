@@ -95,7 +95,10 @@ impl Registry {
         let plan = core_plan_query(&gql, &params, &self.core, context.as_ref())
             .map(|p| p.to_value())
             .map_err(err)?;
-        to_py(py, with_route_override(plan, ro.as_ref(), &self.core).map_err(err)?)
+        to_py(
+            py,
+            with_route_override(plan, ro.as_ref(), &self.core).map_err(err)?,
+        )
     }
 
     /// queryOne 计划：未显式 `$limit` 时强制下推 `$limit(1)`
@@ -117,7 +120,10 @@ impl Registry {
         let plan = core_plan_query_one(&gql, &params, &self.core, context.as_ref())
             .map(|p| p.to_value())
             .map_err(err)?;
-        to_py(py, with_route_override(plan, ro.as_ref(), &self.core).map_err(err)?)
+        to_py(
+            py,
+            with_route_override(plan, ro.as_ref(), &self.core).map_err(err)?,
+        )
     }
 
     /// 列表 + total；`total` 由 Host 执行 `countCommand` 后回喂，用于算 `hasMore`
@@ -145,7 +151,10 @@ impl Registry {
             "hasMore".to_string(),
             json!(plan.has_more(total.unwrap_or(0.0))),
         );
-        to_py(py, with_route_override(Value::Object(out), ro.as_ref(), &self.core).map_err(err)?)
+        to_py(
+            py,
+            with_route_override(Value::Object(out), ro.as_ref(), &self.core).map_err(err)?,
+        )
     }
 
     #[pyo3(signature = (gql, params=None))]
@@ -202,7 +211,10 @@ impl Registry {
             _ => None,
         };
         let out = core_plan_exists(&model, &self.core, &condition).map_err(err)?;
-        to_py(py, with_route_override(out, ro.as_ref(), &self.core).map_err(err)?)
+        to_py(
+            py,
+            with_route_override(out, ro.as_ref(), &self.core).map_err(err)?,
+        )
     }
 
     #[pyo3(signature = (model, filter=None, ctx=None, route_override=None))]
@@ -225,7 +237,10 @@ impl Registry {
         };
         let out =
             core_plan_count(&model, &self.core, filter.as_ref(), context.as_ref()).map_err(err)?;
-        to_py(py, with_route_override(out, ro.as_ref(), &self.core).map_err(err)?)
+        to_py(
+            py,
+            with_route_override(out, ro.as_ref(), &self.core).map_err(err)?,
+        )
     }
 
     #[pyo3(signature = (sort=None))]

@@ -85,8 +85,8 @@ impl Registry {
     /// 设置查询档位：`'standard'`（默认，功能最大化 + 跨 DB 对齐）/
     /// `'text2query'`（功能收缩 + 硬限制）。未知档位抛 `ValueError`（禁静默回落）。
     fn set_profile(&mut self, profile: String) -> PyResult<()> {
-        let p = Profile::from_str_or_err(&profile)
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        let p =
+            Profile::from_str_or_err(&profile).map_err(pyo3::exceptions::PyValueError::new_err)?;
         self.core.set_profile(p);
         Ok(())
     }

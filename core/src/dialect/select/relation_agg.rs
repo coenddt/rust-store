@@ -104,7 +104,9 @@ pub(super) fn parse(
         };
         let n_as = n_lo.get("as").and_then(|v| v.as_str()).unwrap_or("");
         let n_rel = nested_rel_name_from_as(n_as).ok_or_else(|| {
-            format!("关系聚合谓词内层 $lookup.as \"{n_as}\" 形态非法（应为 __rn{{序号}}__{{关系名}}）")
+            format!(
+                "关系聚合谓词内层 $lookup.as \"{n_as}\" 形态非法（应为 __rn{{序号}}__{{关系名}}）"
+            )
         })?;
         let n_rel_def = rel_schema.relations.get(n_rel).ok_or_else(|| {
             format!(
@@ -186,16 +188,13 @@ fn split_nested_keys(
     flatten_and(e, &mut leaves);
     let mut scalar: Vec<Value> = Vec::new();
     for leaf in leaves {
-        let hit = leaf
-            .as_object()
-            .filter(|m| m.len() == 1)
-            .and_then(|m| {
-                let (k, v) = m.iter().next()?;
-                let i = nested
-                    .iter()
-                    .position(|n| k.starts_with(&format!("{}.", n.as_name)))?;
-                Some((i, k.clone(), v.clone()))
-            });
+        let hit = leaf.as_object().filter(|m| m.len() == 1).and_then(|m| {
+            let (k, v) = m.iter().next()?;
+            let i = nested
+                .iter()
+                .position(|n| k.starts_with(&format!("{}.", n.as_name)))?;
+            Some((i, k.clone(), v.clone()))
+        });
         match hit {
             Some((i, key, val)) => {
                 // 前缀 = `<as_name>.`，剥离后即为孙表字段路径
@@ -258,11 +257,7 @@ fn find_nested_key(v: &Value, nested: &[SqlNested]) -> Option<String> {
 }
 
 /// 单个累积器 → SQL 聚合表达式（识别 `pipeline::group::acc_expr` 生成的形态）
-fn acc_to_sql(
-    backend: Backend,
-    rel_schema: &Schema,
-    acc: &Value,
-) -> Result<String, String> {
+fn acc_to_sql(backend: Backend, rel_schema: &Schema, acc: &Value) -> Result<String, String> {
     let o = acc
         .as_object()
         .ok_or("关系聚合谓词累积器必须恰有一个算子键")?;

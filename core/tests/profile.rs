@@ -33,7 +33,12 @@ fn post_registry() -> Registry {
 /// A → B → C → D → E 四级关系链（many，逐层 `$lookup`）
 fn nested_registry() -> Registry {
     let mut reg = Registry::new();
-    let chain = [("A", "as", "b", "B"), ("B", "bs", "c", "C"), ("C", "cs", "d", "D"), ("D", "ds", "e", "E")];
+    let chain = [
+        ("A", "as", "b", "B"),
+        ("B", "bs", "c", "C"),
+        ("C", "cs", "d", "D"),
+        ("D", "ds", "e", "E"),
+    ];
     for (name, coll, rel, model) in chain {
         reg.register(&json!({
             "name": name,
@@ -125,8 +130,14 @@ fn t2q_limits_are_stricter_than_standard() {
     assert_eq!(T2Q_MAX_ROWS, 1000.0);
     assert_eq!(T2Q_MAX_DEPTH, 3);
     assert_eq!(T2Q_MAX_FEDERATION_ROWS, 10_000);
-    assert!(T2Q_MAX_ROWS < MAX_PAGE_SIZE, "text2query 行数上限须严于 standard");
-    assert!(T2Q_MAX_DEPTH < MAX_DEPTH, "text2query 深度上限须严于 standard");
+    assert!(
+        T2Q_MAX_ROWS < MAX_PAGE_SIZE,
+        "text2query 行数上限须严于 standard"
+    );
+    assert!(
+        T2Q_MAX_DEPTH < MAX_DEPTH,
+        "text2query 深度上限须严于 standard"
+    );
     assert!(
         T2Q_MAX_FEDERATION_ROWS < MAX_FEDERATION_ROWS,
         "text2query 联邦上限须严于 standard"
@@ -170,16 +181,21 @@ fn forbid_t2q_blocks_only_in_t2q() {
 #[test]
 fn t2q_injects_root_limit_when_absent() {
     let (reg, ctx) = t2q_post();
-    let plan = plan_query("Post{ title }", &params_of(json!({})), &reg, Some(&ctx))
-        .expect("应规划成功");
+    let plan =
+        plan_query("Post{ title }", &params_of(json!({})), &reg, Some(&ctx)).expect("应规划成功");
     assert_eq!(
         first_root_limit(&plan),
         Some(json!(1000)),
         "text2query 档省略 $limit 应注入上限 T2Q_MAX_ROWS"
     );
 
-    let std = plan_query("Post{ title }", &params_of(json!({})), &post_registry(), None)
-        .expect("standard 档应规划成功");
+    let std = plan_query(
+        "Post{ title }",
+        &params_of(json!({})),
+        &post_registry(),
+        None,
+    )
+    .expect("standard 档应规划成功");
     assert_eq!(
         first_root_limit(&std),
         None,
@@ -221,16 +237,14 @@ fn t2q_clamps_root_limit_over_cap() {
 fn t2q_clamps_relation_level_limit() {
     // 取关系 `$lookup` 内层 pipeline 的 `$limit`（可为两阶段：需跨 commands 找）
     fn inner_limit(plan: &rust_store_core::command::QueryPlan) -> Option<Value> {
-        plan.to_value()["commands"]
-            .as_array()
-            .and_then(|cmds| {
-                cmds.iter()
-                    .filter_map(|c| c.get("pipeline").and_then(|x| x.as_array()))
-                    .flatten()
-                    .find_map(|s| s.get("$lookup"))
-                    .and_then(|lo| lo["pipeline"].as_array())
-                    .and_then(|a| a.iter().find_map(|s| s.get("$limit").cloned()))
-            })
+        plan.to_value()["commands"].as_array().and_then(|cmds| {
+            cmds.iter()
+                .filter_map(|c| c.get("pipeline").and_then(|x| x.as_array()))
+                .flatten()
+                .find_map(|s| s.get("$lookup"))
+                .and_then(|lo| lo["pipeline"].as_array())
+                .and_then(|a| a.iter().find_map(|s| s.get("$limit").cloned()))
+        })
     }
 
     let mut reg = nested_registry();
@@ -270,8 +284,13 @@ const DEEP_GQL: &str = "A{ _id, b{ _id, c{ _id, d{ _id, e{ _id } } } } }";
 fn t2q_rejects_deep_nesting_standard_passes() {
     let mut reg = nested_registry();
     reg.set_profile(Profile::Text2Query);
-    let err = plan_query(DEEP_GQL, &params_of(json!({})), &reg, Some(&Context::system()))
-        .expect_err("text2query 档超深嵌套必须显式报错");
+    let err = plan_query(
+        DEEP_GQL,
+        &params_of(json!({})),
+        &reg,
+        Some(&Context::system()),
+    )
+    .expect_err("text2query 档超深嵌套必须显式报错");
     assert!(
         err.starts_with(ERR_TEXT2QUERY),
         "应携带 ERR_TEXT2QUERY 前缀: {err}"
@@ -299,8 +318,13 @@ fn t2q_forces_user_context() {
         "应携带 ERR_TEXT2QUERY 前缀: {err}"
     );
 
-    plan_query("Post{ title }", &params_of(json!({})), &post_registry(), None)
-        .expect("standard 档缺 ctx 默认放行（fail-open）");
+    plan_query(
+        "Post{ title }",
+        &params_of(json!({})),
+        &post_registry(),
+        None,
+    )
+    .expect("standard 档缺 ctx 默认放行（fail-open）");
 }
 
 // ─── 门禁矩阵 #9：联邦单源行数 ────────────────────────────────
@@ -349,5 +373,8 @@ fn route_override_gate_follows_profile() {
     assert!(ensure_route_override_allowed(&reg, false).is_ok());
     let err = ensure_route_override_allowed(&reg, true).unwrap_err();
     assert!(err.starts_with(ERR_TEXT2QUERY), "应为档位哨兵前缀: {err}");
-    assert!(err.contains("route_override"), "文案应指名 route_override: {err}");
+    assert!(
+        err.contains("route_override"),
+        "文案应指名 route_override: {err}"
+    );
 }

@@ -861,8 +861,8 @@ fn dialect_group_object_dotted_key_is_rejected() {
 fn dialect_user_pipeline_stage_is_explicit_error_on_sql() {
     let registry = registry_with(&schemas());
     let mut ast = parse_gql("Post($pipeline:@p0){ title }").expect("parse_gql");
-    let params: Map<String, Value> = serde_json::from_str(r#"{ "p0": [ { "$addFields": { "x": 1 } } ] }"#)
-        .expect("params 解析");
+    let params: Map<String, Value> =
+        serde_json::from_str(r#"{ "p0": [ { "$addFields": { "x": 1 } } ] }"#).expect("params 解析");
     let pipeline = build_pipeline(&mut ast, &params, &registry, None)
         .expect("standard 档 `$pipeline` 直通应放行");
     let stages = pipeline.as_array().cloned().expect("应为阶段数组");
@@ -874,8 +874,8 @@ fn dialect_user_pipeline_stage_is_explicit_error_on_sql() {
 
     let cmd = json!({ "kind": "aggregate", "collection": "posts", "pipeline": stages });
     for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
-        let err = translate(backend, &cmd, &registry)
-            .expect_err("SQL 侧应显式报错（不做静默忽略）");
+        let err =
+            translate(backend, &cmd, &registry).expect_err("SQL 侧应显式报错（不做静默忽略）");
         assert!(
             err.contains("$addFields"),
             "[{backend:?}] 错误应点明不支持阶段: {err}"
@@ -1083,14 +1083,14 @@ fn rp_json_cmd(c0: Value) -> (Value, Registry) {
 #[test]
 fn dialect_relation_predicate_json_filter_pushdown() {
     // U1：数组字段整值 → EXISTS 内子表 JSON 列数组谓词
-    let (cmd, reg) = rp_json_cmd(
-        json!({ "items": { "$filter": { "tags": "x" }, "$count": { "$gt": 1 } } }),
-    );
+    let (cmd, reg) =
+        rp_json_cmd(json!({ "items": { "$filter": { "tags": "x" }, "$count": { "$gt": 1 } } }));
     let sq = translate(Backend::Sqlite, &cmd, &reg).expect("translate");
     let text = sq["stmts"][0]["text"].as_str().unwrap();
     assert!(
         text.contains("EXISTS (SELECT 1 FROM \"order_items\" c")
-            && text.contains("EXISTS (SELECT 1 FROM json_each(c.\"tags\") WHERE json_each.value = ?)"),
+            && text
+                .contains("EXISTS (SELECT 1 FROM json_each(c.\"tags\") WHERE json_each.value = ?)"),
         "U1 应在 EXISTS 内下推数组谓词: {text}"
     );
     assert_eq!(
@@ -1122,7 +1122,9 @@ fn dialect_relation_predicate_json_filter_pushdown() {
     );
     let warnings = my["warnings"].as_array().cloned().unwrap_or_default();
     assert!(
-        warnings.iter().any(|w| w.as_str().unwrap_or("").contains("键序")),
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap_or("").contains("键序")),
         "U2 键序告警必须从关系谓词 filter 冒泡（禁静默）: {warnings:?}"
     );
 }

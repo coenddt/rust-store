@@ -590,9 +590,7 @@ fn parse_pred_filter(
     in_or: bool,
 ) -> Result<Value, String> {
     let Value::Object(m) = filter else {
-        return Err(format!(
-            "关系聚合谓词 \"{rel_name}\" 的 filter 必须是对象"
-        ));
+        return Err(format!("关系聚合谓词 \"{rel_name}\" 的 filter 必须是对象"));
     };
     let mut out = Map::new();
     for (k, v) in m {
@@ -824,7 +822,10 @@ fn build_lookup_stage(
         let mut n_let_map = Map::new();
         n_let_map.insert(n_let, rel_let_expr(&n.local_field, n_is_array));
         let mut n_inner = Map::new();
-        n_inner.insert("from".to_string(), Value::String(n_schema.collection.clone()));
+        n_inner.insert(
+            "from".to_string(),
+            Value::String(n_schema.collection.clone()),
+        );
         n_inner.insert("let".to_string(), Value::Object(n_let_map));
         n_inner.insert("pipeline".to_string(), json!([{ "$match": n_match_doc }]));
         n_inner.insert("as".to_string(), Value::String(n.as_name.clone()));
