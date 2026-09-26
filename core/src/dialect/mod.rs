@@ -56,7 +56,8 @@ pub(crate) fn scalar_column(schema: &Schema, field: &str) -> Option<String> {
 /// 供关系键解析、分组键等**必须标量**的场景）；本函数在其基础上把 object/array 字段
 /// 展开为 JSON 列引用（见执行文档 §4.5 / 不足清单 #3）：
 /// - 标量字段 → [`ColumnRef::Scalar`]（调用方按别名限定 + 引号化）；
-/// - object/array 整值 → [`ColumnRef::Json`]（单列存 JSON 文本，读取时解析）；
+/// - object/array 整值 → [`ColumnRef::Json`]（单列存 JSON 文本，读取时解析；`JsonKind` 区分
+///   数组/对象，供 U1/U2 整值条件选择翻译方式）；
 /// - object/array 的点号路径（U3 过滤 / U4 排序）→ [`ColumnRef::JsonPath`]（提取表达式）。
 ///
 /// 未声明字段返回 `None`（调用方据此显式报错，绝不静默）。
@@ -74,12 +75,22 @@ pub(crate) fn field_column_ref(schema: &Schema, field: &str) -> Option<ColumnRef
         }
     } else {
         match schema.fields.get(field).map(|f| f.field_type.as_str()) {
-            Some("object") | Some("array") => Some(ColumnRef::Json(field.to_string())),
+            Some("object") => Some(ColumnRef::Json(field.to_string(), JsonKind::Object)),
+            Some("array") => Some(ColumnRef::Json(field.to_string(), JsonKind::Array)),
             // 已声明标量 / 未声明字段（与 `scalar_column` 宽松语义一致：按裸列名处理，
             // 如物理主键 `_id` 不在 schema.fields 但恒为列）
             _ => Some(ColumnRef::Scalar(field.to_string())),
         }
     }
+}
+
+/// JSON 整列的形态（`JsonKind`）：决定 U1/U2 整值条件的翻译方式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonKind {
+    /// `object` 字段：整值条件按 JSON 结构等值比较（U2）
+    Object,
+    /// `array` 字段：整值条件按「数组包含元素 / 数组整体等值」翻译（U1）
+    Array,
 }
 
 /// 字段 → 列引用（见 [`field_column_ref`]）：区分标量列 / JSON 整列 / JSON 点号路径。
@@ -88,7 +99,7 @@ pub enum ColumnRef {
     /// 标量列：字段名（调用方按表别名限定 + 引号化）
     Scalar(String),
     /// JSON 整列：object/array 字段落单列存 JSON 文本（读取时解析回嵌套对象）
-    Json(String),
+    Json(String, JsonKind),
     /// JSON 点号路径（U3 过滤 / U4 排序）：根列名 + 子路径（调用方构造提取表达式）
     JsonPath(String, Vec<String>),
 }
@@ -215,6 +226,42 @@ impl Backend {
             ),
             Backend::Postgres => format!("({} #>> '{{{}}}')", col, path.join(",")),
             Backend::Sqlite => format!("json_extract({}, '{}')", col, json_path_dollar(path)),
+        }
+    }
+
+    /// JSON 数组「包含元素」谓词（U1：`{tags: "x"}` ⇒ 数组含 `"x"`）
+    ///
+    /// - MySQL：`JSON_CONTAINS(col, CAST(? AS JSON))`（候选是**值的 JSON 字面量**，如 `"x"` / `1`）
+    /// - PG：`col @> ?::jsonb`（候选是**单元素数组**的 JSON 文本，如 `["x"]`）
+    /// - SQLite：`EXISTS (SELECT 1 FROM json_each(col) WHERE json_each.value = ?)`（候选是标量原值）
+    ///
+    /// `ph` 为已生成的占位符（`?` / `$n`），参数由调用方按上述契约绑定（见 `filter::json_cond`）。
+    pub fn json_array_contains(&self, col: &str, ph: &str) -> String {
+        match self {
+            Backend::Mysql => format!("JSON_CONTAINS({}, CAST({} AS JSON))", col, ph),
+            Backend::Postgres => format!("{} @> {}::jsonb", col, ph),
+            Backend::Sqlite => format!(
+                "EXISTS (SELECT 1 FROM json_each({}) WHERE json_each.value = {})",
+                col, ph
+            ),
+        }
+    }
+
+    /// JSON 整值等值比较（U1 数组整体等值 / U2 对象结构等值）
+    ///
+    /// - MySQL：`col [<>] CAST(? AS JSON)`；PG：`col [<>] ?::jsonb`；SQLite：`json(col) [<>] json(?)`
+    ///
+    /// ⚠️ 跨后端语义差异（**已知不对齐点**，调用方须告警、禁静默，见「自动反馈原则」）：
+    /// MySQL `JSON` / PG `jsonb` 的对象比较是**键序无关**的（存储即规范化），
+    /// 而 MongoDB 的对象等值匹配**字段顺序敏感**、SQLite（`json()` 文本 minify）**保留键序**。
+    /// 故 `object` 字段（U2）在 MySQL/PG 上可能比 Mongo/SQLite 命中更多行 ——
+    /// **不建议用于业务查询**，建议改用对象点号路径（U3）；仅适合数据迁移 / 功能脚本。
+    pub fn json_value_eq(&self, col: &str, ph: &str, negate: bool) -> String {
+        let op = if negate { "<>" } else { "=" };
+        match self {
+            Backend::Mysql => format!("{} {} CAST({} AS JSON)", col, op, ph),
+            Backend::Postgres => format!("{} {} {}::jsonb", col, op, ph),
+            Backend::Sqlite => format!("json({}) {} json({})", col, op, ph),
         }
     }
 }

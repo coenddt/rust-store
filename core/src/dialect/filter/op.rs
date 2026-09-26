@@ -118,7 +118,7 @@ pub(super) fn cond_clause(
 /// existence 判定片段：谓词「字段存在于 ``__present`` 集合」。
 /// `col IS NULL` / `$exists` 需要与它做 AND / NOT。
 /// `alias` 为空 = 表达式模式（HAVING，无哨兵列）→ 恒真（调用方改用 `IS [NOT] NULL`）。
-fn present_pred(alias: &str, field_token: &str) -> String {
+pub(super) fn present_pred(alias: &str, field_token: &str) -> String {
     if alias.is_empty() {
         return "TRUE".to_string();
     }

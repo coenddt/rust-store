@@ -18,6 +18,7 @@ fn reg() -> Registry {
         "timestamps": false,
         "fields": {
             "title": { "type": "string" },
+            "tags": { "type": "array" },
             "meta": { "type": "object", "fields": {
                 "level": { "type": "string" },
                 "seo": { "type": "object", "fields": { "title": { "type": "string" } } }
@@ -129,6 +130,139 @@ fn insert_object_field_serialized_as_json_text() {
         params.iter().any(|p| p.as_str() == Some("{\"level\":\"a\"}")),
         "object 字段应序列化为 JSON 文本: {params:?}"
     );
+}
+
+/// U1：数组字段过滤 → 各方言「数组包含元素」谓词下推（standard 档放开）
+#[test]
+fn u1_array_contains_pushes_native_predicate() {
+    let cmd = json!({
+        "kind": "find", "collection": "courses",
+        "filter": { "tags": "python" },
+        "projection": { "_id": 1 }
+    });
+    // MySQL：JSON_CONTAINS + 值的 JSON 字面量参数
+    let my = translate(Backend::Mysql, &cmd, &reg()).unwrap();
+    let text = my["stmts"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("JSON_CONTAINS(t.`tags`, CAST(? AS JSON))"),
+        "MySQL U1: {text}"
+    );
+    let params = my["stmts"][0]["params"].as_array().unwrap();
+    assert!(
+        params.iter().any(|p| p.as_str() == Some("\"python\"")),
+        "MySQL U1 参数应为值的 JSON 字面量: {params:?}"
+    );
+
+    // PG：@> + 单元素数组参数
+    let pg = translate(Backend::Postgres, &cmd, &reg()).unwrap();
+    let text = pg["stmts"][0]["text"].as_str().unwrap();
+    assert!(text.contains("t.\"tags\" @> $1::jsonb"), "PG U1: {text}");
+    let params = pg["stmts"][0]["params"].as_array().unwrap();
+    assert!(
+        params.iter().any(|p| p.as_str() == Some("[\"python\"]")),
+        "PG U1 参数应为单元素数组: {params:?}"
+    );
+
+    // SQLite：json_each 子查询 + 标量原值参数
+    let sq = translate(Backend::Sqlite, &cmd, &reg()).unwrap();
+    let text = sq["stmts"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains(
+            "EXISTS (SELECT 1 FROM json_each(t.\"tags\") WHERE json_each.value = ?)"
+        ),
+        "SQLite U1: {text}"
+    );
+    let params = sq["stmts"][0]["params"].as_array().unwrap();
+    assert!(
+        params.iter().any(|p| p.as_str() == Some("python")),
+        "SQLite U1 参数应为标量原值: {params:?}"
+    );
+}
+
+/// U1：数组整体等值（值本身是数组）→ 各方言 JSON 整值等值下推
+#[test]
+fn u1_array_whole_equality_pushes_json_value_eq() {
+    let cmd = json!({
+        "kind": "find", "collection": "courses",
+        "filter": { "tags": ["a", "b"] },
+        "projection": { "_id": 1 }
+    });
+    let my = translate(Backend::Mysql, &cmd, &reg()).unwrap();
+    let text = my["stmts"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("t.`tags` = CAST(? AS JSON)"),
+        "MySQL U1 整体等值: {text}"
+    );
+
+    let pg = translate(Backend::Postgres, &cmd, &reg()).unwrap();
+    let text = pg["stmts"][0]["text"].as_str().unwrap();
+    assert!(text.contains("t.\"tags\" = $1::jsonb"), "PG U1 整体等值: {text}");
+
+    let sq = translate(Backend::Sqlite, &cmd, &reg()).unwrap();
+    let text = sq["stmts"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("json(t.\"tags\") = json(?)"),
+        "SQLite U1 整体等值: {text}"
+    );
+}
+
+/// U2：对象字段整值等值 → 各方言 JSON 整值等值下推，且**必须告警**（跨后端键序差异，禁静默）
+#[test]
+fn u2_object_equality_pushes_json_value_eq_and_warns() {
+    let cmd = json!({
+        "kind": "find", "collection": "courses",
+        "filter": { "meta": { "level": "a" } },
+        "projection": { "_id": 1 }
+    });
+    let sq = translate(Backend::Sqlite, &cmd, &reg()).unwrap();
+    let text = sq["stmts"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("json(t.\"meta\") = json(?)"),
+        "SQLite U2: {text}"
+    );
+    let params = sq["stmts"][0]["params"].as_array().unwrap();
+    assert!(
+        params.iter().any(|p| p.as_str() == Some("{\"level\":\"a\"}")),
+        "U2 参数应为对象 JSON 文本: {params:?}"
+    );
+    let warnings = sq["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w.as_str().unwrap_or("").contains("键序")),
+        "U2 必须产出跨后端键序差异告警（禁静默）: {warnings:?}"
+    );
+
+    // PG / MySQL 同样下推整值等值
+    let pg = translate(Backend::Postgres, &cmd, &reg()).unwrap();
+    let text = pg["stmts"][0]["text"].as_str().unwrap();
+    assert!(text.contains("t.\"meta\" = $1::jsonb"), "PG U2: {text}");
+}
+
+/// U1：数组字段 `$exists` 走 `__present` 哨兵（与标量字段同源）
+#[test]
+fn u1_array_exists_uses_present_sentinel() {
+    let cmd = json!({
+        "kind": "find", "collection": "courses",
+        "filter": { "tags": { "$exists": false } },
+        "projection": { "_id": 1 }
+    });
+    let sq = translate(Backend::Sqlite, &cmd, &reg()).unwrap();
+    let text = sq["stmts"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("NOT (COALESCE(t.__present, ',') LIKE '%,tags,%')"),
+        "U1 $exists 应走 __present 哨兵: {text}"
+    );
+}
+
+/// 无法语义等价翻译的取值组合 → 显式 Err（禁静默丢弃条件）
+#[test]
+fn json_field_unsupported_operator_is_error() {
+    let cmd = json!({
+        "kind": "find", "collection": "courses",
+        "filter": { "tags": { "$gt": "a" } },
+        "projection": { "_id": 1 }
+    });
+    let err = translate(Backend::Sqlite, &cmd, &reg()).expect_err("U1 $gt 应显式报错");
+    assert!(err.contains("$gt"), "错误信息应含操作符: {err}");
 }
 
 /// 读取：JSON 列（文本）还原为嵌套对象（跨后端对齐 Mongo）

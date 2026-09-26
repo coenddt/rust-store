@@ -316,20 +316,54 @@ fn cond_err(gql: &str, params: Value) -> String {
 }
 
 #[test]
-fn u1_array_field_filter_is_global_error() {
-    let err = cond_err(
+fn u1_array_field_filter_allowed_in_standard() {
+    // 双门禁分离（§4.1 #4 → 批 8b）：standard 档放行数组字段整值过滤（JSON 列包含/整体等值）
+    plan_query(
         "Course($condition:@c0){ _id }",
-        json!({ "c0": { "tags": "python" } }),
-    );
+        &params_of(json!({ "c0": { "tags": "python" } })),
+        &shape_registry(),
+        None,
+    )
+    .expect("standard 档数组字段过滤应放行");
+}
+
+#[test]
+fn u1_array_field_filter_rejected_in_text2query() {
+    let mut reg = shape_registry();
+    reg.set_profile(Profile::Text2Query);
+    let err = plan_query(
+        "Course($condition:@c0){ _id }",
+        &params_of(json!({ "c0": { "tags": "python" } })),
+        &reg,
+        Some(&Context::system()),
+    )
+    .expect_err("text2query 档 U1 必须显式报错");
     assert!(err.contains("U1"), "应报 U1：{err}");
 }
 
 #[test]
-fn u2_object_deep_equality_filter_is_global_error() {
-    let err = cond_err(
+fn u2_object_deep_equality_allowed_in_standard() {
+    // 双门禁分离（§4.1 #4 → 批 8b）：standard 档放行对象字段整值过滤（JSON 列整值等值，U2）
+    plan_query(
         "Course($condition:@c0){ _id }",
-        json!({ "c0": { "meta": { "level": "beginner" } } }),
-    );
+        &params_of(json!({ "c0": { "meta": { "level": "beginner" } } })),
+        &shape_registry(),
+        None,
+    )
+    .expect("standard 档对象字段整值过滤应放行");
+}
+
+#[test]
+fn u2_object_deep_equality_rejected_in_text2query() {
+    let mut reg = shape_registry();
+    reg.set_profile(Profile::Text2Query);
+    let err = plan_query(
+        "Course($condition:@c0){ _id }",
+        &params_of(json!({ "c0": { "meta": { "level": "beginner" } } })),
+        &reg,
+        Some(&Context::system()),
+    )
+    .expect_err("text2query 档 U2 必须显式报错");
     assert!(err.contains("U2"), "应报 U2：{err}");
 }
 
@@ -384,10 +418,16 @@ fn u4_object_dotted_sort_rejected_in_text2query() {
 
 #[test]
 fn u1_u4_apply_to_relation_level_too() {
-    let err = cond_err(
+    // 关系级数组过滤同受档位门禁约束：text2query 档一律 Err
+    let mut reg = shape_registry();
+    reg.set_profile(Profile::Text2Query);
+    let err = plan_query(
         "Course{ _id, lessons($condition:@c0){ _id } }",
-        json!({ "c0": { "tags": "rust" } }),
-    );
+        &params_of(json!({ "c0": { "tags": "rust" } })),
+        &reg,
+        Some(&Context::system()),
+    )
+    .expect_err("关系级数组过滤在 text2query 档应报 U1");
     assert!(err.contains("U1"), "关系级数组过滤应报 U1：{err}");
 }
 
@@ -425,16 +465,18 @@ fn scalar_filter_and_sort_still_plan() {
 
 #[test]
 fn u1_error_is_identical_across_plan_paths() {
-    // 单库 / 带计数 / 联邦三条规划路径同一码（core 规划期统一拒绝 → 文案一致）
-    let reg = shape_registry();
+    // text2query 档：单库 / 带计数 / 联邦三条规划路径同一码（core 规划期统一拒绝 → 文案一致）
+    let mut reg = shape_registry();
+    reg.set_profile(Profile::Text2Query);
+    let ctx = Context::system();
     let params = params_of(json!({ "c0": { "tags": "python" } }));
     let gql = "Course($condition:@c0){ _id }";
 
-    let a = plan_query(gql, &params, &reg, None).expect_err("plan_query 应报错");
-    let b =
-        plan_query_with_count(gql, &params, &reg, None).expect_err("plan_query_with_count 应报错");
-    let c =
-        plan_federated(gql, &params, &reg, None, &json!({})).expect_err("plan_federated 应报错");
+    let a = plan_query(gql, &params, &reg, Some(&ctx)).expect_err("plan_query 应报错");
+    let b = plan_query_with_count(gql, &params, &reg, Some(&ctx))
+        .expect_err("plan_query_with_count 应报错");
+    let c = plan_federated(gql, &params, &reg, Some(&ctx), &json!({}))
+        .expect_err("plan_federated 应报错");
     assert_eq!(a, b, "plan_query 与 query_with_count 文案须一致");
     assert_eq!(a, c, "plan_query 与 federated 文案须一致");
 }
@@ -898,14 +940,17 @@ fn query_with_count_nested_relation_predicate_rejected() {
 // ── §11.4 写路径静默点收口（D2：绝不静默） ───────────────────
 
 #[test]
-fn write_paths_reject_u1_u4_shape() {
-    let reg = shape_registry();
+fn write_paths_reject_u1_in_text2query() {
+    // text2query 档：写路径数组字段条件一律显式报错（U1）
+    let mut reg = shape_registry();
+    reg.set_profile(Profile::Text2Query);
+    let ctx = Context::system();
     let cond = json!({ "tags": "python" });
 
     let err = plan_update(
         "Course",
         &reg,
-        None,
+        Some(&ctx),
         &cond,
         &json!({ "title": "x" }),
         &json!({}),
@@ -915,18 +960,18 @@ fn write_paths_reject_u1_u4_shape() {
     .expect_err("plan_update 数组字段条件应显式报错");
     assert!(err.contains("U1"), "plan_update 应报 U1: {err}");
 
-    let err = plan_remove("Course", &reg, None, &cond, Probe::NotProbed)
+    let err = plan_remove("Course", &reg, Some(&ctx), &cond, Probe::NotProbed)
         .expect_err("plan_remove 数组字段条件应显式报错");
     assert!(err.contains("U1"), "plan_remove 应报 U1: {err}");
 
-    let err = plan_update_many("Course", &reg, None, &cond, &json!({ "title": "x" }), 0)
+    let err = plan_update_many("Course", &reg, Some(&ctx), &cond, &json!({ "title": "x" }), 0)
         .expect_err("plan_update_many 数组字段条件应显式报错");
     assert!(err.contains("U1"), "plan_update_many 应报 U1: {err}");
 
     let err = plan_upsert(
         "Course",
         &reg,
-        None,
+        Some(&ctx),
         &cond,
         &json!({ "title": "x" }),
         &json!({}),
@@ -935,6 +980,26 @@ fn write_paths_reject_u1_u4_shape() {
     )
     .expect_err("plan_upsert 数组字段条件应显式报错");
     assert!(err.contains("U1"), "plan_upsert 应报 U1: {err}");
+}
+
+#[test]
+fn write_paths_allow_u1_in_standard() {
+    // 双门禁分离（批 8b）：standard 档数组字段条件在写路径放行（U1 落地为 JSON 列谓词）
+    let reg = shape_registry();
+    let cond = json!({ "tags": "python" });
+    plan_update(
+        "Course",
+        &reg,
+        None,
+        &cond,
+        &json!({ "title": "x" }),
+        &json!({}),
+        0,
+        Probe::NotProbed,
+    )
+    .expect("standard 档 plan_update 数组字段条件应放行");
+    plan_remove("Course", &reg, None, &cond, Probe::NotProbed)
+        .expect("standard 档 plan_remove 数组字段条件应放行");
 }
 
 #[test]

@@ -5,9 +5,9 @@
 
 use serde_json::{Map, Value};
 
-use super::{Backend, ColumnRef};
+use super::{Backend, ColumnRef, JsonKind};
 
-use op::cond_clause;
+use op::{cond_clause, present_pred};
 
 mod op;
 
@@ -230,6 +230,13 @@ impl Ctx<'_> {
                     "SQL 后端无法翻译字段 \"{field}\" 的过滤条件（复杂 JSON 或未声明字段）：拒绝静默丢弃后返回全表"
                 ));
             };
+            // U1/U2：object/array 整值条件走专用翻译（数组包含 / 整值等值），
+            // 不走标量表达式的算符通道（见 `json_cond`）
+            if matches!(col, ColumnRef::Json(..)) {
+                let clause = self.json_cond(cond, &col, field)?;
+                out.push(clause);
+                continue;
+            }
             let qualified = self.qualified(&col, field)?;
             let clause = self.cond(cond, &qualified, field, self.alias)?;
             out.push(clause);
@@ -237,30 +244,188 @@ impl Ctx<'_> {
         Ok(out)
     }
 
-    /// 列引用 → 完整 SQL 表达式（U3 对象点号路径走 JSON 提取；整值 JSON 比较显式报错）。
+    /// 列标识符 → 别名限定 + 引号化（表达式模式 alias 为空时原样返回）。
+    fn ident_of(&self, c: &str) -> String {
+        if self.alias.is_empty() {
+            // 表达式模式（HAVING）：`c` 已是完整 SQL 表达式，不再限定/加引号
+            c.to_string()
+        } else {
+            format!("{}.{}", self.alias, self.backend.quote_ident(c))
+        }
+    }
+
+    /// 列引用 → 完整 SQL 表达式（U3 对象点号路径走 JSON 提取；整值 JSON 比较走 `json_cond`）。
     fn qualified(&self, col: &ColumnRef, field: &str) -> Result<String, String> {
-        let ident = |c: &str| -> String {
-            if self.alias.is_empty() {
-                // 表达式模式（HAVING）：`c` 已是完整 SQL 表达式，不再限定/加引号
-                c.to_string()
-            } else {
-                format!("{}.{}", self.alias, self.backend.quote_ident(c))
-            }
-        };
         match col {
-            ColumnRef::Scalar(c) => Ok(ident(c)),
-            // U2（object/array 整值比较）：无法语义等价翻译 → 显式报错（门禁亦在
-            // `types::validate_condition_shape` 前置拦截，此处为纵深防御兜底）
-            ColumnRef::Json(_) => Err(format!(
-                "SQL 后端无法翻译 object/array 字段 \"{field}\" 的整值比较（U2/D2：请改用对象点号路径）"
+            ColumnRef::Scalar(c) => Ok(self.ident_of(c)),
+            // U2（object/array 整值比较）：在 `field_clauses` 已分派给 `json_cond`，
+            // 不应到达此处 → 显式报错（纵深防御，绝不静默）
+            ColumnRef::Json(..) => Err(format!(
+                "内部错误：JSON 整值列 \"{field}\" 未经 json_cond 分派（拒绝静默）"
             )),
             // U3/U4：object/array 点号路径 → 后端各自的 JSON 标量提取表达式
             ColumnRef::JsonPath(c, path) => {
-                let base = ident(c);
+                let base = self.ident_of(c);
                 let segs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
                 Ok(self.backend.json_extract_scalar(&base, &segs))
             }
         }
+    }
+
+    /// JSON 整列（object/array）的单字段条件（U1/U2；standard 档放行）。
+    ///
+    /// 语义对齐 MongoDB 原生：
+    /// - `array` + 标量值 → 「数组包含该元素」（Mongo `{tags: "x"}`）；
+    /// - `array` + 数组值 → 「数组整体等值」；
+    /// - `object` + 对象值 → 「对象整值等值」（U2；跨后端键序差异须告警，禁静默）；
+    /// - `$ne` 取反；`$exists` 走 `__present` 哨兵（与标量字段同源）；
+    /// - 其余操作符/取值组合无法语义等价翻译 → 显式 Err（禁静默丢弃）。
+    fn json_cond(
+        &mut self,
+        cond: &Value,
+        col: &ColumnRef,
+        field: &str,
+    ) -> Result<WhereClause, String> {
+        let (name, kind) = match col {
+            ColumnRef::Json(n, k) => (n.as_str(), *k),
+            _ => {
+                return Err(format!(
+                    "内部错误：json_cond 收到非 JSON 列引用（字段 {field}）"
+                ))
+            }
+        };
+        let base = self.ident_of(name);
+        // 直写值 ⇒ `$eq` 简写；操作符对象（全 `$` 前缀键）⇒ 仅允许 `$eq` / `$ne` / `$exists`。
+        // 注意：非 `$` 前缀键的对象是**整值等值目标**（Mongo `{meta: {level: "a"}}` 是子文档等值），
+        // 不能被误当操作符对象；混用（既有 `$eq` 又有普通键）语义歧义 → 显式 Err。
+        let mut negate = false;
+        let mut value: Option<&Value> = None;
+        let mut present: Option<bool> = None;
+        match cond {
+            Value::Object(map) => {
+                let dollar = map.keys().filter(|k| k.starts_with('$')).count();
+                if dollar > 0 && dollar < map.len() {
+                    return Err(format!(
+                        "JSON 字段 \"{field}\" 的条件混用了操作符与普通键（语义歧义，拒绝翻译）"
+                    ));
+                }
+                if dollar == 0 {
+                    // 整值等值目标（对象等值 U2 / 空对象等值）
+                    value = Some(cond);
+                } else {
+                    for (k, v) in map {
+                        match k.as_str() {
+                            "$eq" => value = Some(v),
+                            "$ne" => {
+                                value = Some(v);
+                                negate = true;
+                            }
+                            "$exists" => present = Some(v.as_bool().unwrap_or(true)),
+                            other => {
+                                return Err(format!(
+                                    "JSON 字段 \"{field}\" 不支持条件操作符 {other}\
+                                     （U1/U2：仅 $eq/$ne/$exists；拒绝静默丢弃）"
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+            other => value = Some(other),
+        }
+        let mut parts: Vec<WhereClause> = Vec::new();
+        if let Some(v) = value {
+            parts.push(self.json_value_clause(&base, kind, v, negate, field)?);
+        }
+        if let Some(exists) = present {
+            parts.push(self.json_exists_clause(&base, field, exists));
+        }
+        Ok(and_group(parts, "AND"))
+    }
+
+    /// JSON 列的 `$exists` 条件 → WHERE 片段（沿用标量字段的存在性哨兵语义）
+    fn json_exists_clause(&self, base: &str, field: &str, exists: bool) -> WhereClause {
+        if self.alias.is_empty() {
+            // 表达式模式（HAVING）：无哨兵列 → 退化为 NULL 判定
+            let text = if exists {
+                format!("{} IS NOT NULL", base)
+            } else {
+                format!("{} IS NULL", base)
+            };
+            return WhereClause::new(text, Vec::new());
+        }
+        let pred = present_pred(self.alias, field);
+        let text = if exists {
+            pred
+        } else {
+            format!("NOT ({})", pred)
+        };
+        WhereClause::new(text, Vec::new())
+    }
+
+    /// 单个 JSON 整值条件 → WHERE 片段（含跨后端语义差异告警，禁静默）
+    fn json_value_clause(
+        &mut self,
+        base: &str,
+        kind: JsonKind,
+        v: &Value,
+        negate: bool,
+        field: &str,
+    ) -> Result<WhereClause, String> {
+        match (kind, v) {
+            // U1：数组整体等值（Mongo 数组比较 = 顺序相关的逐元素比较）
+            (JsonKind::Array, Value::Array(_)) => self.json_eq_clause(base, v, negate),
+            // U1：数组包含元素（Mongo `{tags: "x"}` / `{tags: {$eq: "x"}}`）
+            (JsonKind::Array, Value::String(_) | Value::Number(_) | Value::Bool(_)) => {
+                let ph = self.backend.placeholder(*self.param_seq);
+                *self.param_seq += 1;
+                let expr = self.backend.json_array_contains(base, &ph);
+                // 参数契约（见 `Backend::json_array_contains`）：MySQL 传值的 JSON 字面量；
+                // PG 传单元素数组；SQLite 传标量原值（保持类型，数字不比文本）
+                let param = match self.backend {
+                    Backend::Postgres => Value::String(format!("[{}]", json_text(v)?)),
+                    Backend::Mysql => Value::String(json_text(v)?),
+                    Backend::Sqlite => v.clone(),
+                };
+                let text = if negate {
+                    format!("NOT ({})", expr)
+                } else {
+                    expr
+                };
+                Ok(WhereClause::new(text, vec![param]))
+            }
+            // U2：对象整值等值（已知跨后端键序差异 → 必须告警；写路径无告警通道 → Err）
+            (JsonKind::Object, Value::Object(_)) => {
+                let msg = format!(
+                    "对象字段 \"{field}\" 的整值等值（U2）存在跨后端语义差异：{} 的对象比较键序无关，\
+                     而 MongoDB 字段顺序敏感 / SQLite 保留键序 —— 可能命中更多行；\
+                     不建议用于业务查询，建议改用对象点号路径（U3）",
+                    self.backend.as_str()
+                );
+                match self.warnings.as_deref_mut() {
+                    Some(w) => w.push(msg),
+                    None => return Err(msg),
+                }
+                self.json_eq_clause(base, v, negate)
+            }
+            _ => Err(format!(
+                "JSON 字段 \"{field}\" 不支持该条件取值（U1/U2）：数组字段仅支持标量 / 数组值、\
+                 对象字段仅支持对象值；拒绝静默丢弃"
+            )),
+        }
+    }
+
+    /// JSON 整值等值谓词（U1 数组整体 / U2 对象）→ WHERE 片段
+    fn json_eq_clause(
+        &mut self,
+        base: &str,
+        v: &Value,
+        negate: bool,
+    ) -> Result<WhereClause, String> {
+        let ph = self.backend.placeholder(*self.param_seq);
+        *self.param_seq += 1;
+        let expr = self.backend.json_value_eq(base, &ph, negate);
+        Ok(WhereClause::new(expr, vec![Value::String(json_text(v)?)]))
     }
 
     /// 单字段条件：转发到操作符翻译（`op::cond_clause`），透传参数游标与告警通道。
@@ -283,6 +448,12 @@ impl Ctx<'_> {
             self.warnings.as_deref_mut(),
         )
     }
+}
+
+/// JSON 值 → JSON 字面量文本（U1/U2 整值条件的参数绑定用；MySQL `CAST(? AS JSON)`、
+/// PG `?::jsonb`、SQLite `json(?)` 均要求参数为 JSON 文本）
+fn json_text(v: &Value) -> Result<String, String> {
+    serde_json::to_string(v).map_err(|e| format!("JSON 值序列化失败：{e}"))
 }
 
 /// JSON 值类型名（用于错误信息，避免把非法 filter 静默当空条件）

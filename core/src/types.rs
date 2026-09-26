@@ -112,10 +112,12 @@ fn root_field_type<'a>(schema: &'a Schema, key: &str) -> Option<&'a str> {
 /// **按档分流**（见执行文档 §4.1 门禁矩阵 #4）。
 ///
 /// 判定依据 = schema：
-/// - U1（数组字段过滤）/ U2（对象字段整值过滤）—— 两档统一显式报错（JSON 列落地后
-///   仍待批 8b 放开 standard；text2query 永远 Err）；
+/// - U1（数组字段整值过滤）/ U2（对象字段整值过滤）—— `standard` 档放行（SQL 侧 object/array
+///   落 JSON 列：U1 走数组包含 / 整体等值、U2 走整值等值并附跨后端键序差异告警）；
+///   `text2query` 档显式 Err（功能收缩）；
 /// - U3（对象点号路径过滤）—— `standard` 档放行（SQL 侧走 `json_extract_scalar`
-///   提取、Mongo 侧原生下钻，跨后端对齐）；`text2query` 档维持显式 Err（功能收缩）。
+///   提取、Mongo 侧原生下钻，跨后端对齐）；`text2query` 档维持显式 Err（功能收缩）；
+/// - 数组字段的索引路径（`tags.0`）—— 两档一律 Err：各后端数组索引语义不一致，不值得对齐。
 ///
 /// **关系名**（§9.6 关系聚合谓词）不在本检查范围，交由关系节点处理。
 pub fn validate_condition_shape(
@@ -143,14 +145,23 @@ pub fn validate_condition_shape(
         };
         let dotted = k.contains('.');
         match (ft, dotted) {
-            ("array", _) => {
+            // 数组字段的索引路径（`tags.0`）：各后端数组索引语义不一致 → 两档一律 Err
+            ("array", true) => {
                 return Err(format!(
-                    "数组字段 \"{k}\" 不支持过滤条件（U1/D2：所有后端含 Mongo 统一显式拒绝）"
+                    "数组字段索引路径 \"{k}\" 不支持过滤条件（各后端数组索引语义不一致；\
+                     请改用整值过滤或对象点号路径）"
                 ));
             }
-            ("object", false) => {
+            ("array", false) if profile == Profile::Text2Query => {
+                // U1：standard 放行（JSON 数组包含 / 整体等值）；text2query 功能收缩
                 return Err(format!(
-                    "对象字段 \"{k}\" 不支持过滤条件（U2/D2：所有后端含 Mongo 统一显式拒绝）"
+                    "数组字段 \"{k}\" 不支持过滤条件（U1/D2：text2query 档功能收缩）"
+                ));
+            }
+            ("object", false) if profile == Profile::Text2Query => {
+                // U2：standard 放行（JSON 对象整值等值，附跨后端键序差异告警）；text2query 功能收缩
+                return Err(format!(
+                    "对象字段 \"{k}\" 不支持过滤条件（U2/D2：text2query 档功能收缩）"
                 ));
             }
             ("object", true) if profile == Profile::Text2Query => {

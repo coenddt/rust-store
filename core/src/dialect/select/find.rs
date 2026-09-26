@@ -51,7 +51,7 @@ pub(super) fn translate_find(
                 ));
             }
             // object/array JSON 列：整列取出，还原时解析 JSON 文本
-            Some(ColumnRef::Json(c)) => {
+            Some(ColumnRef::Json(c, _)) => {
                 cols_sql.push(format!("t.{}", q(backend, &c)));
                 columns.push(RowCol::json(&c, &[f.as_str()]));
             }
