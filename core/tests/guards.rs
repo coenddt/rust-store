@@ -7,7 +7,7 @@
 
 use serde_json::{json, Map, Value};
 
-use rust_store_core::command::{plan_query, plan_query_with_count};
+use rust_store_core::command::{plan_query, plan_query_with_count, QueryPlan, ERR_TEXT2QUERY};
 use rust_store_core::federation::plan_federated;
 use rust_store_core::schema::{Profile, Registry};
 
@@ -123,21 +123,106 @@ fn permission_errors_carry_stable_prefix() {
     assert_eq!(ERR_NO_WRITE, format!("{ERR_PERM_PREFIX}无写入权限"));
 }
 
-// ─── 直通聚合已移除（D3 / D18）：`$pipeline` 显式报错 ───────────
+// ─── DB 独有能力受控放开（§4.1 #5 `$pipeline` 直通）：standard 放行 / text2query Err ──
+
+const PIPELINE_GQL: &str = "Post($pipeline:@p0){ title }";
+
+fn standard_registry() -> Registry {
+    registry_with(base_schema(json!(true)))
+}
+
+fn t2q_registry() -> Registry {
+    let mut reg = registry_with(base_schema(json!(true)));
+    reg.set_profile(Profile::Text2Query);
+    reg
+}
+
+fn pipeline_plan(reg: &Registry, ctx: Option<&Context>) -> Result<QueryPlan, String> {
+    plan_query(
+        PIPELINE_GQL,
+        &params_of(json!({ "p0": [{ "$match": { "title": "a" } }] })),
+        reg,
+        ctx,
+    )
+}
 
 #[test]
-fn user_pipeline_param_is_rejected() {
-    let reg = registry_with(base_schema(json!(true)));
+fn user_pipeline_allowed_in_standard_and_projected() {
+    let plan = pipeline_plan(&standard_registry(), None)
+        .expect("standard 档 `$pipeline` 直通应放行（Mongo 源 DB 独有能力）");
+    let stages = plan.commands[0]["pipeline"]
+        .as_array()
+        .expect("应为聚合命令（含 pipeline 数组）");
+    assert_eq!(
+        stages[0],
+        json!({ "$match": { "title": "a" } }),
+        "用户阶段应原样下发"
+    );
+    assert_eq!(
+        stages.last(),
+        Some(&json!({ "$project": { "_id": 1, "title": 1 } })),
+        "R9：`$pipeline` 模式仍按 GQL 请求字段施加顶层投影"
+    );
+    assert!(
+        plan.postprocess.is_none(),
+        "`$pipeline` 全权模式不做后处理（postprocess = None）"
+    );
+}
+
+#[test]
+fn user_pipeline_rejected_in_text2query() {
+    let ctx = Context::system();
+    let err = pipeline_plan(&t2q_registry(), Some(&ctx))
+        .expect_err("text2query 档 `$pipeline` 直通必须显式报错");
+    assert!(
+        err.starts_with(ERR_TEXT2QUERY) && err.contains("$pipeline 直通"),
+        "应携带档位哨兵前缀并点明命中项: {err}"
+    );
+}
+
+#[test]
+fn user_pipeline_write_stages_rejected_in_both_profiles() {
+    for stage in [json!({ "$out": "dest" }), json!({ "$merge": { "into": "dest" } })] {
+        let params = params_of(json!({ "p0": [stage.clone()] }));
+
+        // standard 档：档位放行 → 落到阶段安全校验（R3，拒绝写副作用）
+        let err = plan_query(PIPELINE_GQL, &params, &standard_registry(), None)
+            .expect_err("standard 档 `$out`/`$merge` 写副作用阶段必须拒绝");
+        assert!(err.contains("写副作用"), "应点明写副作用拒绝: {err}");
+
+        // text2query 档：档位收缩优先（`$pipeline` 直通整体禁用），亦为显式 Err
+        let err = plan_query(PIPELINE_GQL, &params, &t2q_registry(), Some(&Context::system()))
+            .expect_err("text2query 档 `$pipeline` 整体禁用（含写副作用阶段）");
+        assert!(
+            err.starts_with(ERR_TEXT2QUERY),
+            "应携带档位哨兵前缀: {err}"
+        );
+    }
+}
+
+#[test]
+fn user_pipeline_with_relation_field_is_rejected() {
+    // `$pipeline` 全权模式不做关系下推：GQL 里声明关系 → 显式 Err，绝不静默丢弃
+    let reg = registry_with(json!({
+        "name": "Post",
+        "collection": "posts",
+        "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {
+            "comments": { "model": "Comment", "type": "many", "localField": "_id", "foreignField": "postId" }
+        },
+    }));
+    // 关系目标 model 未注册亦不透传（先于关系下推报「不支持」）
     let err = plan_query(
-        "Post($pipeline:@p0){ title }",
+        "Post($pipeline:@p0){ title, comments{ _id } }",
         &params_of(json!({ "p0": [{ "$match": {} }] })),
         &reg,
         None,
     )
-    .expect_err("`$pipeline` 直通应显式报错");
+    .expect_err("`$pipeline` + 关系字段应显式报错");
     assert!(
-        err.contains("直通已移除"),
-        "错误应提示 `$pipeline` 直通已移除: {err}"
+        err.contains("$pipeline") && err.contains("关系字段"),
+        "应点明 `$pipeline` 不支持关系字段: {err}"
     );
 }
 
@@ -871,6 +956,70 @@ fn group_sort_by_by_key_is_rewritten_to_id_path() {
         sort_of(plan),
         json!({ "_id.status": 1, "n": -1 }),
         "多 by 键须改写为 `_id.<key>`，agg 别名保持顶层"
+    );
+}
+
+// ── 步骤 9a：`$group.by` object 点号路径按档分流（standard 放行 / text2query Err） ──
+//
+// ⚠️ DB 独有能力（仅 MongoDB）：Mongo 原生下钻可执行；SQL 侧由 dialect 显式报
+// 「无法把 $group 的 by 键映射到本表标量列」。standard 档放行、text2query 档功能收缩。
+
+fn group_dot_registry() -> Registry {
+    registry_with(json!({
+        "name": "Course", "collection": "courses", "timestamps": false,
+        "fields": {
+            "status": { "type": "string" },
+            "meta": { "type": "object", "fields": { "level": { "type": "string" } } }
+        },
+        "relations": {}
+    }))
+}
+
+#[test]
+fn group_by_object_dot_path_allowed_in_standard() {
+    let reg = group_dot_registry();
+    let plan = plan_query(
+        "Course($group:@g0){ status, meta.level, n }",
+        &params_of(
+            json!({ "g0": { "by": ["status", "meta.level"], "agg": { "n": { "$count": "*" } } } }),
+        ),
+        &reg,
+        None,
+    )
+    .expect("standard 档对象点号路径分组键应放行（Mongo 源可用）");
+    let group = plan.commands[0]["pipeline"]
+        .as_array()
+        .and_then(|s| s.iter().find_map(|x| x.get("$group").cloned()))
+        .expect("应有 $group 阶段");
+    assert_eq!(
+        group["_id"]["meta"]["level"],
+        json!("$meta.level"),
+        "点号路径须按嵌套结构还原为 Mongo `$meta.level` 引用"
+    );
+}
+
+#[test]
+fn group_by_object_dot_path_rejected_in_text2query() {
+    let mut reg = group_dot_registry();
+    reg.set_profile(Profile::Text2Query);
+    // text2query 档强制携带用户上下文（ensure_profile_ctx），故须给 ctx 才能走到 by 键校验
+    let ctx = Context {
+        user_id: Some("u1".to_string()),
+        roles: Some(vec!["admin".to_string()]),
+        ..Default::default()
+    };
+    let err = plan_query(
+        "Course($group:@g0){ status, meta.level, n }",
+        &params_of(
+            json!({ "g0": { "by": ["status", "meta.level"], "agg": { "n": { "$count": "*" } } } }),
+        ),
+        &reg,
+        Some(&ctx),
+    )
+    .expect_err("text2query 档对象点号路径分组键应显式 Err");
+    assert!(
+        err.starts_with("ERR_TEXT2QUERY:") && err.contains("$group.by object 点号路径"),
+        "应为档位拒绝哨兵 + 命中项文案: {err}"
     );
 }
 

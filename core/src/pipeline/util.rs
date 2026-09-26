@@ -83,6 +83,13 @@ pub(crate) fn clamp_t2q_limit(registry: &Registry, limit: Option<&Value>) -> Opt
     }
 }
 
+/// 定位首个「含指定阶段键」的阶段下标（自定义 `$pipeline` 的覆盖/追加定位用）。
+pub(super) fn find_stage_idx(stages: &[Value], key: &str) -> Option<usize> {
+    stages
+        .iter()
+        .position(|s| s.as_object().map(|o| o.contains_key(key)).unwrap_or(false))
+}
+
 /// 按序追加 $sort/$skip/$limit
 pub(super) fn append_order(
     stages: &mut Vec<Value>,

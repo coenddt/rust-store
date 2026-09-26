@@ -54,19 +54,13 @@ impl Parser {
             if matches!(self.peek(), Some(t) if t.value == ")") {
                 break;
             }
+            // 语法层只做「按名取值」：`$pipeline` 的档位判决不在解析层
+            // （判决唯一在消费点 `pipeline/build.rs::build_pipeline`，那里有 §4.5 注释块）。
             let key = self
                 .consume("id", None)?
                 .value
                 .trim_start_matches('$')
                 .to_string();
-            // `$pipeline` 直通已移除（D18：不留 Mongo 逃生舱）——显式报错而非静默忽略，
-            // 否则用户自控的 pipeline 参数会被无声丢弃（与「绝不静默」冲突）。
-            if key == "pipeline" {
-                return Err(
-                    "$pipeline 直通已移除：请改用标准 GQL（$condition/$sort/$skip/$limit + 关系字段）"
-                        .to_string(),
-                );
-            }
             self.consume("p", Some(":"))?;
             let val = self.peek().cloned();
             if let Some(v) = &val {
@@ -111,6 +105,13 @@ impl Parser {
             } else {
                 HashMap::new()
             };
+            // 关系级 `$pipeline` 从不被消费（`$pipeline` 直通仅限根级 GQL）→ 两档一律显式报错，
+            // 否则该参数会被静默丢弃（与「绝不静默」冲突）。
+            if prm.contains_key("pipeline") {
+                return Err(format!(
+                    "关系 \"{name}\" 的参数不支持 $pipeline（$pipeline 直通仅限根级 GQL）"
+                ));
+            }
             let has_brace = matches!(self.peek(), Some(t) if t.kind == "p" && t.value == "{");
             if has_paren || has_brace {
                 let (f, r) = if has_brace {

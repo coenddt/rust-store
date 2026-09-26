@@ -11,9 +11,9 @@ use std::collections::HashSet;
 
 use serde_json::{json, Map, Value};
 
-use crate::command::ERR_PERMISSION;
+use crate::command::{forbid_t2q, ERR_PERMISSION};
 use crate::permission::{is_field_readable, Context};
-use crate::schema::Schema;
+use crate::schema::{Registry, Schema};
 use crate::types::{validate_condition, AGG_OPS};
 
 use super::util::{append_order, collect_having_agg_refs, non_nullish};
@@ -44,8 +44,14 @@ impl GroupSpec {
     }
 }
 
-/// `by` 键校验：仅标量域（含 object 点号路径）；关系 / 数组 / 裸对象 / schema 外字段 → Err
-fn validate_by_key(schema: &Schema, key: &str) -> Result<(), String> {
+/// `by` 键校验：仅标量域（含 object 点号路径）；关系 / 数组 / 裸对象 / schema 外字段 → Err。
+///
+/// **按档分流**：`by` 键里的 object 点号路径（如 `meta.level`）是
+/// ⚠️ DB 独有能力（仅 MongoDB）：不建议用于业务查询 ——
+///    会带来跨方言维护的特殊化处理；仅适合数据迁移 / 功能脚本。
+///    准入：standard 档放行（Mongo 源执行；SQL 源由 dialect 显式报「无法映射到本表标量列」）；
+///    text2query 档禁用（forbid_t2q）。
+fn validate_by_key(schema: &Schema, key: &str, registry: &Registry) -> Result<(), String> {
     if schema.relations.contains_key(key) {
         return Err(format!(
             "$group 的 by 键 \"{key}\" 是关系名（分组键仅支持标量域，不支持关系字段）"
@@ -61,7 +67,9 @@ fn validate_by_key(schema: &Schema, key: &str) -> Result<(), String> {
         "array" => Err(format!(
             "$group 的 by 键 \"{key}\" 是数组字段（分组键仅支持标量域）"
         )),
-        "object" if !key.contains('.') => Err(format!(
+        // object 点号路径：standard 档放行（Mongo 原生下钻）、text2query 档功能收缩（见上方注释块）
+        "object" if key.contains('.') => forbid_t2q(registry, "$group.by object 点号路径"),
+        "object" => Err(format!(
             "$group 的 by 键 \"{key}\" 是对象字段（须用点号路径指明子字段，如 \"{key}.<子字段>\")"
         )),
         _ => Ok(()),
@@ -91,8 +99,8 @@ fn validate_agg_field(schema: &Schema, op: &str, alias: &str, field: &str) -> Re
     }
 }
 
-/// 解析并校验 `$group` 规格
-pub fn parse(schema: &Schema, group_v: &Value) -> Result<GroupSpec, String> {
+/// 解析并校验 `$group` 规格（`registry` 供 `by` 键档位分流，见 [`validate_by_key`]）
+pub fn parse(schema: &Schema, group_v: &Value, registry: &Registry) -> Result<GroupSpec, String> {
     let obj = group_v
         .as_object()
         .ok_or("$group 参数必须是对象 { by, agg }")?;
@@ -103,7 +111,7 @@ pub fn parse(schema: &Schema, group_v: &Value) -> Result<GroupSpec, String> {
         Some(Value::Array(arr)) => {
             for v in arr {
                 let key = v.as_str().ok_or("$group.by 的元素必须是字段名字符串")?;
-                validate_by_key(schema, key)?;
+                validate_by_key(schema, key, registry)?;
                 if by.iter().any(|k| k == key) {
                     return Err(format!("$group.by 存在重复键 \"{key}\""));
                 }

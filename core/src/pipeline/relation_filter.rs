@@ -360,7 +360,7 @@ fn parse_main(
             "关系聚合谓词 \"{rel_name}\" 省略 agg 时无法推导 having 引用的聚合（请显式声明 agg）"
         )
     })?;
-    let gs = group::parse(rel_schema, &json!({ "agg": agg_v }))
+    let gs = group::parse(rel_schema, &json!({ "agg": agg_v }), registry)
         .map_err(|e| format!("关系聚合谓词 \"{rel_name}\" 的 agg 非法: {e}"))?;
 
     // having：仅可引用本块 agg 别名（`by` 恒为空 → by 键域为空）

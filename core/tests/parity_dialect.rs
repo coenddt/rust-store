@@ -855,6 +855,34 @@ fn dialect_group_object_dotted_key_is_rejected() {
     assert!(err.contains("meta.level"), "错误应指明分组键: {err}");
 }
 
+/// §4.1 #5 `$pipeline` 直通（standard 档放行）：用户自带阶段在 Mongo 侧原样下发，
+/// SQL 侧无对应翻译 → dialect 显式 Err（维持既有 unsupported/Err 机制，绝不静默忽略）。
+#[test]
+fn dialect_user_pipeline_stage_is_explicit_error_on_sql() {
+    let registry = registry_with(&schemas());
+    let mut ast = parse_gql("Post($pipeline:@p0){ title }").expect("parse_gql");
+    let params: Map<String, Value> = serde_json::from_str(r#"{ "p0": [ { "$addFields": { "x": 1 } } ] }"#)
+        .expect("params 解析");
+    let pipeline = build_pipeline(&mut ast, &params, &registry, None)
+        .expect("standard 档 `$pipeline` 直通应放行");
+    let stages = pipeline.as_array().cloned().expect("应为阶段数组");
+    assert_eq!(
+        stages[0],
+        json!({ "$addFields": { "x": 1 } }),
+        "用户阶段应原样进 pipeline（Mongo 源执行）"
+    );
+
+    let cmd = json!({ "kind": "aggregate", "collection": "posts", "pipeline": stages });
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let err = translate(backend, &cmd, &registry)
+            .expect_err("SQL 侧应显式报错（不做静默忽略）");
+        assert!(
+            err.contains("$addFields"),
+            "[{backend:?}] 错误应点明不支持阶段: {err}"
+        );
+    }
+}
+
 /// 分组结果行还原：by 键点号路径 → 嵌套对象（非关系列，不得塑形为数组）。
 #[test]
 fn dialect_group_dotted_key_restores_nested_object() {

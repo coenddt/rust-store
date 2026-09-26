@@ -6,11 +6,11 @@ use crate::bson::id_key;
 use crate::computes::{collect_field_deps, merge_depends_into_ast, InjectInfo};
 use crate::permission::{can_read_schema, is_relation_readable, merge_owner_condition, Context};
 use crate::pipeline::{
-    build_pipeline, build_projection, flatten_object_fields, is_nullish, param, parse_gql, Ast,
-    RelAst, REL_PRED_PREFIX,
+    build_pipeline, build_pipeline_projection, build_projection, flatten_object_fields, is_nullish,
+    param, parse_gql, Ast, RelAst, REL_PRED_PREFIX,
 };
 use crate::schema::{Registry, Schema};
-use crate::types::is_truthy;
+use crate::types::{is_truthy, validate_pipeline_stages};
 
 use super::cmd::{cmd_aggregate, cmd_find, num_value, to_number};
 use super::{ensure_context, ERR_PERMISSION, MAX_PAGE_SIZE, PHASE1_IDS};
@@ -124,6 +124,18 @@ fn postprocess_value(ast: &Ast, inject: &InjectInfo) -> Value {
     })
 }
 
+/// 用户 `$pipeline` 直通探测：GQL 根参数声明了 `$pipeline` 且对应 params 值非 nullish。
+///
+/// ⚠️ DB 独有能力（仅 MongoDB）：不建议用于业务查询 —— 会带来跨方言维护的特殊化处理；
+///    仅适合数据迁移 / 功能脚本。准入：standard 档放行（Mongo 源）；text2query 档禁用
+///    （判决唯一在消费点 `pipeline/build.rs::build_pipeline`）。
+pub fn has_pipeline(ast: &Ast, params: &Map<String, Value>) -> bool {
+    ast.params
+        .get("pipeline")
+        .map(|r| !is_nullish(param(params, Some(r))))
+        .unwrap_or(false)
+}
+
 /// 生成读路径命令序列（对应 JS `query` + `_executePipeline` 的路径选择）
 pub fn plan_query(
     gql: &str,
@@ -150,6 +162,7 @@ pub fn plan_query_mut(
 /// 大集合不再全量取回后丢弃（对齐 MongoDB `findOne` 的 limit-1 语义）。
 ///
 /// - GQL 已有 `$limit` 时不改写用户意图（取其结果首条）；
+/// - `$pipeline` 全权模式不注入（用户自控的 pipeline 不做二次改写）；
 /// - 注入键名固定 `__core_one_limit__`（覆盖式写入，防用户 params 键名碰撞）。
 pub fn plan_query_one(
     gql: &str,
@@ -159,7 +172,7 @@ pub fn plan_query_one(
 ) -> Result<QueryPlan, String> {
     let mut params = params.clone();
     let mut ast = parse_gql(gql)?;
-    if !ast.params.contains_key("limit") {
+    if !ast.params.contains_key("limit") && !has_pipeline(&ast, &params) {
         ast.params
             .insert("limit".to_string(), "@__core_one_limit__".to_string());
         params.insert("__core_one_limit__".to_string(), json!(1));
@@ -205,14 +218,25 @@ pub fn plan_query_ast_mut(
         }
     }
 
-    let mut inject = merge_depends_into_ast(&mut ast.relations, schema)?;
+    let has_pipeline = has_pipeline(&ast, params);
+
+    let mut inject = if has_pipeline {
+        InjectInfo::default()
+    } else {
+        merge_depends_into_ast(&mut ast.relations, schema)?
+    };
     // R7：asyncFn 计算列的普通字段依赖（如 `name`）并入根 AST，供投影取数与
     // process_node 裁剪保留；宿主 asyncFn 执行后由 strip_dep_injected 剥离。
-    inject.fields = collect_field_deps(&mut ast.fields, schema);
+    if !has_pipeline {
+        inject.fields = collect_field_deps(&mut ast.fields, schema);
+    }
 
-    // `postprocess.ast` 取「展平后、含全部关系」的快照（build_pipeline 会原地展平 fetch ast）
+    // `postprocess.ast` 取「展平后、含全部关系」的快照（build_pipeline 会原地展平 fetch ast）；
+    // `$pipeline` 全权模式不做后处理，快照保持原样即可。
     let mut post_ast = ast.clone();
-    flatten_object_fields(&mut post_ast, schema);
+    if !has_pipeline {
+        flatten_object_fields(&mut post_ast, schema);
+    }
 
     build_plan(ast, &post_ast, &inject, params, registry, ctx)
 }
@@ -272,6 +296,11 @@ pub fn build_plan(
     // 关系不可读 → Err，绝不静默省略（§9.1 R6 / D2 归一）。
     check_readable_relations(&fetch_ast.relations, schema, registry, ctx)?;
 
+    // 用户 `$pipeline` 全权模式（⚠️ DB 独有能力，准入判决见 `pipeline/build.rs`）：
+    // 不做依赖注入 / 两阶段优化 / 计算列 / 默认值后处理 —— 仅按 GQL 请求字段做顶层
+    // 字段选择（R9），结果原样返回（`postprocess = None`）。
+    let has_pipeline = has_pipeline(&fetch_ast, params);
+
     let pipeline = build_pipeline(&mut fetch_ast, params, registry, ctx)?;
     let stages: Vec<Value> = pipeline.as_array().cloned().unwrap_or_default();
 
@@ -280,7 +309,9 @@ pub fn build_plan(
     // 不可做关系下钻 / 计算列 / 默认值后处理 → `postprocess` 置空。
     let grouped = stages.iter().any(|s| s.get("$group").is_some());
 
-    let projection = if grouped {
+    let projection = if has_pipeline {
+        build_pipeline_projection(&fetch_ast, schema)
+    } else if grouped {
         None
     } else {
         build_projection(&fetch_ast, schema, ctx)
@@ -288,15 +319,15 @@ pub fn build_plan(
 
     let collection = schema.collection.clone();
     let post = || {
-        if grouped {
+        if has_pipeline || grouped {
             None
         } else {
             Some(postprocess_value(post_ast, inject))
         }
     };
 
-    // ── 纯 $match 无关联 → find 快路径 ──
-    if stages.len() == 1 {
+    // ── 纯 $match 无关联 → find 快路径（`$pipeline` 全权模式不适用）──
+    if !has_pipeline && stages.len() == 1 {
         if let Some(filter) = stages[0].get("$match") {
             return Ok(QueryPlan {
                 collection: collection.clone(),
@@ -321,9 +352,11 @@ pub fn build_plan(
             })
             .unwrap_or(false)
     });
-    let has_skip_limit = stages
-        .iter()
-        .any(|s| s.get("$skip").is_some() || s.get("$limit").is_some());
+    // `$pipeline` 全权模式由用户自带分页阶段，不参与本优化（否则会改写用户 pipeline）
+    let has_skip_limit = !has_pipeline
+        && stages
+            .iter()
+            .any(|s| s.get("$skip").is_some() || s.get("$limit").is_some());
     let sort_stage = stages.iter().find(|s| s.get("$sort").is_some()).cloned();
 
     if let Some(idx) = first_lookup {
@@ -368,6 +401,9 @@ pub fn build_plan(
     if let Some(p) = projection.as_ref() {
         final_stages.push(json!({ "$project": p }));
     }
+    // R3：阶段安全校验（拒绝 `$out`/`$merge` 写副作用 + `$where`/`$function`/`$accumulator`）。
+    // 用户 `$pipeline` 直通（DB 独有能力）与内置生成的 pipeline 走同一道闸。
+    validate_pipeline_stages(&final_stages)?;
 
     Ok(QueryPlan {
         collection,

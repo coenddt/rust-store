@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use serde_json::{json, Map, Value};
 
+use crate::command::forbid_t2q;
 use crate::permission::Context;
 use crate::schema::{Registry, Schema};
 use crate::types::{is_truthy, validate_condition, validate_condition_shape, validate_sort_shape};
@@ -12,7 +13,7 @@ use super::ast::{Ast, RelAst};
 use super::group;
 use super::lookup::{build_agg_stages, build_lookup};
 use super::relation_filter;
-use super::util::{append_order, force_t2q_limit, non_nullish, param};
+use super::util::{append_order, find_stage_idx, force_t2q_limit, non_nullish, param};
 
 /// 归一化 AST：将 type=object 的花括号子字段展平为点号字段（原地修改）
 pub fn flatten_object_fields(ast: &mut Ast, schema: &Schema) {
@@ -44,6 +45,52 @@ pub(crate) fn flatten_object_fields_impl(
         removed.push(rel_name.clone());
     }
     relations.retain(|(n, _)| !removed.contains(n));
+}
+
+/// 若 stages 已含该类阶段则覆盖，否则追加（自定义 `$pipeline` 模式的根参数落位）。
+fn override_or_append(stages: &mut Vec<Value>, stage_key: &str, value: Value) {
+    let stage = Value::Object(Map::from_iter([(stage_key.to_string(), value)]));
+    match find_stage_idx(stages, stage_key) {
+        Some(idx) => stages[idx] = stage,
+        None => stages.push(stage),
+    }
+}
+
+/// ⚠️ DB 独有能力（仅 MongoDB）：不建议用于业务查询 ——
+///    会带来跨方言维护的特殊化处理；仅适合数据迁移 / 功能脚本。
+///    准入：standard 档放行（Mongo 源）；text2query 档禁用（forbid_t2q）。
+///
+/// 根级 `$pipeline` 直通：延展用户 pipeline 阶段，并用根参数（`$condition`/`$sort`/
+/// `$skip`/`$limit`）按「覆盖/追加」语义落位（与 JS 参考实现对拍一致）。
+/// SQL 源由 dialect 逐阶段翻译，无法映射的阶段走既有 `PushdownUnsupportedError` 显式报错。
+fn custom_pipeline_branch(
+    stages: &mut Vec<Value>,
+    root_pipeline: &Value,
+    root_condition: Option<&Value>,
+    root_sort: Option<&Value>,
+    root_skip: Option<&Value>,
+    root_limit: Option<&Value>,
+) -> Result<Value, String> {
+    if let Some(arr) = root_pipeline.as_array() {
+        stages.extend(arr.iter().cloned());
+    }
+    if let Some(v) = non_nullish(root_condition) {
+        // 根 $condition 覆盖同样不允许携带拒绝名单操作符（缺陷 D-02）
+        validate_condition(v)?;
+        // `$condition` 与 `$sort/$skip/$limit` 同为根参数，按「覆盖/追加」语义应用到
+        // pipeline，否则用户 `$match` 保留、根条件被静默丢弃。
+        override_or_append(stages, "$match", v.clone());
+    }
+    if let Some(v) = non_nullish(root_sort) {
+        override_or_append(stages, "$sort", v.clone());
+    }
+    if let Some(v) = non_nullish(root_skip) {
+        override_or_append(stages, "$skip", v.clone());
+    }
+    if let Some(v) = non_nullish(root_limit) {
+        override_or_append(stages, "$limit", v.clone());
+    }
+    Ok(Value::Array(std::mem::take(stages)))
 }
 
 /// 标准 GQL：逐层展开根 relations 为 $lookup（one 关系附加 $unwind）
@@ -94,6 +141,36 @@ pub fn build_pipeline(
     // standard 档原样（不封顶）。
     let root_limit = force_t2q_limit(registry, param(params, ast.params.get("limit")));
 
+    // ── 根级 `$pipeline` 直通（⚠️ DB 独有能力，见 `custom_pipeline_branch` 注释块） ──
+    // 档位判决唯一在此消费点：text2query 档 `forbid_t2q` 显式拒绝；standard 档放行。
+    // 用户 pipeline 全权控制，故不施加 U1~U4 / `$group` 等标准 GQL 形态门禁。
+    let root_pipeline = param(params, ast.params.get("pipeline")).cloned();
+    if let Some(pipe) = non_nullish(root_pipeline.as_ref()).filter(|v| v.is_array()) {
+        forbid_t2q(registry, "$pipeline 直通")?;
+        // object 子字段花括号语法仍按 GQL 规范展平为点号（属**字段选择**，与关系下推无关），
+        // 避免该选择在 `$pipeline` 模式下被静默丢弃。
+        flatten_object_fields(ast, schema);
+        // `$pipeline` 全权模式不做关系下推：GQL 声明的**真关系**（`$lookup`）无法与用户
+        // pipeline 并用，显式报错，绝不静默丢弃（否则关系数据会凭空消失）。
+        if let Some((rel_name, _)) = ast
+            .relations
+            .iter()
+            .find(|(n, _)| schema.relations.contains_key(n))
+        {
+            return Err(format!(
+                "`$pipeline` 直通模式不支持关系字段 [{rel_name}]（自定义 pipeline 与关系下推不能并用）"
+            ));
+        }
+        return custom_pipeline_branch(
+            &mut stages,
+            pipe,
+            root_condition.as_ref(),
+            root_sort.as_ref(),
+            root_skip.as_ref(),
+            root_limit.as_ref(),
+        );
+    }
+
     // U1~U4（D2）：数组/对象字段过滤、对象点号路径过滤/排序 —— 所有后端（含 Mongo）
     // 规划期统一显式报错，绝不静默（判定依据 = 根 schema）。
     if let Some(cond) = non_nullish(root_condition.as_ref()) {
@@ -120,7 +197,7 @@ pub fn build_pipeline(
                     .to_string(),
             );
         }
-        let spec = group::parse(schema, group_v)?;
+        let spec = group::parse(schema, group_v, registry)?;
         // F2：by 键 / agg 引用字段必须过 field.read（含 $having 背后的引用字段）
         group::validate_read_permission(schema, ctx, &spec)?;
         let stages = group::build_stages(

@@ -121,6 +121,32 @@ fn collect_real_fields(
     (proj, dot_parent_fields, has_real_field)
 }
 
+/// ⚠️ DB 独有能力（仅 MongoDB）：不建议用于业务查询 ——
+///    会带来跨方言维护的特殊化处理；仅适合数据迁移 / 功能脚本。
+///    准入：standard 档放行（Mongo 源）；text2query 档禁用（forbid_t2q）。
+///
+/// R9：`$pipeline` 模式的顶层投影 —— 只按请求保留 `_id` + 真实 schema 字段，
+/// 不追加 compute 层/依赖/关系（`$pipeline` 语义：按用户 pipeline 输出，仅做字段选择）。
+/// 无有效真实字段（全为计算列/空）时返回 None（不施加投影，原样输出）。
+pub fn build_pipeline_projection(ast: &Ast, schema: &Schema) -> Option<Value> {
+    let mut proj: Map<String, Value> = Map::new();
+    proj.insert("_id".to_string(), json!(1));
+    let mut any = false;
+    for f in &ast.fields {
+        if f == "_id" {
+            continue;
+        }
+        if schema.fields.contains_key(f) {
+            proj.insert(f.clone(), json!(1));
+            any = true;
+        }
+    }
+    if !any {
+        return None;
+    }
+    Some(Value::Object(proj))
+}
+
 /// 从 GQL 根字段列表 + schema computes 计算投影；无有效字段时返回 None
 pub fn build_projection(ast: &Ast, schema: &Schema, ctx: Option<&Context>) -> Option<Value> {
     if ast.fields.is_empty() {
