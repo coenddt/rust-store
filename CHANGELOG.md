@@ -4,6 +4,37 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 2.3.0 (未发布)
+
+### New Features
+
+- **调用档位（`Profile`）：`standard`（默认）/ `text2query`，判决唯一在 core**：`Registry` 新增
+  `profile` + `set_profile` / `profile`（未知值 **Err**，禁静默回落）；`core-py` / `core-node`
+  双绑定透传（蛇形 / 驼峰）。
+- **`text2query` 档硬限制**（相对 `standard` 全为收紧）：单次取数行数封顶 `T2Q_MAX_ROWS = 1000`
+  （根级省略即视为上限、关系级仅夹上限）、关系嵌套深度 `T2Q_MAX_DEPTH = 3` 超限 **Err**、
+  联邦单源行数 `T2Q_MAX_FEDERATION_ROWS = 10_000` 超限 **Err**、`route_override` 非空即 **Err**
+  （CWE-639）、强制携带用户上下文；DB 独有能力（`$pipeline` 直通、`$group.by` object 点号路径）
+  一律 `forbid_t2q` 显式 **Err**（功能收缩，前缀 `ERR_TEXT2QUERY:`）。
+- **`standard` 档跨 DB 对齐后放开**：`object` / `array` 字段落 **JSON 列**
+  （MySQL `JSON` / PG `jsonb` / SQLite `TEXT`+JSON1）后，**U1~U4**（数组/对象整值条件、object
+  点号路径过滤与排序）四库均可下推（U2 对象键序差异按后端**告警**）；根级 `$pipeline` 直通
+  （仅 Mongo 源；SQL 侧阶段可翻译时下推、含 Mongo 独有阶段显式 Err）；`$group.by` object
+  点号路径（仅 Mongo 源）。DB 独有能力处均标注「⚠️ 不建议业务查询（迁移 / 脚本用）」注释块。
+- **关系聚合谓词（§9.6）子级 `filter` 扩展**：U1~U3 按档（`standard` 放行 / `text2query` **Err**）；
+  **一层嵌套关系下钻**（如 `{"lessons":{"$filter":{"children.seq":{"$gt":1}}}}` → SQL 嵌套 `EXISTS`；
+  三级路径与 `$or` / `$nor` 内嵌套 → **Err**，禁静默近似）。
+
+### Breaking Changes
+
+- **关系嵌套超深由静默降级改为显式 Err**：此前超 `MAX_DEPTH` / 分页深度**静默降级为空 `$lookup`**
+  （返回残缺数据却报成功），现两档均 **Err**（依据「禁静默失守」）。
+- **`$pipeline` 由全局拒绝改为按档分流**：`standard` 档放行（Mongo 源可执行；SQL 源逐阶段翻译，
+  无法映射即 `PushdownUnsupportedError`），`text2query` 档维持 `ERR_TEXT2QUERY:` 拒绝；
+  `$out` / `$merge` 写副作用阶段两档均拒。
+- **联邦单源行数超限报错**：`merge_federated` 由「超限仍全量拉取」改为显式 **Err**
+  （拒绝静默全表拉取），上限随 plan 下传（按档取值）。
+
 ## 2.0.0 (2026-09-14)
 
 ### Breaking Changes
