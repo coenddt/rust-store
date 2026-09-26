@@ -33,6 +33,8 @@ const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 function makeRegistry(fx) {
   const reg = new Registry();
   for (const s of fx.schemas || []) reg.register(s);
+  // 档位：缺省 standard；用例可声明 `"profile": "text2query"` 覆盖（双门禁分离）
+  if (fx.profile) reg.setProfile(fx.profile);
   for (const [ref, fn] of Object.entries(fns)) reg.setFn(ref, fn);
   return reg;
 }

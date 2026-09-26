@@ -1011,6 +1011,94 @@ fn dialect_relation_predicate_with_scalar_sibling() {
     );
 }
 
+// ─── §4.1 #4 → 8c-1：关系聚合谓词子级 filter 的 JSON 列下推 ──
+
+/// 关系谓词 JSON filter 专用 schema：子表 `OrderItem` 带数组列 `tags` 与对象列 `meta`
+const RP_JSON_SCHEMAS: &str = r#"[
+  {
+    "name": "Order", "collection": "orders", "timestamps": false,
+    "fields": { "code": { "type": "string" } },
+    "relations": {
+      "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
+    }
+  },
+  {
+    "name": "OrderItem", "collection": "order_items", "timestamps": false,
+    "fields": {
+      "orderId": { "type": "string" },
+      "tags": { "type": "array" },
+      "meta": { "type": "object", "fields": {
+        "level": { "type": "string" },
+        "seo":   { "type": "object", "fields": { "title": { "type": "string" } } }
+      } }
+    },
+    "relations": {}
+  }
+]"#;
+
+/// 关系聚合谓词命令（专用 schema 集，避免污染 `SCHEMAS` 的既有断言）
+fn rp_json_cmd(c0: Value) -> (Value, Registry) {
+    let schemas: Vec<Value> = serde_json::from_str(RP_JSON_SCHEMAS).expect("schemas 解析失败");
+    let registry = registry_with(&schemas);
+    let mut ast = parse_gql("Order($condition:@c0){ _id }").expect("GQL 解析失败");
+    let mut params = Map::new();
+    params.insert("c0".to_string(), c0);
+    let pipeline = build_pipeline(&mut ast, &params, &registry, None).expect("build_pipeline");
+    (
+        json!({ "kind": "aggregate", "collection": "orders", "pipeline": pipeline }),
+        registry,
+    )
+}
+
+/// standard 档放开后，关系谓词子级 `filter` 的数组/对象/点号路径须在 `EXISTS` 子查询内
+/// 与根条件路径**同源**下推（同一 `col_fn`），且 U2 的键序告警必须冒泡（禁静默）。
+#[test]
+fn dialect_relation_predicate_json_filter_pushdown() {
+    // U1：数组字段整值 → EXISTS 内子表 JSON 列数组谓词
+    let (cmd, reg) = rp_json_cmd(
+        json!({ "items": { "$filter": { "tags": "x" }, "$count": { "$gt": 1 } } }),
+    );
+    let sq = translate(Backend::Sqlite, &cmd, &reg).expect("translate");
+    let text = sq["stmts"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("EXISTS (SELECT 1 FROM \"order_items\" c")
+            && text.contains("EXISTS (SELECT 1 FROM json_each(c.\"tags\") WHERE json_each.value = ?)"),
+        "U1 应在 EXISTS 内下推数组谓词: {text}"
+    );
+    assert_eq!(
+        sq["stmts"][0]["params"],
+        json!(["x", 1]),
+        "参数顺序须与 SQL 文本占位符一致（子 filter 值在前、HAVING 常量在后）: {sq}"
+    );
+
+    // U3：对象点号路径 → EXISTS 内子表 JSON 标量提取
+    let (cmd, reg) = rp_json_cmd(
+        json!({ "items": { "$filter": { "meta.seo.title": "x" }, "$count": { "$gt": 1 } } }),
+    );
+    let pg = translate(Backend::Postgres, &cmd, &reg).expect("translate");
+    let text = pg["stmts"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("(c.\"meta\" #>> '{seo,title}')"),
+        "U3 应在 EXISTS 内下推 JSON 标量提取: {text}"
+    );
+
+    // U2：对象整值等值 → EXISTS 内整值等值 + 键序告警冒泡
+    let (cmd, reg) = rp_json_cmd(
+        json!({ "items": { "$filter": { "meta": { "level": "a" } }, "$count": { "$gt": 1 } } }),
+    );
+    let my = translate(Backend::Mysql, &cmd, &reg).expect("translate");
+    let text = my["stmts"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("c.`meta` = CAST(? AS JSON)"),
+        "U2 应在 EXISTS 内下推对象整值等值: {text}"
+    );
+    let warnings = my["warnings"].as_array().cloned().unwrap_or_default();
+    assert!(
+        warnings.iter().any(|w| w.as_str().unwrap_or("").contains("键序")),
+        "U2 键序告警必须从关系谓词 filter 冒泡（禁静默）: {warnings:?}"
+    );
+}
+
 // ─── §9.7 布尔归一 / PG 浮点字面量类型标注（场景矩阵暴露的两个跨后端缺口）──
 
 /// §9.7「布尔归一」：schema 的 `boolean` 字段在 SQL 侧存为 `0/1`（MySQL `TINYINT(1)`、

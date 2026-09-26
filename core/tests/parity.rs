@@ -14,7 +14,7 @@ use rust_store_core::permission::context_from_value;
 use rust_store_core::pipeline::{
     build_pipeline, build_projection, parse, token_to_value, tokenize,
 };
-use rust_store_core::schema::Registry;
+use rust_store_core::schema::{Profile, Registry};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -36,6 +36,10 @@ fn run_case(fx: &Value) -> Result<(Value, Value, Value, Value), String> {
         for s in schemas {
             registry.register(s)?;
         }
+    }
+    // 档位：缺省 standard；用例可声明 `"profile": "text2query"` 覆盖（双门禁分离）
+    if let Some(p) = fx.get("profile").and_then(|v| v.as_str()) {
+        registry.set_profile(Profile::from_str_or_err(p)?);
     }
 
     let gql = fx.get("gql").and_then(|v| v.as_str()).unwrap_or("");

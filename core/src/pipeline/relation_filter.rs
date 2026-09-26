@@ -22,7 +22,7 @@ use crate::command::ERR_PERMISSION;
 use crate::permission::{
     get_readable_relations, is_field_readable, merge_owner_condition, Context,
 };
-use crate::schema::{Registry, Schema};
+use crate::schema::{Profile, Registry, Schema};
 use crate::types::{validate_condition, AGG_OPS};
 
 use super::group::{self, AggDef};
@@ -240,10 +240,11 @@ fn build_pred(
     let is_main = ["filter", "agg", "having"]
         .iter()
         .any(|k| obj.contains_key(*k));
+    let profile = registry.profile();
     let (filter, agg, having, extra_neg) = if is_main {
-        parse_main(rel_schema, rel_name, obj)?
+        parse_main(rel_schema, rel_name, obj, profile)?
     } else {
-        parse_simple(rel_schema, rel_name, obj)?
+        parse_simple(rel_schema, rel_name, obj, profile)?
     };
 
     let as_name = format!("{}{}__{}", REL_PRED_PREFIX, preds.len(), rel_name);
@@ -265,7 +266,12 @@ fn build_pred(
 type ParsedRelPredicate = Result<(Option<Value>, Vec<(String, AggDef)>, Value, bool), String>;
 
 /// 主形式：`{ filter?, agg, having }`
-fn parse_main(rel_schema: &Schema, rel_name: &str, obj: &Map<String, Value>) -> ParsedRelPredicate {
+fn parse_main(
+    rel_schema: &Schema,
+    rel_name: &str,
+    obj: &Map<String, Value>,
+    profile: Profile,
+) -> ParsedRelPredicate {
     for k in obj.keys() {
         if !matches!(k.as_str(), "filter" | "agg" | "having") {
             return Err(format!(
@@ -283,7 +289,7 @@ fn parse_main(rel_schema: &Schema, rel_name: &str, obj: &Map<String, Value>) -> 
     }
     let filter = non_nullish(obj.get("filter")).cloned();
     if let Some(f) = &filter {
-        validate_scalar_filter(rel_schema, rel_name, f)?;
+        validate_pred_filter(rel_schema, rel_name, f, profile)?;
     }
 
     // agg：省略无法推导 having 引用的算子/字段 → Err（绝不臆测）
@@ -324,13 +330,14 @@ fn parse_simple(
     rel_schema: &Schema,
     rel_name: &str,
     obj: &Map<String, Value>,
+    profile: Profile,
 ) -> ParsedRelPredicate {
     let mut filter: Option<Value> = None;
     let mut ops: Vec<(&String, &Value)> = Vec::new();
     for (k, v) in obj {
         if k == "$filter" {
             if !v.is_null() {
-                validate_scalar_filter(rel_schema, rel_name, v)?;
+                validate_pred_filter(rel_schema, rel_name, v, profile)?;
                 filter = Some(v.clone());
             }
         } else if k == "$exists" || AGG_OPS.contains(&k.as_str()) {
@@ -489,15 +496,21 @@ fn check_filter_readable(
     Ok(())
 }
 
-/// 子级过滤（filter）仅标量域：关系 / 数组 / 对象 / 点号路径 / schema 外字段 → Err
-fn validate_scalar_filter(
+/// 子级过滤（`filter` / `$filter`）键校验 —— **按档分流**（执行文档 §4.1 #4）。
+///
+/// `standard` 档：数组字段整值（U1）、对象字段整值（U2）、对象点号路径（U3）放行
+/// （SQL 侧已落 JSON 列并由 `dialect` 翻译，见 8b）；`text2query` 档维持显式 Err（功能收缩）。
+/// 两档一律 Err：关系字段（一级关系谓词内不做嵌套关系下钻）、数组字段索引路径（`tags.0`，
+/// 各后端索引语义不一致）、schema 外字段、操作符键（filter 仅接受字段条件）。
+fn validate_pred_filter(
     rel_schema: &Schema,
     rel_name: &str,
     filter: &Value,
+    profile: Profile,
 ) -> Result<(), String> {
     let Value::Object(m) = filter else {
         return Err(format!(
-            "关系聚合谓词 \"{rel_name}\" 的 filter 必须是对象（仅标量域）"
+            "关系聚合谓词 \"{rel_name}\" 的 filter 必须是对象"
         ));
     };
     for (k, v) in m {
@@ -506,21 +519,62 @@ fn validate_scalar_filter(
                 .as_array()
                 .ok_or_else(|| format!("关系聚合谓词 \"{rel_name}\" 的 filter 中 {k} 需要数组"))?;
             for it in arr {
-                validate_scalar_filter(rel_schema, rel_name, it)?;
+                validate_pred_filter(rel_schema, rel_name, it, profile)?;
             }
             continue;
         }
         if k.starts_with('$') {
             return Err(format!(
-                "关系聚合谓词 \"{rel_name}\" 的 filter 不支持操作符 \"{k}\"（仅标量字段条件）"
+                "关系聚合谓词 \"{rel_name}\" 的 filter 不支持操作符 \"{k}\"（仅字段条件）"
             ));
         }
-        validate_scalar_field(rel_schema, rel_name, k)?;
+        validate_pred_field(rel_schema, rel_name, k, profile)?;
     }
     Ok(())
 }
 
-/// 标量字段校验（子 schema）：关系 / 数组 / 对象 / 点号路径 / schema 外 → Err
+/// 过滤键的字段形态校验（判定与 `types::validate_condition_shape` 同构，文案带关系名前缀）
+fn validate_pred_field(
+    rel_schema: &Schema,
+    rel_name: &str,
+    field: &str,
+    profile: Profile,
+) -> Result<(), String> {
+    let root = field.split('.').next().unwrap_or(field);
+    if rel_schema.relations.contains_key(root) {
+        return Err(format!(
+            "关系聚合谓词 \"{rel_name}\" 字段 \"{field}\" 引用了关系 \"{root}\"\
+             （一级关系谓词内不支持嵌套关系下钻）"
+        ));
+    }
+    let Some(fd) = rel_schema.fields.get(root) else {
+        return Err(format!(
+            "关系聚合谓词 \"{rel_name}\" 引用了 schema 外字段 \"{field}\""
+        ));
+    };
+    let dotted = field.contains('.');
+    match (fd.field_type.as_str(), dotted) {
+        // 数组字段索引路径（`tags.0`）：各后端数组索引语义不一致 → 两档一律 Err
+        ("array", true) => Err(format!(
+            "关系聚合谓词 \"{rel_name}\" 字段 \"{field}\" 是数组字段索引路径\
+             （各后端数组索引语义不一致；请改用整值过滤或对象点号路径）"
+        )),
+        ("array", false) if profile == Profile::Text2Query => Err(format!(
+            "关系聚合谓词 \"{rel_name}\" 字段 \"{field}\" 是数组字段（U1/D2：text2query 档功能收缩）"
+        )),
+        ("object", false) if profile == Profile::Text2Query => Err(format!(
+            "关系聚合谓词 \"{rel_name}\" 字段 \"{field}\" 是对象字段（U2/D2：text2query 档功能收缩）"
+        )),
+        ("object", true) if profile == Profile::Text2Query => Err(format!(
+            "关系聚合谓词 \"{rel_name}\" 字段 \"{field}\" 是对象点号路径（U3/D2：text2query 档功能收缩）"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// 聚合字段（`$of`）校验（子 schema）：必须标量 —— 关系 / 数组 / 对象 / 点号路径 /
+/// schema 外一律 Err。与档位无关（聚合字段不是过滤条件，数组/对象做 `$sum`/`$avg`
+/// 既无 Mongo 侧稳定语义、也无法映射为 SQL 标量列）。
 fn validate_scalar_field(rel_schema: &Schema, rel_name: &str, field: &str) -> Result<(), String> {
     if rel_schema.relations.contains_key(field) {
         return Err(format!(

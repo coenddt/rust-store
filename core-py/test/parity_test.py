@@ -91,6 +91,9 @@ def make_registry(fx):
     reg = Registry()
     for s in fx.get("schemas") or []:
         reg.register(s)
+    # 档位：缺省 standard；用例可声明 `"profile": "text2query"` 覆盖（双门禁分离）
+    if fx.get("profile"):
+        reg.set_profile(fx["profile"])
     for ref, fn in FNS.items():
         reg.set_fn(ref, fn)
     return reg

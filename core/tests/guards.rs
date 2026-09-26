@@ -1,8 +1,9 @@
 //! 扩展守卫测试：timestamps 值校验 + 条件形状（U1~U4）
 //!
 //! ① schema 可声明秒级时间戳（`timestamps: 's'`），非法值注册即报错；
-//! ② 数组/对象字段过滤（U1/U2）在两档统一显式报错；对象点号路径过滤/排序（U3/U4）
-//!    standard 档放行（JSON 列落地）、text2query 档显式 Err（双门禁分离 §4.1 #4）。
+//! ② 数组/对象字段过滤（U1/U2）与对象点号路径过滤/排序（U3/U4）standard 档放行
+//!    （JSON 列落地）、text2query 档显式 Err（双门禁分离 §4.1 #4）；
+//! ③ 关系聚合谓词的子级 `filter` 同受同一门禁约束（§4.1 #4 → 8c-1）。
 
 use serde_json::{json, Map, Value};
 
@@ -303,6 +304,10 @@ fn shape_registry() -> Registry {
             "name":      { "type": "string" },
             "courseId":  { "type": "string" },
             "tags":      { "type": "array" },
+            "meta":      { "type": "object", "fields": {
+                "level": { "type": "string" },
+                "seo":   { "type": "object", "fields": { "title": { "type": "string" } } }
+            } }
         },
         "relations": {},
     }))
@@ -479,6 +484,62 @@ fn u1_error_is_identical_across_plan_paths() {
         .expect_err("plan_federated 应报错");
     assert_eq!(a, b, "plan_query 与 query_with_count 文案须一致");
     assert_eq!(a, c, "plan_query 与 federated 文案须一致");
+}
+
+// ─── 关系聚合谓词子级 filter 的按档分流（§4.1 #4 → 8c-1） ────
+
+const REL_PRED_GQL: &str = "Course($condition:@c0){ _id }";
+
+/// 关系聚合谓词参数：`lessons` 关系 + 子级 `$filter` + `$count`
+fn rel_pred(filter: Value) -> Map<String, Value> {
+    params_of(json!({ "c0": { "lessons": { "$filter": filter, "$count": { "$gt": 1 } } } }))
+}
+
+#[test]
+fn rel_pred_filter_shape_allowed_in_standard() {
+    // 双门禁分离（§4.1 #4 → 8c-1）：standard 档关系聚合谓词的子级 filter 放行
+    // 数组字段整值（U1）/ 对象字段整值（U2）/ 对象点号路径（U3）
+    for filter in [
+        json!({ "tags": "rust" }),
+        json!({ "meta": { "level": "beginner" } }),
+        json!({ "meta.seo.title": "看Rust" }),
+    ] {
+        plan_query(REL_PRED_GQL, &rel_pred(filter.clone()), &shape_registry(), None)
+            .unwrap_or_else(|e| panic!("standard 档关系谓词 filter {filter} 应放行: {e}"));
+    }
+}
+
+#[test]
+fn rel_pred_filter_shape_rejected_in_text2query() {
+    // text2query 档：同一门禁收缩 → U1/U2/U3 一律显式 Err
+    for (filter, code) in [
+        (json!({ "tags": "rust" }), "U1"),
+        (json!({ "meta": { "level": "beginner" } }), "U2"),
+        (json!({ "meta.seo.title": "看Rust" }), "U3"),
+    ] {
+        let mut reg = shape_registry();
+        reg.set_profile(Profile::Text2Query);
+        let err = plan_query(REL_PRED_GQL, &rel_pred(filter), &reg, Some(&Context::system()))
+            .expect_err("text2query 档关系谓词 filter 必须显式报错");
+        assert!(err.contains(code), "应报 {code}：{err}");
+    }
+}
+
+#[test]
+fn rel_pred_filter_array_index_path_rejected_in_both_profiles() {
+    // 数组字段索引路径（`tags.0`）：各后端索引语义不一致 → 两档一律 Err
+    for profile in [Profile::Standard, Profile::Text2Query] {
+        let mut reg = shape_registry();
+        reg.set_profile(profile);
+        let err = plan_query(
+            REL_PRED_GQL,
+            &rel_pred(json!({ "tags.0": "rust" })),
+            &reg,
+            Some(&Context::system()),
+        )
+        .expect_err("数组索引路径两档均须 Err");
+        assert!(err.contains("索引路径"), "应报索引路径：{err}");
+    }
 }
 
 // ─── 权限 RBAC（R0）：聚合 / 关系侧信道收口（F2/F3/F6/L1/L6/F5/X1） ─

@@ -777,6 +777,7 @@
     ],
     "gql": "Product($condition:@c0){ name }",
     "params": { "c0": { "orders": { "$filter": { "tags": "x" }, "$count": { "$gt": 1 } } } },
+    "profile": "text2query",
     "context": null,
     "expect_error": true
   },
