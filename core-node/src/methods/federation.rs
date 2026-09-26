@@ -21,7 +21,7 @@ impl Registry {
     /// `null` = 单源 Mongo）。SQL 同源跨 namespace 仍下推（qualified JOIN），
     /// Mongo 跨 db 剥离为内存 join。
     ///
-    /// 返回 `{v, kind:"federated", root, sources, join, postprocess, degraded}`；
+    /// 返回 `{v, kind:"federated", root, sources, join, postprocess, degraded, maxRowsPerSource}`；
     /// 单源（无跨源关系）时 `sources` 仅根单元、`join.edges` 为空。
     #[napi]
     pub fn plan_federated(

@@ -46,7 +46,7 @@ export declare class Registry {
    * `null` = 单源 Mongo）。SQL 同源跨 namespace 仍下推（qualified JOIN），
    * Mongo 跨 db 剥离为内存 join。
    *
-   * 返回 `{v, kind:"federated", root, sources, join, postprocess, degraded}`；
+   * 返回 `{v, kind:"federated", root, sources, join, postprocess, degraded, maxRowsPerSource}`；
    * 单源（无跨源关系）时 `sources` 仅根单元、`join.edges` 为空。
    */
   planFederated(gql: string, params: any, ctx?: any | undefined | null, dsConfig?: any | undefined | null): any
@@ -136,4 +136,11 @@ export declare class Registry {
   setRequireContext(require: boolean): void
   /** 「上下文强制」开关当前值 */
   requireContext(): boolean
+  /**
+   * 设置查询档位：`"standard"`（默认，功能最大化 + 跨 DB 对齐）/
+   * `"text2query"`（功能收缩 + 硬限制）。未知档位抛错（禁静默回落）。
+   */
+  setProfile(profile: string): void
+  /** 当前查询档位字符串（`"standard"` / `"text2query"`） */
+  profile(): string
 }

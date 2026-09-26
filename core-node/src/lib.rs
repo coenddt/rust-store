@@ -26,7 +26,7 @@ use napi::Result;
 use napi_derive::napi;
 use serde_json::{Map, Value};
 
-use rust_store_core::schema::Registry as CoreRegistry;
+use rust_store_core::schema::{Profile, Registry as CoreRegistry};
 
 use crate::fns::SyncFnBridge;
 
@@ -108,6 +108,21 @@ impl Registry {
     #[napi]
     pub fn require_context(&self) -> bool {
         self.core.require_context()
+    }
+
+    /// 设置查询档位：`"standard"`（默认，功能最大化 + 跨 DB 对齐）/
+    /// `"text2query"`（功能收缩 + 硬限制）。未知档位抛错（禁静默回落）。
+    #[napi]
+    pub fn set_profile(&mut self, profile: String) -> Result<()> {
+        let p = Profile::from_str_or_err(&profile).map_err(napi::Error::from_reason)?;
+        self.core.set_profile(p);
+        Ok(())
+    }
+
+    /// 当前查询档位字符串（`"standard"` / `"text2query"`）
+    #[napi]
+    pub fn profile(&self) -> String {
+        self.core.profile().as_str().to_string()
     }
 }
 

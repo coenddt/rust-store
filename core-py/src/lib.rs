@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use pyo3::prelude::*;
 
-use rust_store_core::schema::Registry as CoreRegistry;
+use rust_store_core::schema::{Profile, Registry as CoreRegistry};
 
 use crate::convert::{err, py_to_json};
 
@@ -80,6 +80,20 @@ impl Registry {
     /// 「上下文强制」开关当前值
     fn require_context(&self) -> bool {
         self.core.require_context()
+    }
+
+    /// 设置查询档位：`'standard'`（默认，功能最大化 + 跨 DB 对齐）/
+    /// `'text2query'`（功能收缩 + 硬限制）。未知档位抛 `ValueError`（禁静默回落）。
+    fn set_profile(&mut self, profile: String) -> PyResult<()> {
+        let p = Profile::from_str_or_err(&profile)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        self.core.set_profile(p);
+        Ok(())
+    }
+
+    /// 当前查询档位字符串（`'standard'` / `'text2query'`）
+    fn profile(&self) -> String {
+        self.core.profile().as_str().to_string()
     }
 }
 
