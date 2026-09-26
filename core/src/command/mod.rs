@@ -95,7 +95,9 @@ pub fn ensure_context(registry: &Registry, ctx: Option<&Context>) -> Result<(), 
     if registry.require_context() && ctx.is_none() {
         return Err(ERR_NO_CONTEXT.to_string());
     }
-    Ok(())
+    // 档位叠加（正交但叠加）：text2query 档等效强制携带用户上下文（见 [`ensure_profile_ctx`]）。
+    // 挂在同一处 → 所有已挂 `ensure_context` 的入口（读/写/联邦）自动获得档位强制，零遗漏。
+    ensure_profile_ctx(registry, ctx)
 }
 
 /// 档位拒绝哨兵：text2query 档命中硬限制/收缩项时的稳定前缀。

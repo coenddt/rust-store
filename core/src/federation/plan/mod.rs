@@ -20,12 +20,13 @@ use serde_json::{json, Map, Value};
 
 use crate::command::{
     build_plan, check_readable_relations, ensure_context, plan_query_ast_mut, ERR_PERMISSION,
+    T2Q_MAX_FEDERATION_ROWS,
 };
 use crate::computes::merge_depends_into_ast;
 use crate::datasource::DataSourceConfig;
 use crate::permission::{can_read_schema, merge_owner_condition, Context};
 use crate::pipeline::{flatten_object_fields, parse_gql, Ast};
-use crate::schema::{Registry, Schema};
+use crate::schema::{Profile, Registry, Schema};
 
 use route::{detect_cross_source_sort, walk};
 
@@ -90,6 +91,13 @@ pub fn plan_federated(
     ds_config: &Value,
 ) -> Result<Value, String> {
     let ds_cfg = DataSourceConfig::from_json(ds_config)?;
+    // 档位分流：联邦单源取数上限（text2query 更严）。随 plan 下传，由 `merge_federated`
+    // 读取执行——Host 无需感知档位，单点定义。
+    let max_rows_per_source = if registry.profile() == Profile::Text2Query {
+        T2Q_MAX_FEDERATION_ROWS
+    } else {
+        super::MAX_FEDERATION_ROWS
+    };
     let mut params = params.clone();
     let mut ast = parse_gql(gql)?;
     ensure_context(registry, ctx)?;
@@ -205,6 +213,7 @@ pub fn plan_federated(
         "join": { "type": "hash", "edges": join_edges },
         "postprocess": root_plan.postprocess.clone().unwrap_or(Value::Null),
         "degraded": degraded,
+        "maxRowsPerSource": max_rows_per_source,
     }))
 }
 

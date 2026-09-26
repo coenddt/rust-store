@@ -4,16 +4,16 @@ use std::collections::HashSet;
 
 use serde_json::{json, Map, Value};
 
-use crate::command::ERR_PERMISSION;
+use crate::command::{ERR_PERMISSION, ERR_TEXT2QUERY, T2Q_MAX_DEPTH};
 use crate::permission::{
     can_read_schema, get_readable_computes, is_field_readable, is_relation_readable,
     merge_owner_condition, Context,
 };
-use crate::schema::{Registry, RelationDef, Schema};
+use crate::schema::{Profile, Registry, RelationDef, Schema};
 use crate::types::{validate_condition, validate_condition_shape, validate_sort_shape};
 
 use super::ast::RelAst;
-use super::util::{append_order, is_nullish, non_nullish, param};
+use super::util::{append_order, clamp_t2q_limit, is_nullish, non_nullish, param};
 use super::{MAX_DEPTH, MAX_PAGINATED_DEPTH};
 
 /// 外键匹配表达式：数组字段用 $in，否则 $eq
@@ -158,22 +158,31 @@ pub fn build_lookup(
     let condition = param(params, rel_ast.params.get("condition")).cloned();
     let sort = param(params, rel_ast.params.get("sort")).cloned();
     let skip_val = param(params, rel_ast.params.get("skip")).cloned();
-    let limit_val = param(params, rel_ast.params.get("limit")).cloned();
+    // 档位分流：text2query 档关系级取数封顶（仅夹上限，不强加；见 `clamp_t2q_limit`）
+    let limit_val = clamp_t2q_limit(registry, param(params, rel_ast.params.get("limit")));
 
-    // ── 递归保护（分两套深度限制） ──
+    // ── 递归保护（分两套深度限制；阈值按档：text2query 更严） ──
     let has_paginated = !is_nullish(skip_val.as_ref()) || !is_nullish(limit_val.as_ref());
     let next_paginated = if has_paginated {
         paginated + 1
     } else {
         paginated
     };
-    if depth >= MAX_DEPTH || (has_paginated && paginated >= MAX_PAGINATED_DEPTH) {
-        // 返回空 $lookup（只做外键匹配，不继续嵌套），pipeline 不崩溃
-        return Ok(build_empty_lookup(
-            rel_name,
-            rel_def,
-            rel_schema,
-            source_schema,
+    let max_depth = if registry.profile() == Profile::Text2Query {
+        T2Q_MAX_DEPTH
+    } else {
+        MAX_DEPTH
+    };
+    if depth >= max_depth || (has_paginated && paginated >= MAX_PAGINATED_DEPTH) {
+        // 超限**显式报错**（两档一致，不再静默降级为空 `$lookup` 残缺返回）——
+        // 依据「错误提示准确性 / 禁静默失守」：残缺数据不得粉饰成正常结果。
+        if registry.profile() == Profile::Text2Query {
+            return Err(format!(
+                "{ERR_TEXT2QUERY}text2query 档关系嵌套超限（深度 {depth} ≥ {T2Q_MAX_DEPTH} / 分页深度 {paginated} ≥ {MAX_PAGINATED_DEPTH}）"
+            ));
+        }
+        return Err(format!(
+            "关系嵌套超限（深度 {depth} ≥ {MAX_DEPTH} / 分页深度 {paginated} ≥ {MAX_PAGINATED_DEPTH}）——拒绝静默降级"
         ));
     }
 

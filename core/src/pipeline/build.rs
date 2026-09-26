@@ -12,7 +12,7 @@ use super::ast::{Ast, RelAst};
 use super::group;
 use super::lookup::{build_agg_stages, build_lookup};
 use super::relation_filter;
-use super::util::{append_order, non_nullish, param};
+use super::util::{append_order, force_t2q_limit, non_nullish, param};
 
 /// 归一化 AST：将 type=object 的花括号子字段展平为点号字段（原地修改）
 pub fn flatten_object_fields(ast: &mut Ast, schema: &Schema) {
@@ -90,7 +90,9 @@ pub fn build_pipeline(
     let root_having = param(params, ast.params.get("having")).cloned();
     let root_sort = param(params, ast.params.get("sort")).cloned();
     let root_skip = param(params, ast.params.get("skip")).cloned();
-    let root_limit = param(params, ast.params.get("limit")).cloned();
+    // 档位分流：text2query 档根级取数封顶（省略 $limit 即视为上限 T2Q_MAX_ROWS），
+    // standard 档原样（不封顶）。
+    let root_limit = force_t2q_limit(registry, param(params, ast.params.get("limit")));
 
     // U1~U4（D2）：数组/对象字段过滤、对象点号路径过滤/排序 —— 所有后端（含 Mongo）
     // 规划期统一显式报错，绝不静默（判定依据 = 根 schema）。

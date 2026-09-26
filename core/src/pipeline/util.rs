@@ -2,6 +2,9 @@
 
 use serde_json::{json, Map, Value};
 
+use crate::command::T2Q_MAX_ROWS;
+use crate::schema::{Profile, Registry};
+
 /// 从 params 中按 `@ref` 取值；ref 为空/缺席返回 None
 pub(crate) fn param<'a>(params: &'a Map<String, Value>, r: Option<&String>) -> Option<&'a Value> {
     let r = r?;
@@ -52,6 +55,32 @@ pub(crate) fn is_nullish(v: Option<&Value>) -> bool {
 /// 由 `Option` 携带值，前提不再靠人工维护。
 pub(crate) fn non_nullish(v: Option<&Value>) -> Option<&Value> {
     v.filter(|x| !x.is_null())
+}
+
+/// text2query 档行数封顶（**省略即视为上限**；`standard` 档原样返回）。
+///
+/// 用于**根级取数**（最终结果规模）：AI 问数不写 `$limit` 时不得全表拉取。
+pub(crate) fn force_t2q_limit(registry: &Registry, limit: Option<&Value>) -> Option<Value> {
+    if registry.profile() != Profile::Text2Query {
+        return limit.cloned();
+    }
+    let l = limit.and_then(|v| v.as_f64()).unwrap_or(T2Q_MAX_ROWS);
+    Some(Value::from(l.min(T2Q_MAX_ROWS) as i64))
+}
+
+/// text2query 档行数封顶（**仅夹上限，不强加**；`standard` 档原样返回）。
+///
+/// 用于**关系级取数**：用户未显式给 `$limit` 时保持「该父行全部子行」语义，
+/// 避免改变分页深度计数（`has_paginated`）判定。
+pub(crate) fn clamp_t2q_limit(registry: &Registry, limit: Option<&Value>) -> Option<Value> {
+    let v = limit?;
+    if registry.profile() != Profile::Text2Query {
+        return Some(v.clone());
+    }
+    match v.as_f64() {
+        Some(l) => Some(Value::from(l.min(T2Q_MAX_ROWS) as i64)),
+        None => Some(v.clone()),
+    }
 }
 
 /// 按序追加 $sort/$skip/$limit

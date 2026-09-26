@@ -70,17 +70,25 @@ pub fn merge_federated(plan: &Value, results: &[Value]) -> Result<Value, String>
         ));
     }
 
+    // 单源行数上限按 plan 下传（档位分流：text2query 更严，见 `plan_federated`）；
+    // 缺省回落 standard 值，兼容历史 plan / 手写 plan。
+    let cap = plan
+        .get("maxRowsPerSource")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(MAX_FEDERATION_ROWS);
+
     let mut rows_by_unit: Vec<Vec<Value>> = Vec::with_capacity(results.len());
     for (i, r) in results.iter().enumerate() {
         let rows = r
             .as_array()
             .ok_or_else(|| format!("第 {} 个取数单元的结果必须是数组", i))?;
-        if rows.len() > MAX_FEDERATION_ROWS {
+        if rows.len() > cap {
             return Err(format!(
                 "第 {} 个取数单元返回 {} 行，超过联邦内存 join 上限 {}（拒绝静默全表拉取）",
                 i,
                 rows.len(),
-                MAX_FEDERATION_ROWS
+                cap
             ));
         }
         rows_by_unit.push(rows.clone());
