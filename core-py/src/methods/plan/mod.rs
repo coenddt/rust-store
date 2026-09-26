@@ -6,6 +6,7 @@ use pyo3::prelude::*;
 use serde_json::{json, Map, Value};
 
 use rust_store_core::command::apply_route_override as core_apply_route_override;
+use rust_store_core::command::ensure_route_override_allowed;
 use rust_store_core::command::{
     plan_count as core_plan_count, plan_exists as core_plan_exists, plan_query as core_plan_query,
     plan_query_one as core_plan_query_one, plan_query_with_count as core_plan_query_with_count,
@@ -21,13 +22,20 @@ use crate::Registry;
 
 mod write;
 
-/// 多租户路由 override（§6）：`route_override` 键出现才替换计划内命令体的
-/// `source` / `namespace`（见 core `apply_route_override`）
-pub(super) fn with_route_override(mut plan: Value, route_override: Option<&Value>) -> Value {
+/// 多租户路由 override（§6）：先做**受信来源门禁**（text2query 档一律拒绝，
+/// 判决单点在 core `ensure_route_override_allowed`），`route_override` 键出现才替换
+/// 计划内命令体的 `source` / `namespace`（见 core `apply_route_override`）。
+pub(super) fn with_route_override(
+    mut plan: Value,
+    route_override: Option<&Value>,
+    registry: &rust_store_core::schema::Registry,
+) -> Result<Value, String> {
+    let present = route_override.map(|v| !v.is_null()).unwrap_or(false);
+    ensure_route_override_allowed(registry, present)?;
     if let Some(ov) = route_override.filter(|v| !v.is_null()) {
         core_apply_route_override(&mut plan, ov);
     }
-    plan
+    Ok(plan)
 }
 
 #[pymethods]
@@ -87,7 +95,7 @@ impl Registry {
         let plan = core_plan_query(&gql, &params, &self.core, context.as_ref())
             .map(|p| p.to_value())
             .map_err(err)?;
-        to_py(py, with_route_override(plan, ro.as_ref()))
+        to_py(py, with_route_override(plan, ro.as_ref(), &self.core).map_err(err)?)
     }
 
     /// queryOne 计划：未显式 `$limit` 时强制下推 `$limit(1)`
@@ -109,7 +117,7 @@ impl Registry {
         let plan = core_plan_query_one(&gql, &params, &self.core, context.as_ref())
             .map(|p| p.to_value())
             .map_err(err)?;
-        to_py(py, with_route_override(plan, ro.as_ref()))
+        to_py(py, with_route_override(plan, ro.as_ref(), &self.core).map_err(err)?)
     }
 
     /// 列表 + total；`total` 由 Host 执行 `countCommand` 后回喂，用于算 `hasMore`
@@ -137,7 +145,7 @@ impl Registry {
             "hasMore".to_string(),
             json!(plan.has_more(total.unwrap_or(0.0))),
         );
-        to_py(py, with_route_override(Value::Object(out), ro.as_ref()))
+        to_py(py, with_route_override(Value::Object(out), ro.as_ref(), &self.core).map_err(err)?)
     }
 
     #[pyo3(signature = (gql, params=None))]
@@ -194,7 +202,7 @@ impl Registry {
             _ => None,
         };
         let out = core_plan_exists(&model, &self.core, &condition).map_err(err)?;
-        to_py(py, with_route_override(out, ro.as_ref()))
+        to_py(py, with_route_override(out, ro.as_ref(), &self.core).map_err(err)?)
     }
 
     #[pyo3(signature = (model, filter=None, ctx=None, route_override=None))]
@@ -217,7 +225,7 @@ impl Registry {
         };
         let out =
             core_plan_count(&model, &self.core, filter.as_ref(), context.as_ref()).map_err(err)?;
-        to_py(py, with_route_override(out, ro.as_ref()))
+        to_py(py, with_route_override(out, ro.as_ref(), &self.core).map_err(err)?)
     }
 
     #[pyo3(signature = (sort=None))]

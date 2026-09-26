@@ -60,7 +60,7 @@ impl Registry {
             Some(&bridge),
         )
         .map_err(err)?;
-        Ok(with_route_override(plan, &route_override))
+        with_route_override(plan, &route_override, &self.core)
     }
 
     /// 批量插入命令；`newIds` 按需消费（仅无 `_id` 的文档取用）
@@ -90,7 +90,7 @@ impl Registry {
             Some(&bridge),
         )
         .map_err(err)?;
-        Ok(with_route_override(plan, &route_override))
+        with_route_override(plan, &route_override, &self.core)
     }
 
     /// 更新一条（findOneAndUpdate + returnDocument AFTER）。
@@ -125,7 +125,7 @@ impl Registry {
             probe_of(probe_found, probe_doc.as_ref()),
         )
         .map_err(err)?;
-        Ok(with_route_override(plan, &route_override))
+        with_route_override(plan, &route_override, &self.core)
     }
 
     /// 批量更新（guest / 无写授权直接拒绝，不走 creator 探针）
@@ -143,7 +143,7 @@ impl Registry {
         let plan =
             core_plan_update_many(&model, &self.core, context.as_ref(), &condition, &data, now)
                 .map_err(err)?;
-        Ok(with_route_override(plan, &route_override))
+        with_route_override(plan, &route_override, &self.core)
     }
 
     /// 删除计划：归档表存在时返回 findCommand（Host 取源文档后调 planArchiveDocs）+
@@ -167,7 +167,7 @@ impl Registry {
             probe_of(probe_found, probe_doc.as_ref()),
         )
         .map_err(err)?;
-        Ok(with_route_override(plan, &route_override))
+        with_route_override(plan, &route_override, &self.core)
     }
 
     /// 归档文档命令：源文档补 `deletedAt` 后批量写入 `<collection>_deleted`
@@ -180,7 +180,7 @@ impl Registry {
         route_override: Option<Value>,
     ) -> Result<Value> {
         let plan = core_plan_archive_docs(&model, &self.core, &docs, now).map_err(err)?;
-        Ok(with_route_override(plan, &route_override))
+        with_route_override(plan, &route_override, &self.core)
     }
 
     /// 显式条件 upsert；`newId` 仅在需生成 `_id` 时被使用
@@ -211,7 +211,7 @@ impl Registry {
             &new_id,
         )
         .map_err(err)?;
-        Ok(with_route_override(plan, &route_override))
+        with_route_override(plan, &route_override, &self.core)
     }
 
     /// mutation 规划：展开为有序步骤序列 `{steps: [{model, command}]}`，
@@ -229,7 +229,7 @@ impl Registry {
         let context = ctx.as_ref().and_then(context_from_value);
         let plan = core_plan_mutation(&model, &self.core, context.as_ref(), &data, now, &new_ids)
             .map_err(err)?;
-        Ok(with_route_override(plan, &route_override))
+        with_route_override(plan, &route_override, &self.core)
     }
 
     /// 写路径结果回喂：对 findOneAndUpdate 返回文档补默认值 / 同步计算列

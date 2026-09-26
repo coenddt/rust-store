@@ -7,6 +7,7 @@ use napi_derive::napi;
 use serde_json::{json, Value};
 
 use rust_store_core::command::apply_route_override as core_apply_route_override;
+use rust_store_core::command::ensure_route_override_allowed;
 use rust_store_core::command::{
     plan_count as core_plan_count, plan_exists as core_plan_exists, plan_query as core_plan_query,
     plan_query_one as core_plan_query_one, plan_query_with_count as core_plan_query_with_count,
@@ -23,13 +24,20 @@ use crate::Registry;
 
 mod write;
 
-/// 多租户路由 override（§6）：`route_override` 键出现才替换计划内命令体的
-/// `source` / `namespace`（见 core `apply_route_override`）
-pub(super) fn with_route_override(mut plan: Value, route_override: &Option<Value>) -> Value {
+/// 多租户路由 override（§6）：先做**受信来源门禁**（text2query 档一律拒绝，
+/// 判决单点在 core `ensure_route_override_allowed`），`route_override` 键出现才替换
+/// 计划内命令体的 `source` / `namespace`（见 core `apply_route_override`）。
+pub(super) fn with_route_override(
+    mut plan: Value,
+    route_override: &Option<Value>,
+    registry: &rust_store_core::schema::Registry,
+) -> Result<Value> {
+    let present = route_override.as_ref().map(|v| !v.is_null()).unwrap_or(false);
+    ensure_route_override_allowed(registry, present).map_err(err)?;
     if let Some(ov) = route_override.as_ref().filter(|v| !v.is_null()) {
         core_apply_route_override(&mut plan, ov);
     }
-    plan
+    Ok(plan)
 }
 
 #[napi]
@@ -75,7 +83,7 @@ impl Registry {
         let plan = core_plan_query(&gql, &params, &self.core, context.as_ref())
             .map(|p| p.to_value())
             .map_err(err)?;
-        Ok(with_route_override(plan, &route_override))
+        with_route_override(plan, &route_override, &self.core)
     }
 
     /// queryOne 计划：未显式 `$limit` 时强制下推 `$limit(1)`
@@ -92,7 +100,7 @@ impl Registry {
         let plan = core_plan_query_one(&gql, &params, &self.core, context.as_ref())
             .map(|p| p.to_value())
             .map_err(err)?;
-        Ok(with_route_override(plan, &route_override))
+        with_route_override(plan, &route_override, &self.core)
     }
 
     /// 列表 + total；`total` 由 Host 执行 `countCommand` 后回喂，用于算 `hasMore`
@@ -115,7 +123,7 @@ impl Registry {
             "hasMore".to_string(),
             json!(plan.has_more(total.unwrap_or(0.0))),
         );
-        Ok(with_route_override(Value::Object(out), &route_override))
+        with_route_override(Value::Object(out), &route_override, &self.core)
     }
 
     #[napi]
@@ -147,7 +155,7 @@ impl Registry {
         route_override: Option<Value>,
     ) -> Result<Value> {
         let plan = core_plan_exists(&model, &self.core, &condition).map_err(err)?;
-        Ok(with_route_override(plan, &route_override))
+        with_route_override(plan, &route_override, &self.core)
     }
 
     #[napi]
@@ -161,7 +169,7 @@ impl Registry {
         let filter = filter.as_ref().filter(|v| !v.is_null());
         let context = ctx.as_ref().and_then(context_from_value);
         let plan = core_plan_count(&model, &self.core, filter, context.as_ref()).map_err(err)?;
-        Ok(with_route_override(plan, &route_override))
+        with_route_override(plan, &route_override, &self.core)
     }
 
     #[napi]

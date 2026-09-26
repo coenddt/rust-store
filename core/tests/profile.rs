@@ -4,8 +4,8 @@
 //! 各门禁点按档分流（步骤 3 用例在下方逐项断言）。
 
 use rust_store_core::command::{
-    ensure_profile_ctx, forbid_t2q, plan_query, ERR_TEXT2QUERY, T2Q_MAX_DEPTH,
-    T2Q_MAX_FEDERATION_ROWS, T2Q_MAX_ROWS,
+    ensure_profile_ctx, ensure_route_override_allowed, forbid_t2q, plan_query, ERR_TEXT2QUERY,
+    T2Q_MAX_DEPTH, T2Q_MAX_FEDERATION_ROWS, T2Q_MAX_ROWS,
 };
 use rust_store_core::federation::plan_federated;
 use rust_store_core::permission::Context;
@@ -335,4 +335,19 @@ fn federation_row_cap_follows_profile() {
         json!(100_000),
         "standard 档联邦单源上限应保持 MAX_FEDERATION_ROWS"
     );
+}
+
+#[test]
+fn route_override_gate_follows_profile() {
+    let mut reg = post_registry();
+    // standard 档：携带与否均放行（route_override 为受信服务端参数，可用）
+    assert!(ensure_route_override_allowed(&reg, true).is_ok());
+    assert!(ensure_route_override_allowed(&reg, false).is_ok());
+
+    reg.set_profile(Profile::Text2Query);
+    // text2query 档：不携带放行；携带即拒（受信来源门禁，CWE-639）
+    assert!(ensure_route_override_allowed(&reg, false).is_ok());
+    let err = ensure_route_override_allowed(&reg, true).unwrap_err();
+    assert!(err.starts_with(ERR_TEXT2QUERY), "应为档位哨兵前缀: {err}");
+    assert!(err.contains("route_override"), "文案应指名 route_override: {err}");
 }

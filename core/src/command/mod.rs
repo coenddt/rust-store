@@ -138,6 +138,21 @@ pub fn forbid_t2q(registry: &Registry, feature: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// text2query 档禁止携带 `route_override`（受信来源门禁）。
+///
+/// `route_override`（`{source, namespace}`）是多租户路由覆盖的**受信服务端参数**，
+/// 禁止透传用户输入 / AI 生成（否则可被用于跨源路由，CWE-639）。standard 档维持
+/// 受信可用；text2query 档只要携带即拒。判决逻辑单点在此，绑定层（core-py/core-node）
+/// 在 `with_route_override` 唯一注入点调用，覆盖读 / 写全部 plan 入口。
+pub fn ensure_route_override_allowed(registry: &Registry, present: bool) -> Result<(), String> {
+    if present && registry.profile() == Profile::Text2Query {
+        return Err(format!(
+            "{ERR_TEXT2QUERY}text2query 档禁用 route_override（受信参数，禁 AI 侧指定）"
+        ));
+    }
+    Ok(())
+}
+
 /// 两阶段查询中由 Host 替换的阶段一 `_id` 顺序数组
 pub const PHASE1_IDS: &str = "{{phase1.ids}}";
 

@@ -71,7 +71,7 @@ impl Registry {
             Some(&bridge),
         )
         .map_err(err)?;
-        to_py(py, with_route_override(out, ro.as_ref()))
+        to_py(py, with_route_override(out, ro.as_ref(), &self.core).map_err(err)?)
     }
 
     /// 批量插入命令；`new_ids` 按需消费（仅无 `_id` 的文档取用）
@@ -116,7 +116,7 @@ impl Registry {
             Some(&bridge),
         )
         .map_err(err)?;
-        to_py(py, with_route_override(out, ro.as_ref()))
+        to_py(py, with_route_override(out, ro.as_ref(), &self.core).map_err(err)?)
     }
 
     /// 更新一条（findOneAndUpdate + returnDocument AFTER）。
@@ -172,7 +172,7 @@ impl Registry {
             probe_of(probe_found, probe_doc.as_ref()),
         )
         .map_err(err)?;
-        to_py(py, with_route_override(out, ro.as_ref()))
+        to_py(py, with_route_override(out, ro.as_ref(), &self.core).map_err(err)?)
     }
 
     /// 批量更新（guest / 无写授权直接拒绝，不走 creator 探针）
@@ -206,7 +206,7 @@ impl Registry {
         let out =
             core_plan_update_many(&model, &self.core, context.as_ref(), &condition, &data, now)
                 .map_err(err)?;
-        to_py(py, with_route_override(out, ro.as_ref()))
+        to_py(py, with_route_override(out, ro.as_ref(), &self.core).map_err(err)?)
     }
 
     /// 删除计划：归档表存在时返回 findCommand（Host 取源文档后调 planArchiveDocs）+
@@ -246,7 +246,7 @@ impl Registry {
             probe_of(probe_found, probe_doc.as_ref()),
         )
         .map_err(err)?;
-        to_py(py, with_route_override(out, ro.as_ref()))
+        to_py(py, with_route_override(out, ro.as_ref(), &self.core).map_err(err)?)
     }
 
     /// 归档文档命令：源文档补 `deletedAt` 后批量写入 `<collection>_deleted`
@@ -265,7 +265,7 @@ impl Registry {
             _ => None,
         };
         let out = core_plan_archive_docs(&model, &self.core, &docs, now).map_err(err)?;
-        to_py(py, with_route_override(out, ro.as_ref()))
+        to_py(py, with_route_override(out, ro.as_ref(), &self.core).map_err(err)?)
     }
 
     /// 显式条件 upsert；`new_id` 仅在需生成 `_id` 时被使用
@@ -313,7 +313,7 @@ impl Registry {
             new_id,
         )
         .map_err(err)?;
-        to_py(py, with_route_override(out, ro.as_ref()))
+        to_py(py, with_route_override(out, ro.as_ref(), &self.core).map_err(err)?)
     }
 
     /// mutation 规划：展开为有序步骤序列 `{steps: [{model, command}]}`，
@@ -350,7 +350,7 @@ impl Registry {
         let context = ctx_from(ctx)?;
         let out = core_plan_mutation(&model, &self.core, context.as_ref(), &data, now, &new_ids)
             .map_err(err)?;
-        to_py(py, with_route_override(out, ro.as_ref()))
+        to_py(py, with_route_override(out, ro.as_ref(), &self.core).map_err(err)?)
     }
 
     /// 写路径结果回喂：对 findOneAndUpdate 返回文档补默认值 / 同步计算列
