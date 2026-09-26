@@ -1,12 +1,13 @@
 [package]
 name = "rust-store-core"
-version = "2.1.0"
+version = "2.1.1"
 edition = "2021"
 description = "One data engine for MongoDB, MySQL, PostgreSQL and SQLite: a MongoDB-style GQL query language, permission checks, computed columns, command planning and SQL dialect translation. Pure logic, no IO."
-# license 供 crates.io 展示 SPDX 标识；license-file 让 MIT 原文随 .crate 一同分发
-# （MIT 要求副本携带许可声明）。两者同时给出时 cargo 会提示「只需其一」，此处为有意为之。
+# license 供 crates.io 展示 SPDX 标识；MIT 原文由同目录 LICENSE 随 .crate 一同分发
+# （cargo 默认打包包目录内文件；MIT 要求副本携带许可声明）。
+# 与 core-node/core-py 一致：各 crate 目录自带 LICENSE 副本，不再用 license-file 指包外文件
+# （license 与 license-file 同时给出会被 cargo 判为冗余并告警）。
 license = "MIT"
-license-file = "../LICENSE"
 repository = "https://github.com/coenddt/rust-store"
 homepage = "https://coenddt.github.io/rust-store/"
 documentation = "https://docs.rs/rust-store-core"
