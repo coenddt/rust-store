@@ -10,4 +10,4 @@ mod definition;
 mod registry;
 
 pub use definition::{map_of, ComputeDef, FieldDef, RelationDef, Schema};
-pub use registry::Registry;
+pub use registry::{Profile, Registry};

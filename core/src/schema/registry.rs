@@ -8,6 +8,39 @@ use crate::types::{is_truthy, str_list, AGG_OPS};
 
 use super::definition::{normalize_fields, ComputeDef, FieldDef, RelationDef, Schema};
 
+/// 查询档位：判决唯一在 core（照 [`Registry::require_context`] 既有范式）。
+///
+/// - [`Profile::Standard`]（默认）：标准调用 —— 跨方言对齐的公共能力集；
+///   DB 独有能力可用但须代码注释标注「不建议业务查询」（见执行文档 §4.5）。
+/// - [`Profile::Text2Query`]：AI 问数 —— 功能收缩 + 硬性限制（行数/深度/准入全收紧）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Profile {
+    /// 标准调用：跨方言对齐的公共能力集；DB 独有能力可用但须注释标注（不建议业务查询）
+    #[default]
+    Standard,
+    /// AI 问数：功能收缩 + 硬性限制
+    Text2Query,
+}
+
+impl Profile {
+    /// 档位字符串（Host / 绑定层单点取用）
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Profile::Standard => "standard",
+            Profile::Text2Query => "text2query",
+        }
+    }
+
+    /// 字符串 → 档位；未知值 **Err**（禁静默回落 `Standard`，见执行文档 §7）
+    pub fn from_str_or_err(s: &str) -> Result<Profile, String> {
+        match s {
+            "standard" => Ok(Profile::Standard),
+            "text2query" => Ok(Profile::Text2Query),
+            other => Err(format!("未知 profile: {other}（仅 standard / text2query）")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Registry {
     schemas: HashMap<String, Schema>,
@@ -16,6 +49,8 @@ pub struct Registry {
     /// 开启后所有 plan 入口对 `ctx: None` 显式报错（fail-secure，见 `permission` 模块文档）。
     /// 内部调用请传显式系统上下文（JSON `{"internal": true}` / `Context::system()`）。
     require_context: bool,
+    /// 查询档位（默认 [`Profile::Standard`]；text2query 由 AI 问数链路显式进入）。
+    profile: Profile,
 }
 
 impl Registry {
@@ -78,6 +113,19 @@ impl Registry {
     /// 「上下文强制」开关当前值
     pub fn require_context(&self) -> bool {
         self.require_context
+    }
+
+    /// 设置查询档位（`standard` / `text2query`）。
+    ///
+    /// 档位为**单值状态**（非栈）：由 Host 的 `text2query()` 上下文管理器负责
+    /// 进入时设档、退出时恢复（见 `py-store` / `nodejs-store` 门面）。判决一律在 core。
+    pub fn set_profile(&mut self, profile: Profile) {
+        self.profile = profile;
+    }
+
+    /// 当前查询档位
+    pub fn profile(&self) -> Profile {
+        self.profile
     }
 
     /// 按定位三元组精确获取 schema（命令路由的唯一定位入口）
