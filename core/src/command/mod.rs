@@ -54,7 +54,7 @@ mod query;
 mod write;
 
 use crate::permission::Context;
-use crate::schema::Registry;
+use crate::schema::{Profile, Registry};
 
 pub use cmd::{
     apply_route_override, cmd_aggregate, cmd_count_documents, cmd_delete_many, cmd_find,
@@ -94,6 +94,44 @@ pub const ERR_NO_CONTEXT: &str =
 pub fn ensure_context(registry: &Registry, ctx: Option<&Context>) -> Result<(), String> {
     if registry.require_context() && ctx.is_none() {
         return Err(ERR_NO_CONTEXT.to_string());
+    }
+    Ok(())
+}
+
+/// 档位拒绝哨兵：text2query 档命中硬限制/收缩项时的稳定前缀。
+///
+/// Host 按**前缀**映射为各自的 ProfileViolation（构造后剥离前缀），
+/// 不对中文文案做脆弱匹配（core 文案可自由调整）——与 `ERR_PERM_PREFIX` 同构。
+pub const ERR_TEXT2QUERY: &str = "ERR_TEXT2QUERY:";
+
+/// text2query 档硬限制（单点定义，Host 可读；取值**严于** standard）
+///
+/// - 单次取数行数：严于 [`MAX_PAGE_SIZE`]（5000）—— AI 问数交互式结果规模；
+/// - 关系嵌套深度：严于 `pipeline::MAX_DEPTH`（10）—— AI 生成的关系嵌套实用上限；
+/// - 联邦单源行数：严于 `federation::MAX_FEDERATION_ROWS`（100000）。
+pub const T2Q_MAX_ROWS: f64 = 1000.0;
+pub const T2Q_MAX_DEPTH: usize = 3;
+pub const T2Q_MAX_FEDERATION_ROWS: usize = 10_000;
+
+/// text2query 档强制上下文（叠加于 [`ensure_context`] 之上）。
+///
+/// `require_context` 与档位**正交但叠加**：text2query 档等效强制开启，
+/// 退出档位后恢复用户原设置（见 Host 的 `text2query()` 上下文管理器）。
+pub fn ensure_profile_ctx(registry: &Registry, ctx: Option<&Context>) -> Result<(), String> {
+    if registry.profile() == Profile::Text2Query && ctx.is_none() {
+        return Err(format!("{ERR_TEXT2QUERY}text2query 档必须携带用户上下文"));
+    }
+    Ok(())
+}
+
+/// text2query 档禁用某项能力（standard 档放行）。
+///
+/// 用于「DB 独有能力 / 直通 / 受限参数」类收缩项；standard 档不做任何拦截。
+pub fn forbid_t2q(registry: &Registry, feature: &str) -> Result<(), String> {
+    if registry.profile() == Profile::Text2Query {
+        return Err(format!(
+            "{ERR_TEXT2QUERY}text2query 档禁用 [{feature}]（功能收缩）"
+        ));
     }
     Ok(())
 }
