@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::dialect::filter::{build_filter, build_filter_raw, WhereClause};
 use crate::dialect::ir::{RowCol, RowShape, SqlStmt};
-use crate::dialect::{field_is_bool, scalar_column, Backend};
+use crate::dialect::{field_is_bool, scalar_column, Backend, ColumnRef};
 use crate::schema::Schema;
 
 use super::{col_fn, count_field_pattern, limit_offset_sql, q, tname};
@@ -275,6 +275,7 @@ pub(super) fn translate_group(
             always: true,
             // §9.7 布尔归一：按 `boolean` 字段分组时分组键 0/1 → bool（对齐 Mongo 的 `_id`）
             is_bool: field_is_bool(schema, &k.field),
+            is_json: false,
         });
     }
     for (i, (alias_name, expr)) in aggs.iter().enumerate() {
@@ -292,6 +293,7 @@ pub(super) fn translate_group(
             sub_shape: None,
             always: true,
             is_bool: false,
+            is_json: false,
         });
     }
     if cols_sql.is_empty() {
@@ -342,9 +344,11 @@ pub(super) fn translate_group(
     };
 
     // ── HAVING（`$group` 之后的 $match） ──
+    // HAVING 的列引用是完整 SQL 表达式（分组键列 / 聚合表达式）→ 包成 ColumnRef::Scalar
+    let expr_ref = |name: &str| -> Option<ColumnRef> { expr_of(name).map(ColumnRef::Scalar) };
     let having_sql = match having {
         Some(h) if !h.is_null() => {
-            let wh = build_filter_raw(h, backend, &expr_of, param_seq, Some(&mut *warnings))?;
+            let wh = build_filter_raw(h, backend, &expr_ref, param_seq, Some(&mut *warnings))?;
             if wh.text.is_empty() {
                 String::new()
             } else {

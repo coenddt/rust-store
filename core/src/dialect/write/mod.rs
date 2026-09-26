@@ -131,16 +131,47 @@ impl Binder {
 
 // ─── 字段/列白名单 ───────────────────────────────────────────
 
-/// 标量字段 → 列名（写侧薄包装；语义唯一出处见 [`super::scalar_column`]）
+/// 标量字段 → 列名（写侧薄包装；语义唯一出处见 [`super::scalar_column`]）。
+///
+/// 仅用于**必须标量**的场景（upsert 唯一键条件）；object/array 字段因落 JSON 列，
+/// 走 [`writable_col`]。
 fn scalar_col(schema: &Schema, field: &str) -> Option<String> {
     super::scalar_column(schema, field)
 }
 
-fn col_map(schema: &Schema) -> impl Fn(&str) -> Option<String> + '_ {
-    move |field: &str| scalar_col(schema, field)
+/// 可写列名（标量 / object / array 同表单列）：写目标不接受点号路径。
+///
+/// object/array 字段落 JSON 单列（见执行文档 §4.5），与标量一样可直接 `SET`/`INSERT`。
+/// 非点号字段一律可写（与 [`super::scalar_column`] 的宽松语义一致：未声明字段按裸列名处理）。
+fn writable_col(_schema: &Schema, field: &str) -> Option<String> {
+    if field.contains('.') {
+        return None;
+    }
+    Some(field.to_string())
 }
 
-/// 回读列：`_id`（物理主键列）恒首位 + 其余标量字段按字典序（确定性输出，供 parity）。
+/// 绑定值：object/array 字段 → JSON 文本字符串（跨后端落 JSON 列）；其余原样。
+///
+/// 跨方言对齐：MySQL `JSON` / PG `jsonb` / SQLite `TEXT` 均接受 JSON 文本参数；
+/// 空值（`null`）原样绑定为 SQL NULL（缺失 vs 显式 null 由 `__present` 哨兵区分）。
+pub(super) fn bind_value(schema: &Schema, col: &str, v: &Value) -> Value {
+    let is_json = matches!(
+        schema.fields.get(col).map(|f| f.field_type.as_str()),
+        Some("object") | Some("array")
+    );
+    if is_json && !v.is_null() {
+        Value::String(serde_json::to_string(v).unwrap_or_default())
+    } else {
+        v.clone()
+    }
+}
+
+fn col_map(schema: &Schema) -> impl Fn(&str) -> Option<super::ColumnRef> + '_ {
+    move |field: &str| super::field_column_ref(schema, field)
+}
+
+/// 回读列：`_id`（物理主键列）恒首位 + 其余字段（含 object/array JSON 列）按字典序
+/// （确定性输出，供 parity）。
 ///
 /// `_id` 不要求出现在 `schema.fields`（core 不自动补 `_id`），但物理表恒有该列，
 /// 且 `restore_rows` 依赖它做根分组，故强制补上。
@@ -148,12 +179,6 @@ fn returning_cols(schema: &Schema) -> Vec<String> {
     let mut cols: Vec<String> = schema
         .fields
         .keys()
-        .filter(|f| {
-            !matches!(
-                schema.fields.get(f.as_str()).map(|d| d.field_type.as_str()),
-                Some("object") | Some("array")
-            )
-        })
         .filter(|f| f.as_str() != "_id")
         .cloned()
         .collect();
@@ -165,13 +190,24 @@ fn returning_cols(schema: &Schema) -> Vec<String> {
     cols
 }
 
-/// 回读列 → RowShape（标量直接还原到 `[field]`；§9.7 布尔列标记归一）
+/// 回读列 → RowShape（标量直接还原到 `[field]`；object/array 列标记 JSON 解析；
+/// §9.7 布尔列标记归一）
 fn returning_shape(schema: &Schema, cols: &[String]) -> RowShape {
     RowShape {
         columns: cols
             .iter()
             .filter(|c| c.as_str() != "__present")
-            .map(|c| RowCol::scalar_bool(c, &[c.as_str()], field_is_bool(schema, c)))
+            .map(|c| {
+                let is_json = matches!(
+                    schema.fields.get(c.as_str()).map(|f| f.field_type.as_str()),
+                    Some("object") | Some("array")
+                );
+                if is_json {
+                    RowCol::json(c, &[c.as_str()])
+                } else {
+                    RowCol::scalar_bool(c, &[c.as_str()], field_is_bool(schema, c))
+                }
+            })
             .collect(),
         present_alias: Some("__present".to_string()),
     }

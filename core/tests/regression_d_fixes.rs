@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use rust_store_core::command::{plan_exists, plan_insert};
 use rust_store_core::dialect::filter::build_filter;
 use rust_store_core::dialect::select::translate_select;
-use rust_store_core::dialect::Backend;
+use rust_store_core::dialect::{Backend, ColumnRef};
 use rust_store_core::pipeline::parse_gql;
 use rust_store_core::schema::Registry;
 use rust_store_core::types::validate_condition;
@@ -69,7 +69,7 @@ fn d02_validate_condition_rejects_server_exec_ops() {
 fn d02_build_filter_errors_on_untranslatable_ops() {
     let col = |f: &str| {
         if f == "title" {
-            Some(f.to_string())
+            Some(ColumnRef::Scalar(f.to_string()))
         } else {
             None
         }
@@ -188,7 +188,7 @@ fn d03_insert_with_id_prefix_auto_generates_id() {
 fn d09_regex_options_case_insensitive_by_backend() {
     let col = |f: &str| {
         if f == "title" {
-            Some(f.to_string())
+            Some(ColumnRef::Scalar(f.to_string()))
         } else {
             None
         }
@@ -254,7 +254,7 @@ fn d09_regex_options_case_insensitive_by_backend() {
 fn d09_options_without_regex_is_not_silently_dropped() {
     let col = |f: &str| {
         if f == "title" {
-            Some(f.to_string())
+            Some(ColumnRef::Scalar(f.to_string()))
         } else {
             None
         }

@@ -12,7 +12,7 @@ use crate::dialect::filter::{
     build_filter, build_filter_with_relations, RelPredResolver, Warnings, WhereClause,
 };
 use crate::dialect::ir::{RowCol, RowShape, SqlStmt};
-use crate::dialect::{field_is_bool, Backend};
+use crate::dialect::{field_is_bool, Backend, ColumnRef};
 use crate::pipeline::REL_PRED_PREFIX;
 
 use super::group_agg::{self, GroupSpec};
@@ -325,25 +325,49 @@ pub(super) fn translate_aggregate(
                     }
                     // 排序键 → 有效列表达式（缺陷修复 M-10-1）：
                     // - 无点号标量字段 → `t.<col>`
+                    // - 对象点号路径（`meta.level`，U4）→ JSON 标量提取表达式
                     // - 关系点号路径（`rel.field`）且已存在同名 JOIN → `r{i}.<col>`
-                    // - 其余（未知字段 / object·array 字段 / 关系名本身 / 无对应 $lookup）
+                    // - 其余（未知字段 / object·array 整值 / 关系名本身 / 无对应 $lookup）
                     //   → **不生成 SQL**，告警 + 标记 unsupported 交由 Host 兜底排序。
+                    let json_expr = |col: &str, path: &[String]| -> String {
+                        let base = format!("t.{}", q(backend, col));
+                        let segs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
+                        backend.json_extract_scalar(&base, &segs)
+                    };
                     let resolved: Option<String> = match k.split_once('.') {
                         Some((head, rest)) => {
-                            joins.iter().position(|j| j.rel_name == head).and_then(|i| {
+                            if let Some(i) = joins.iter().position(|j| j.rel_name == head) {
                                 registry
                                     .get(&joins[i].model)
                                     .ok()
                                     .and_then(|rel| crate::dialect::scalar_column(rel, rest))
                                     .map(|c| format!("r{}.{}", i, q(backend, &c)))
-                            })
+                            } else {
+                                // 对象点号路径（U4）：standard 档 JSON 提取；整值 object 排序不支持
+                                match crate::dialect::field_column_ref(schema, k) {
+                                    Some(ColumnRef::JsonPath(col, path)) => {
+                                        Some(json_expr(&col, &path))
+                                    }
+                                    _ => None,
+                                }
+                            }
                         }
                         None => {
                             if schema.relations.iter().any(|(n, _)| n.as_str() == k) {
                                 // 关系名本身（排序关系数组）不是标量列 → 不下推
                                 None
                             } else {
-                                col_fn(schema)(k).map(|c| format!("t.{}", q(backend, &c)))
+                                match col_fn(schema)(k) {
+                                    Some(ColumnRef::Scalar(c)) => {
+                                        Some(format!("t.{}", q(backend, &c)))
+                                    }
+                                    // 整值 object/array 排序无意义 → 不下推
+                                    Some(ColumnRef::Json(_)) => None,
+                                    Some(ColumnRef::JsonPath(col, path)) => {
+                                        Some(json_expr(&col, &path))
+                                    }
+                                    None => None,
+                                }
                             }
                         }
                     };
@@ -485,14 +509,35 @@ pub(super) fn translate_aggregate(
         .cloned()
         .collect();
     for f in &root_selected {
-        if let Some(c) = col_fn(schema)(f) {
-            cols_sql.push(format!("t.{}", q(backend, &c)));
-            // §9.7 布尔归一：schema `boolean` 字段的列值 0/1 → JSON bool
-            columns.push(RowCol::scalar_bool(
-                &c,
-                &[f.as_str()],
-                field_is_bool(schema, f),
-            ));
+        match col_fn(schema)(f) {
+            // 标量列
+            Some(ColumnRef::Scalar(c)) => {
+                cols_sql.push(format!("t.{}", q(backend, &c)));
+                // §9.7 布尔归一：schema `boolean` 字段的列值 0/1 → JSON bool
+                columns.push(RowCol::scalar_bool(
+                    &c,
+                    &[f.as_str()],
+                    field_is_bool(schema, f),
+                ));
+            }
+            // object/array JSON 列：整列取出，还原时解析 JSON 文本
+            Some(ColumnRef::Json(c)) => {
+                cols_sql.push(format!("t.{}", q(backend, &c)));
+                columns.push(RowCol::json(&c, &[f.as_str()]));
+            }
+            // 对象点号路径投影：取该路径的标量值（还原为嵌套对象）
+            Some(ColumnRef::JsonPath(c, path)) => {
+                let base = format!("t.{}", q(backend, &c));
+                let segs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
+                let alias = f.replace('.', "_");
+                cols_sql.push(format!(
+                    "{} AS {}",
+                    backend.json_extract_scalar(&base, &segs),
+                    q(backend, &alias)
+                ));
+                columns.push(RowCol::scalar(&alias, &f.split('.').collect::<Vec<_>>()));
+            }
+            None => {}
         }
     }
     if cols_sql.is_empty() && !selected.is_empty() {
@@ -624,6 +669,7 @@ pub(super) fn translate_aggregate(
                 always: false,
                 // §9.7 布尔归一：关系表的 `boolean` 字段同样 0/1 → bool
                 is_bool: field_is_bool(rel_schema, &rf),
+                is_json: false,
             });
         }
     }

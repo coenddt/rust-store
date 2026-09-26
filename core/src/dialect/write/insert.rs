@@ -7,11 +7,11 @@ use crate::schema::Schema;
 use crate::dialect::ir::SqlStmt;
 use crate::dialect::Backend;
 
-use super::{q, tname, Binder};
+use super::{bind_value, q, tname, Binder};
 
 /// 单条 insert
 pub(super) fn build_insert(backend: Backend, schema: &Schema, doc: &Value) -> SqlStmt {
-    let mut cols = scalar_cols(schema, doc);
+    let mut cols = writable_cols(schema, doc);
     let present = present_value(schema, doc);
     cols.push("__present".to_string());
     if cols.len() == 1 {
@@ -41,7 +41,8 @@ pub(super) fn build_insert(backend: Backend, schema: &Schema, doc: &Value) -> Sq
             let v = if c == "__present" {
                 p
             } else {
-                doc.get(c).cloned().unwrap_or(Value::Null)
+                // object/array 字段 → JSON 文本；其余标量原样
+                bind_value(schema, c, &doc.get(c).cloned().unwrap_or(Value::Null))
             };
             binder.bind(v)
         })
@@ -61,7 +62,7 @@ pub(super) fn build_insert_many(
     docs: &[Value],
     upsert_by_id: bool,
 ) -> Result<Vec<SqlStmt>, String> {
-    let mut cols = scalar_cols_union(schema, docs);
+    let mut cols = writable_cols_union(schema, docs);
     cols.push("__present".to_string());
     if cols.len() == 1 {
         return Err("insertMany 无标量可写字段".to_string());
@@ -78,7 +79,7 @@ pub(super) fn build_insert_many(
                     let v = if c == "__present" {
                         p
                     } else {
-                        doc.get(c).cloned().unwrap_or(Value::Null)
+                        bind_value(schema, c, &doc.get(c).cloned().unwrap_or(Value::Null))
                     };
                     binder.bind(v)
                 })
@@ -100,21 +101,16 @@ pub(super) fn build_insert_many(
     Ok(vec![SqlStmt::write(text, binder.params)])
 }
 
-/// 该文档「显式存在的标量字段集合」→ `,field1,field2,`（缺失 vs null 三态哨兵值）。
-/// 集合 = doc 中根标量键（含 `_id`、自动注入的 createdBy/createdAt/updatedAt）；
-/// 显式 `null` 也计入（存在但为 null），缺失字段不计入。object/array 不入列，不列入。
+/// 该文档「显式存在的字段集合」→ `,field1,field2,`（缺失 vs null 三态哨兵值）。
+/// 集合 = doc 中已声明字段键（含 object/array JSON 列）+ `_id`（不论类型）；
+/// 显式 `null` 也计入（存在但为 null），未声明键与缺失字段不计入。
 fn present_value(schema: &Schema, doc: &Value) -> Value {
     let mut keys: Vec<String> = Vec::new();
     if let Some(m) = doc.as_object() {
         for (k, _) in m.iter() {
-            // `_id` 恒为标量列；其余仅当 schema 声明为标量（非 object/array）时入列
-            let is_scalar = k == "_id"
-                || schema
-                    .fields
-                    .get(k)
-                    .map(|f| f.field_type != "object" && f.field_type != "array")
-                    .unwrap_or(false);
-            if is_scalar {
+            // `_id` 恒为列；其余仅当 schema 已声明（标量 / object / array 均落列）
+            let is_column = k == "_id" || schema.fields.contains_key(k);
+            if is_column {
                 keys.push(k.clone());
             }
         }
@@ -167,14 +163,14 @@ fn quote_join(backend: Backend, cols: &[String]) -> String {
         .join(", ")
 }
 
-/// 标量可写列（排除 object/array 附属表字段）；`_id` 为保留字段，文档带时恒写首位
-fn scalar_cols(schema: &Schema, doc: &Value) -> Vec<String> {
+/// 可写列（标量 + object/array JSON 列；已声明字段中 doc 有非 null 值者）；
+/// `_id` 为保留字段，文档带时恒写首位
+fn writable_cols(schema: &Schema, doc: &Value) -> Vec<String> {
     let mut cols: Vec<String> = schema
         .fields
-        .iter()
-        .filter(|(_k, f)| !(f.field_type == "object" || f.field_type == "array"))
-        .map(|(k, _)| k.clone())
-        .filter(|k| doc.get(k).map(|v| !v.is_null()).unwrap_or(false))
+        .keys()
+        .filter(|k| doc.get(k.as_str()).map(|v| !v.is_null()).unwrap_or(false))
+        .cloned()
         .collect();
     if doc.get("_id").map(|v| !v.is_null()).unwrap_or(false) && !cols.contains(&"_id".to_string()) {
         cols.insert(0, "_id".to_string());
@@ -188,17 +184,16 @@ fn scalar_cols(schema: &Schema, doc: &Value) -> Vec<String> {
 /// 异构文档中「仅后续文档才有的字段」会被静默丢弃（INSERT 列集不含该列）。
 /// Mongo `insertMany` 允许文档间字段不同（稀疏），故列集必须取并集，
 /// 缺失字段在绑定阶段落 `NULL`。
-fn scalar_cols_union(schema: &Schema, docs: &[Value]) -> Vec<String> {
+fn writable_cols_union(schema: &Schema, docs: &[Value]) -> Vec<String> {
     let has_value = |k: &str| {
         docs.iter()
             .any(|d| d.get(k).map(|v| !v.is_null()).unwrap_or(false))
     };
     let mut cols: Vec<String> = schema
         .fields
-        .iter()
-        .filter(|(_k, f)| !(f.field_type == "object" || f.field_type == "array"))
-        .map(|(k, _)| k.clone())
-        .filter(|k| has_value(k))
+        .keys()
+        .filter(|k| has_value(k.as_str()))
+        .cloned()
         .collect();
     if has_value("_id") && !cols.contains(&"_id".to_string()) {
         cols.insert(0, "_id".to_string());

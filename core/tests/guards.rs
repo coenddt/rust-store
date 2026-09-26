@@ -1,13 +1,14 @@
 //! 扩展守卫测试：timestamps 值校验 + 条件形状（U1~U4）
 //!
 //! ① schema 可声明秒级时间戳（`timestamps: 's'`），非法值注册即报错；
-//! ② 数组/对象字段过滤、对象点号路径过滤/排序（U1~U4 / D2）在所有后端统一显式报错。
+//! ② 数组/对象字段过滤（U1/U2）在两档统一显式报错；对象点号路径过滤/排序（U3/U4）
+//!    standard 档放行（JSON 列落地）、text2query 档显式 Err（双门禁分离 §4.1 #4）。
 
 use serde_json::{json, Map, Value};
 
 use rust_store_core::command::{plan_query, plan_query_with_count};
 use rust_store_core::federation::plan_federated;
-use rust_store_core::schema::Registry;
+use rust_store_core::schema::{Profile, Registry};
 
 fn registry_with(defn: Value) -> Registry {
     let mut reg = Registry::new();
@@ -333,20 +334,51 @@ fn u2_object_deep_equality_filter_is_global_error() {
 }
 
 #[test]
-fn u3_object_dotted_filter_is_global_error() {
-    let err = cond_err(
+fn u3_object_dotted_filter_allowed_in_standard() {
+    // 双门禁分离（§4.1 #4）：standard 档放行对象点号路径过滤（JSON 列落地）
+    let params = params_of(json!({ "c0": { "meta.seo.title": "看Python" } }));
+    plan_query(
         "Course($condition:@c0){ _id }",
-        json!({ "c0": { "meta.seo.title": "看Python" } }),
-    );
+        &params,
+        &shape_registry(),
+        None,
+    )
+    .expect("standard 档对象点号路径过滤应放行");
+}
+
+#[test]
+fn u3_object_dotted_filter_rejected_in_text2query() {
+    let mut reg = shape_registry();
+    reg.set_profile(Profile::Text2Query);
+    let err = plan_query(
+        "Course($condition:@c0){ _id }",
+        &params_of(json!({ "c0": { "meta.seo.title": "看Python" } })),
+        &reg,
+        Some(&Context::system()),
+    )
+    .expect_err("text2query 档 U3 必须显式报错");
     assert!(err.contains("U3"), "应报 U3：{err}");
 }
 
 #[test]
-fn u4_object_dotted_sort_is_global_error() {
-    let err = cond_err(
+fn u4_object_dotted_sort_allowed_in_standard() {
+    // 双门禁分离（§4.1 #4）：standard 档放行对象点号路径排序（JSON 列落地）
+    let params = params_of(json!({ "s0": { "meta.level": 1 } }));
+    plan_query("Course($sort:@s0){ _id }", &params, &shape_registry(), None)
+        .expect("standard 档对象点号路径排序应放行");
+}
+
+#[test]
+fn u4_object_dotted_sort_rejected_in_text2query() {
+    let mut reg = shape_registry();
+    reg.set_profile(Profile::Text2Query);
+    let err = plan_query(
         "Course($sort:@s0){ _id }",
-        json!({ "s0": { "meta.level": 1 } }),
-    );
+        &params_of(json!({ "s0": { "meta.level": 1 } })),
+        &reg,
+        Some(&Context::system()),
+    )
+    .expect_err("text2query 档 U4 必须显式报错");
     assert!(err.contains("U4"), "应报 U4：{err}");
 }
 

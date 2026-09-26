@@ -60,7 +60,11 @@ fn build_object(
     let mut obj = Map::new();
     for c in cols {
         if c.json_path.len() == path_len + 1 || (!c.is_array && c.json_path.len() > path_len + 1) {
-            let val = row_val(rows[0], &c.alias).clone();
+            let mut val = row_val(rows[0], &c.alias).clone();
+            // JSON 列（object/array 单列存 JSON 文本）：先解析回嵌套值再落位
+            if c.is_json {
+                val = parse_json_col(val);
+            }
             merge_path(
                 &mut obj,
                 &c.json_path[path_len..],
@@ -192,6 +196,15 @@ fn merge_path(
     }
 }
 
+/// JSON 列还原：列值为 JSON 文本字符串 → 解析为嵌套值；已是 JSON 值（部分驱动直接
+/// 反序列化）或解析失败 → 原样返回（绝不静默把数据改判为 null）。
+fn parse_json_col(v: Value) -> Value {
+    match v {
+        Value::String(s) => serde_json::from_str::<Value>(&s).unwrap_or(Value::String(s)),
+        other => other,
+    }
+}
+
 /// §9.7 布尔归一：`1/0`（数值或数值字符串）→ `true/false`；其余（含 `null`、已是 bool、
 /// PG 原生 bool）原样透传 —— 绝不把非 0/1 的值静默改判为布尔。
 fn to_json_bool(v: Value) -> Value {
@@ -268,6 +281,7 @@ impl RowShape {
                 .transpose()?;
             let always = c.get("always").and_then(|b| b.as_bool()).unwrap_or(false);
             let is_bool = c.get("bool").and_then(|b| b.as_bool()).unwrap_or(false);
+            let is_json = c.get("json").and_then(|b| b.as_bool()).unwrap_or(false);
             columns.push(RowCol {
                 alias,
                 json_path: path,
@@ -277,6 +291,7 @@ impl RowShape {
                 sub_shape,
                 always,
                 is_bool,
+                is_json,
             });
         }
         let present_alias = v

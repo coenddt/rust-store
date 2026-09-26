@@ -9,7 +9,7 @@
 use serde_json::Value;
 
 use crate::dialect::filter::{build_filter, build_filter_raw, Warnings, WhereClause};
-use crate::dialect::{scalar_column, Backend};
+use crate::dialect::{scalar_column, Backend, ColumnRef};
 use crate::pipeline::rel_name_from_as;
 use crate::schema::{Registry, Schema};
 
@@ -207,12 +207,12 @@ pub(super) fn exists_clause(
         }
     }
 
-    // having：聚合别名 → SQL 聚合表达式
-    let expr_of = |name: &str| -> Option<String> {
+    // having：聚合别名 → SQL 聚合表达式（完整表达式 → 包成 ColumnRef::Scalar）
+    let expr_of = |name: &str| -> Option<ColumnRef> {
         p.aggs
             .iter()
             .find(|(a, _)| a == name)
-            .map(|(_, e)| e.clone())
+            .map(|(_, e)| ColumnRef::Scalar(e.clone()))
     };
     let hw = build_filter_raw(&p.having, backend, &expr_of, param_seq, warnings)?;
     // having 为空：pipeline 侧已保证 having 至少引用一个 agg 别名（见 `collect_having_agg_refs`），

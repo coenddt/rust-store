@@ -102,10 +102,10 @@ fn present_expr(
 }
 
 /// 单个更新操作符 → 赋值片段（`$set` 跳过 null；`$inc`/`$unset` 不跳过）。
-/// 另把涉及标量字段的增删收集进 `set_fields`/`unset_fields`，供 `__present` 维护。
+/// 另把涉及字段的增删收集进 `set_fields`/`unset_fields`，供 `__present` 维护。
 ///
-/// C-11-1：`$set`/`$inc` 目标为 schema 声明的 object/array 字段（SQL 侧无列）时
-/// → **显式 `Err`**，绝不让写入静默丢失。
+/// object/array 字段落 JSON 单列，`$set` 时把值序列化为 JSON 文本（跨后端对齐）；
+/// `$inc` 对 JSON 字段无意义 → **显式 `Err`**，绝不静默丢失。
 fn op_assignments(
     binder: &mut Binder,
     schema: &Schema,
@@ -119,21 +119,25 @@ fn op_assignments(
         return Ok(());
     };
     for (k, v) in fields {
-        let Some(col) = super::scalar_col(schema, k) else {
-            if matches!(op, "$set" | "$inc") {
-                return Err(format!(
-                    "SQL 后端不支持对 object/array 字段 \"{k}\" 执行 {op}（无对应列；C-11-1：绝不静默丢失写入）"
-                ));
-            }
+        let Some(col) = super::writable_col(schema, k) else {
             continue;
         };
+        let is_json = matches!(
+            schema.fields.get(&col).map(|f| f.field_type.as_str()),
+            Some("object") | Some("array")
+        );
+        if is_json && op == "$inc" {
+            return Err(format!(
+                "SQL 后端不支持对 object/array 字段 \"{k}\" 执行 $inc（JSON 列无法数值自增）"
+            ));
+        }
         let qc = binder.backend.quote_ident(&col);
         match op {
             "$set" => {
                 if v.is_null() {
                     continue;
                 }
-                let ph = binder.bind(v.clone());
+                let ph = binder.bind(super::bind_value(schema, &col, v));
                 assigns.push(format!("{} = {}", qc, ph));
                 if !set_fields.contains(&col) {
                     set_fields.push(col);

@@ -197,7 +197,7 @@ pub fn build_lookup(
         // 关系附加条件同样过拒绝名单（缺陷 D-02）
         validate_condition(cond)?;
         // U1~U4（D2）：关系级过滤同样只允许标量域，数组/对象字段与对象点号路径统一报错
-        validate_condition_shape(rel_schema, cond)?;
+        validate_condition_shape(rel_schema, cond, registry.profile())?;
         ands.push(cond.clone());
     }
     if let Some(owner) = merge_owner_condition(rel_schema, ctx, None) {
@@ -214,7 +214,7 @@ pub fn build_lookup(
     // 当 sort 依赖嵌套关联字段时，嵌套 $lookup 必须优先于 sort
     if let Some(srt) = non_nullish(sort.as_ref()) {
         // U4（D2）：关系级排序的对象点号路径统一报错（关系路径排序 R10 不受影响）
-        validate_sort_shape(rel_schema, srt)?;
+        validate_sort_shape(rel_schema, srt, registry.profile())?;
     }
     let sorts_by_nested = sort
         .as_ref()

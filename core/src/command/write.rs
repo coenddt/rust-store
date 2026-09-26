@@ -100,7 +100,7 @@ pub fn plan_exists(
     validate_condition(condition)?;
     let schema = registry.get(schema_name)?;
     // §11.4（D2）：与 pipeline 读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
-    validate_condition_shape(schema, condition)?;
+    validate_condition_shape(schema, condition, registry.profile())?;
     // §9.6 关系聚合谓词无法用标量 `findOne` 表达 → 显式 Err（否则 Mongo 静默给错结果）
     if has_relation_predicate(schema, condition) {
         return Err(
@@ -129,7 +129,7 @@ pub fn plan_count(
     let schema = registry.get(schema_name)?;
     // §11.4（D2）：与 pipeline 读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
     if let Some(f) = filter {
-        validate_condition_shape(schema, f)?;
+        validate_condition_shape(schema, f, registry.profile())?;
         // §9.6 关系聚合谓词无法用标量 count 表达 → 显式 Err（与 query_with_count 同口径）
         if has_relation_predicate(schema, f) {
             return Err(

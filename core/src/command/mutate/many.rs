@@ -73,7 +73,7 @@ pub fn plan_update_many(
     // 条件拒绝名单（缺陷 D-02）：updateMany 条件命中拒绝名单即显式报错
     validate_condition(condition)?;
     // §11.4（D2）：写路径条件与读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
-    validate_condition_shape(schema, condition)?;
+    validate_condition_shape(schema, condition, registry.profile())?;
     // R4：无条件批量写一票否决（不落全表）
     if is_blank_condition(condition) {
         return Err(ERR_NO_BATCH_WRITE.to_string());

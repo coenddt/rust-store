@@ -37,7 +37,7 @@ pub fn plan_update(
     // 条件拒绝名单（缺陷 D-02）：update/remove 的条件绝不静默携带服务端执行操作符
     validate_condition(condition)?;
     // §11.4（D2）：写路径条件与读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
-    validate_condition_shape(schema, condition)?;
+    validate_condition_shape(schema, condition, registry.profile())?;
     if let Some(cmd) = check_write_perm(schema, ctx, condition, ERR_NO_WRITE, probe)? {
         return Ok(json!({ "needsProbe": cmd }));
     }
@@ -79,7 +79,7 @@ pub fn plan_remove(
     // 条件拒绝名单（缺陷 D-02）：remove 条件命中拒绝名单即显式报错
     validate_condition(condition)?;
     // §11.4（D2）：写路径条件与读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
-    validate_condition_shape(schema, condition)?;
+    validate_condition_shape(schema, condition, registry.profile())?;
     // R4/B-12：空条件（{} / null / 空逻辑组）批量删除一票否决，绝不落全表
     if is_blank_condition(condition) {
         return Err(ERR_NO_BATCH_WRITE.to_string());

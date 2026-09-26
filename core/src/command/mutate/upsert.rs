@@ -157,7 +157,7 @@ pub fn plan_upsert(
     // 条件拒绝名单（缺陷 D-02）：upsert 条件命中拒绝名单即显式报错
     validate_condition(condition)?;
     // §11.4（D2）：写路径条件与读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
-    validate_condition_shape(schema, condition)?;
+    validate_condition_shape(schema, condition, registry.profile())?;
     if !can_write_schema(schema, ctx) {
         return Err(ERR_NO_WRITE.to_string());
     }

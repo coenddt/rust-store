@@ -83,6 +83,9 @@ pub struct RowCol {
     /// `0/1` 归一为 JSON `bool`（对齐 Mongo；PG 原生 `BOOLEAN` 已是 bool，归一为 no-op）。
     /// 依据**schema 声明类型**而非驱动元数据，故对任意用户 DDL 都成立。
     pub is_bool: bool,
+    /// JSON 列（object/array 字段落单列存 JSON 文本）：行还原时把列值（JSON 文本字符串）
+    /// 解析为嵌套 JSON 值，跨后端对齐 Mongo 的嵌套文档（见执行文档 §4.5 / 不足清单 #3）。
+    pub is_json: bool,
 }
 
 impl RowShape {
@@ -107,6 +110,7 @@ impl RowShape {
                     "subShape": c.sub_shape.as_ref().map(|s| s.to_value()).unwrap_or(Value::Null),
                     "always": c.always,
                     "bool": c.is_bool,
+                    "json": c.is_json,
                 })
             })
             .collect();
@@ -128,6 +132,7 @@ impl RowCol {
             sub_shape: None,
             always: false,
             is_bool: false,
+            is_json: false,
         }
     }
 
@@ -135,6 +140,13 @@ impl RowCol {
     pub fn scalar_bool(alias: &str, path: &[&str], is_bool: bool) -> Self {
         let mut c = RowCol::scalar(alias, path);
         c.is_bool = is_bool;
+        c
+    }
+
+    /// JSON 列（object/array 字段）：还原时把 JSON 文本解析为嵌套值
+    pub fn json(alias: &str, path: &[&str]) -> Self {
+        let mut c = RowCol::scalar(alias, path);
+        c.is_json = true;
         c
     }
 
@@ -149,6 +161,7 @@ impl RowCol {
             sub_shape: None,
             always: true,
             is_bool: false,
+            is_json: false,
         }
     }
 
@@ -162,6 +175,7 @@ impl RowCol {
             sub_shape: Some(sub_shape),
             always: false,
             is_bool: false,
+            is_json: false,
         }
     }
 }

@@ -97,7 +97,7 @@ pub fn build_pipeline(
     // U1~U4（D2）：数组/对象字段过滤、对象点号路径过滤/排序 —— 所有后端（含 Mongo）
     // 规划期统一显式报错，绝不静默（判定依据 = 根 schema）。
     if let Some(cond) = non_nullish(root_condition.as_ref()) {
-        validate_condition_shape(schema, cond)?;
+        validate_condition_shape(schema, cond, registry.profile())?;
         // 拒绝名单（$where 等）提前校验；关系谓词解析（§9.6）内部亦复用
         validate_condition(cond)?;
     }
@@ -140,7 +140,7 @@ pub fn build_pipeline(
     }
 
     if let Some(srt) = non_nullish(root_sort.as_ref()) {
-        validate_sort_shape(schema, srt)?;
+        validate_sort_shape(schema, srt, registry.profile())?;
     }
 
     // ── 标准 GQL 模式 ──

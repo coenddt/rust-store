@@ -50,6 +50,49 @@ pub(crate) fn scalar_column(schema: &Schema, field: &str) -> Option<String> {
     }
 }
 
+/// 字段 → 列引用（过滤 / 投影 / 回读用；object/array 走 JSON 单列）。
+///
+/// 与 [`scalar_column`] 的差异：`scalar_column` 只认标量列（object/array 返回 `None`，
+/// 供关系键解析、分组键等**必须标量**的场景）；本函数在其基础上把 object/array 字段
+/// 展开为 JSON 列引用（见执行文档 §4.5 / 不足清单 #3）：
+/// - 标量字段 → [`ColumnRef::Scalar`]（调用方按别名限定 + 引号化）；
+/// - object/array 整值 → [`ColumnRef::Json`]（单列存 JSON 文本，读取时解析）；
+/// - object/array 的点号路径（U3 过滤 / U4 排序）→ [`ColumnRef::JsonPath`]（提取表达式）。
+///
+/// 未声明字段返回 `None`（调用方据此显式报错，绝不静默）。
+pub(crate) fn field_column_ref(schema: &Schema, field: &str) -> Option<ColumnRef> {
+    if let Some((head, rest)) = field.split_once('.') {
+        let head_type = schema.fields.get(head).map(|f| f.field_type.as_str());
+        match head_type {
+            // U3/U4：object/array 点号路径 → JSON 提取（根列 head + 子路径 rest）
+            Some("object") | Some("array") => {
+                let path: Vec<String> = rest.split('.').map(String::from).collect();
+                Some(ColumnRef::JsonPath(head.to_string(), path))
+            }
+            // 点号字段的 head 非 object/array（如标量同名字段）→ 按整串列名处理（既有语义）
+            _ => Some(ColumnRef::Scalar(field.to_string())),
+        }
+    } else {
+        match schema.fields.get(field).map(|f| f.field_type.as_str()) {
+            Some("object") | Some("array") => Some(ColumnRef::Json(field.to_string())),
+            // 已声明标量 / 未声明字段（与 `scalar_column` 宽松语义一致：按裸列名处理，
+            // 如物理主键 `_id` 不在 schema.fields 但恒为列）
+            _ => Some(ColumnRef::Scalar(field.to_string())),
+        }
+    }
+}
+
+/// 字段 → 列引用（见 [`field_column_ref`]）：区分标量列 / JSON 整列 / JSON 点号路径。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColumnRef {
+    /// 标量列：字段名（调用方按表别名限定 + 引号化）
+    Scalar(String),
+    /// JSON 整列：object/array 字段落单列存 JSON 文本（读取时解析回嵌套对象）
+    Json(String),
+    /// JSON 点号路径（U3 过滤 / U4 排序）：根列名 + 子路径（调用方构造提取表达式）
+    JsonPath(String, Vec<String>),
+}
+
 /// §9.7「布尔归一」：schema 字段是否为布尔类型（`boolean` 规范拼写 / `bool` 简写）。
 ///
 /// 判定依据是 schema 的**声明类型**（不是驱动元数据，也不是物理列类型）——SQL 侧把布尔

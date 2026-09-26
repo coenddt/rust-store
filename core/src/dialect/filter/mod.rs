@@ -5,7 +5,7 @@
 
 use serde_json::{Map, Value};
 
-use super::Backend;
+use super::{Backend, ColumnRef};
 
 use op::cond_clause;
 
@@ -64,7 +64,7 @@ pub fn build_filter(
     filter: &Value,
     backend: Backend,
     alias: &str,
-    column: &dyn Fn(&str) -> Option<String>,
+    column: &dyn Fn(&str) -> Option<ColumnRef>,
     param_seq: &mut usize,
     warnings: Warnings,
 ) -> Result<WhereClause, String> {
@@ -78,7 +78,7 @@ pub fn build_filter_with_relations(
     filter: &Value,
     backend: Backend,
     alias: &str,
-    column: &dyn Fn(&str) -> Option<String>,
+    column: &dyn Fn(&str) -> Option<ColumnRef>,
     rel_pred: Option<&dyn RelPredResolver>,
     param_seq: &mut usize,
     warnings: Warnings,
@@ -101,7 +101,7 @@ pub fn build_filter_with_relations(
 pub fn build_filter_raw(
     filter: &Value,
     backend: Backend,
-    expr_of: &dyn Fn(&str) -> Option<String>,
+    expr_of: &dyn Fn(&str) -> Option<ColumnRef>,
     param_seq: &mut usize,
     warnings: Warnings,
 ) -> Result<WhereClause, String> {
@@ -122,7 +122,7 @@ pub fn build_filter_raw(
 struct Ctx<'a> {
     backend: Backend,
     alias: &'a str,
-    column: &'a dyn Fn(&str) -> Option<String>,
+    column: &'a dyn Fn(&str) -> Option<ColumnRef>,
     rel_pred: Option<&'a dyn RelPredResolver>,
     param_seq: &'a mut usize,
     warnings: Warnings<'a>,
@@ -230,16 +230,37 @@ impl Ctx<'_> {
                     "SQL 后端无法翻译字段 \"{field}\" 的过滤条件（复杂 JSON 或未声明字段）：拒绝静默丢弃后返回全表"
                 ));
             };
-            let qualified = if self.alias.is_empty() {
-                // 表达式模式（HAVING）：`col` 已是完整 SQL 表达式，不再限定/加引号
-                col
-            } else {
-                format!("{}.{}", self.alias, self.backend.quote_ident(&col))
-            };
+            let qualified = self.qualified(&col, field)?;
             let clause = self.cond(cond, &qualified, field, self.alias)?;
             out.push(clause);
         }
         Ok(out)
+    }
+
+    /// 列引用 → 完整 SQL 表达式（U3 对象点号路径走 JSON 提取；整值 JSON 比较显式报错）。
+    fn qualified(&self, col: &ColumnRef, field: &str) -> Result<String, String> {
+        let ident = |c: &str| -> String {
+            if self.alias.is_empty() {
+                // 表达式模式（HAVING）：`c` 已是完整 SQL 表达式，不再限定/加引号
+                c.to_string()
+            } else {
+                format!("{}.{}", self.alias, self.backend.quote_ident(c))
+            }
+        };
+        match col {
+            ColumnRef::Scalar(c) => Ok(ident(c)),
+            // U2（object/array 整值比较）：无法语义等价翻译 → 显式报错（门禁亦在
+            // `types::validate_condition_shape` 前置拦截，此处为纵深防御兜底）
+            ColumnRef::Json(_) => Err(format!(
+                "SQL 后端无法翻译 object/array 字段 \"{field}\" 的整值比较（U2/D2：请改用对象点号路径）"
+            )),
+            // U3/U4：object/array 点号路径 → 后端各自的 JSON 标量提取表达式
+            ColumnRef::JsonPath(c, path) => {
+                let base = ident(c);
+                let segs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
+                Ok(self.backend.json_extract_scalar(&base, &segs))
+            }
+        }
     }
 
     /// 单字段条件：转发到操作符翻译（`op::cond_clause`），透传参数游标与告警通道。

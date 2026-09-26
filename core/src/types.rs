@@ -2,7 +2,7 @@
 
 use serde_json::{json, Value};
 
-use crate::schema::Schema;
+use crate::schema::{Profile, Schema};
 
 /// 获取指定类型的零值；`date`/`any`/未知类型返回 null
 pub fn get_default(field_type: &str) -> Value {
@@ -109,12 +109,20 @@ fn root_field_type<'a>(schema: &'a Schema, key: &str) -> Option<&'a str> {
 }
 
 /// U1~U4（`$condition` 侧）：数组字段过滤 / 对象字段过滤 / 对象点号路径过滤 ——
-/// 在**所有后端（含 Mongo）**规划期统一显式报错（D2：绝不静默）。
+/// **按档分流**（见执行文档 §4.1 门禁矩阵 #4）。
 ///
-/// 判定依据 = schema：数组 / 对象字段在 SQL 侧无可翻译列，Mongo 侧虽能执行，
-/// 但会造成跨后端结果不一致 → 一律拒绝。**关系名**（§9.6 关系聚合谓词）不在本检查
-/// 范围，交由关系节点处理。
-pub fn validate_condition_shape(schema: &Schema, filter: &Value) -> Result<(), String> {
+/// 判定依据 = schema：
+/// - U1（数组字段过滤）/ U2（对象字段整值过滤）—— 两档统一显式报错（JSON 列落地后
+///   仍待批 8b 放开 standard；text2query 永远 Err）；
+/// - U3（对象点号路径过滤）—— `standard` 档放行（SQL 侧走 `json_extract_scalar`
+///   提取、Mongo 侧原生下钻，跨后端对齐）；`text2query` 档维持显式 Err（功能收缩）。
+///
+/// **关系名**（§9.6 关系聚合谓词）不在本检查范围，交由关系节点处理。
+pub fn validate_condition_shape(
+    schema: &Schema,
+    filter: &Value,
+    profile: Profile,
+) -> Result<(), String> {
     let Value::Object(map) = filter else {
         return Ok(());
     };
@@ -122,7 +130,7 @@ pub fn validate_condition_shape(schema: &Schema, filter: &Value) -> Result<(), S
         if matches!(k.as_str(), "$and" | "$or" | "$nor") {
             if let Value::Array(arr) = v {
                 for it in arr {
-                    validate_condition_shape(schema, it)?;
+                    validate_condition_shape(schema, it, profile)?;
                 }
             }
             continue;
@@ -145,9 +153,10 @@ pub fn validate_condition_shape(schema: &Schema, filter: &Value) -> Result<(), S
                     "对象字段 \"{k}\" 不支持过滤条件（U2/D2：所有后端含 Mongo 统一显式拒绝）"
                 ));
             }
-            ("object", true) => {
+            ("object", true) if profile == Profile::Text2Query => {
+                // U3：standard 放行（JSON 列点号路径）；text2query 功能收缩
                 return Err(format!(
-                    "对象点号路径 \"{k}\" 不支持过滤条件（U3/D2：所有后端含 Mongo 统一显式拒绝）"
+                    "对象点号路径 \"{k}\" 不支持过滤条件（U3/D2：text2query 档功能收缩）"
                 ));
             }
             _ => {}
@@ -184,11 +193,14 @@ pub fn has_relation_predicate(schema: &Schema, v: &Value) -> bool {
     })
 }
 
-/// U4（`$sort` 侧）：对象点号路径排序 —— 所有后端（含 Mongo）规划期统一显式报错。
+/// U4（`$sort` 侧）：对象点号路径排序 —— **按档分流**。
 ///
-/// 仅当点号键的根字段是 schema 声明的 object 字段时拒绝；关系路径排序
+/// `standard` 档放行（SQL 侧走 `json_extract_scalar` 提取排序键、Mongo 侧原生下钻，
+/// 跨后端对齐）；`text2query` 档维持显式 Err（功能收缩）。
+///
+/// 仅当点号键的根字段是 schema 声明的 object 字段时命中；关系路径排序
 /// （`bidders.amount`，R10）不在本检查范围。
-pub fn validate_sort_shape(schema: &Schema, sort: &Value) -> Result<(), String> {
+pub fn validate_sort_shape(schema: &Schema, sort: &Value, profile: Profile) -> Result<(), String> {
     let Some(map) = sort.as_object() else {
         return Ok(());
     };
@@ -196,9 +208,9 @@ pub fn validate_sort_shape(schema: &Schema, sort: &Value) -> Result<(), String> 
         if !k.contains('.') || schema.relations.contains_key(k) {
             continue;
         }
-        if root_field_type(schema, k) == Some("object") {
+        if root_field_type(schema, k) == Some("object") && profile == Profile::Text2Query {
             return Err(format!(
-                "对象点号路径 \"{k}\" 不支持排序（U4/D2：所有后端含 Mongo 统一显式拒绝）"
+                "对象点号路径 \"{k}\" 不支持排序（U4/D2：text2query 档功能收缩）"
             ));
         }
     }

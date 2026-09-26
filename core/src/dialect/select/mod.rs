@@ -6,7 +6,7 @@ use crate::schema::{Registry, Schema};
 
 use crate::dialect::filter::build_filter;
 use crate::dialect::ir::{RowShape, SqlStmt};
-use crate::dialect::Backend;
+use crate::dialect::{Backend, ColumnRef};
 
 mod aggregate;
 mod find;
@@ -90,12 +90,14 @@ pub fn translate_select(
     }
 }
 
-/// 字段 → 列名：标量字段在本表；object/array 附属表字段跳过（标量字段原样）
+/// 字段 → 列引用：标量字段在本表；object/array 字段走 JSON 单列（含点号路径提取）。
 ///
-/// 读侧薄包装；语义唯一出处见 [`super::scalar_column`]（与写侧共用同一实现，
+/// 读侧薄包装；语义唯一出处见 [`super::field_column_ref`]（与写侧共用同一实现，
 /// 避免读写列映射语义漂移）。
-pub(in crate::dialect::select) fn col_fn(schema: &Schema) -> impl Fn(&str) -> Option<String> + '_ {
-    move |field: &str| super::scalar_column(schema, field)
+pub(in crate::dialect::select) fn col_fn(
+    schema: &Schema,
+) -> impl Fn(&str) -> Option<ColumnRef> + '_ {
+    move |field: &str| super::field_column_ref(schema, field)
 }
 
 /// 投影字段：null / 全 1 → 所有标量字段；否则取值为「非 0」的字段
@@ -164,9 +166,9 @@ pub(in crate::dialect::select) fn check_projection_supported(
         if schema.relations.contains_key(k.as_str()) || schema.compute(k).is_some() {
             continue;
         }
-        if super::scalar_column(schema, k).is_none() {
+        if super::field_column_ref(schema, k).is_none() {
             return Err(format!(
-                "SQL 后端不支持投影 object/array 字段 \"{k}\"（无对应列；D2：绝不静默返回残缺结果）"
+                "SQL 后端不支持投影字段 \"{k}\"（未声明字段；D2：绝不静默返回残缺结果）"
             ));
         }
     }

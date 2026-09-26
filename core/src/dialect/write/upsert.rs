@@ -10,7 +10,7 @@ use crate::dialect::Backend;
 use crate::schema::Schema;
 
 use super::update::{build_assignments, read_back, write_with_returning};
-use super::{q, returning_cols, scalar_col, tname, Binder};
+use super::{bind_value, q, returning_cols, scalar_col, tname, writable_col, Binder};
 
 /// upsert：`INSERT ... ON CONFLICT/ON DUPLICATE KEY ...` + 回读
 pub(super) fn translate_upsert(
@@ -38,14 +38,15 @@ pub(super) fn translate_upsert(
             continue;
         };
         for (k, v) in o {
-            let Some(col) = scalar_col(schema, k) else {
+            let Some(col) = writable_col(schema, k) else {
                 continue;
             };
             if v.is_null() || cols.iter().any(|c| c == &col) {
                 continue;
             }
+            let bound = bind_value(schema, &col, v);
             cols.push(col);
-            vals.push(v.clone());
+            vals.push(bound);
         }
     }
     if cols.is_empty() {
