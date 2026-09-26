@@ -141,4 +141,47 @@ impl Backend {
     pub fn supports_returning(&self) -> bool {
         !matches!(self, Backend::Mysql)
     }
+
+    /// JSON 列的方言类型名（`object`/`array` 字段落单列存储的契约，见 §4.5 / 不足清单 #3）
+    ///
+    /// ⚠️ 跨方言对齐：`object`/`array` 字段在 SQL 后端**以单列存 JSON 文本** ——
+    /// MySQL `JSON` / PG `jsonb` / SQLite `TEXT`（JSON1 扩展）。core 不写 DDL（铁律 6），
+    /// 此常量供示例 DDL、introspection 与文档约定引用。
+    pub fn json_type_name(&self) -> &'static str {
+        match self {
+            Backend::Mysql => "JSON",
+            Backend::Postgres => "jsonb",
+            Backend::Sqlite => "TEXT",
+        }
+    }
+
+    /// JSON 点号路径 → **标量**提取表达式（U3 对象点号路径过滤 / U4 排序用）
+    ///
+    /// - MySQL：`JSON_UNQUOTE(JSON_EXTRACT(col, '$.a.b'))`
+    /// - PG：`(col #>> '{a,b}')`
+    /// - SQLite：`json_extract(col, '$.a.b')`
+    ///
+    /// 三者统一为「提取后标量（数值/字符串）」，供比较与 `ORDER BY` 使用；
+    /// `col` 须为已按后端引号化的**列标识符**，`path` 为点号各段（不含列名）。
+    pub fn json_extract_scalar(&self, col: &str, path: &[&str]) -> String {
+        match self {
+            Backend::Mysql => format!(
+                "JSON_UNQUOTE(JSON_EXTRACT({}, '{}'))",
+                col,
+                json_path_dollar(path)
+            ),
+            Backend::Postgres => format!("({} #>> '{{{}}}')", col, path.join(",")),
+            Backend::Sqlite => format!("json_extract({}, '{}')", col, json_path_dollar(path)),
+        }
+    }
+}
+
+/// 点号路径 → MySQL/SQLite `JSON_EXTRACT` 的 `$` 路径字面量（`["a","b"]` → `$.a.b`）
+fn json_path_dollar(path: &[&str]) -> String {
+    let mut s = String::from("$");
+    for seg in path {
+        s.push('.');
+        s.push_str(seg);
+    }
+    s
 }
