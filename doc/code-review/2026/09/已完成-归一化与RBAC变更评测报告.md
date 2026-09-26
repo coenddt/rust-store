@@ -101,7 +101,7 @@ npm run lint                                                          #（nodejs
 |------|------|------|----------|----------|------|
 | I-1 | `py-store/.out/_dbg_plan.py`（被修改） | 调试脚本 `.out/_dbg_plan.py` 出现在本次 diff（调试残留物进版本库） | 维度 5.4 死代码/调试痕迹 | `.gitignore` 忽略 `.out/` 或删除该调试脚本 | 待修复 |
 | I-2 | `rust-store/core/src/dialect/row.rs`（`buckets.iter_mut().find`） | 根分桶用线性 `find`，最坏 O(行数 × 根数)；大结果集可哈希 | 维度 4.1（预存，本次仅触碰未改算法） | 改用 `HashMap` + 顺序索引（`restore_rows` 内已是类似改造思路） | 待修复 |
-| I-3 | `rust-store/doc/test-eval/2026/09/未处理-rust-store测试评测报告.md:97` 等既有文档 | 历史文档仍引用已删除的 `setAllowUserPipeline` 用例/函数 | 维度 8 文档一致性 | 顺手标注「已随 `$pipeline` 移除」，非本次强制 | 待修复 |
+| I-3 | `rust-store/doc/test-eval/2026/09/rust-store测试评测报告.md:97` 等既有文档 | 历史文档仍引用已删除的 `setAllowUserPipeline` 用例/函数 | 维度 8 文档一致性 | 顺手标注「已随 `$pipeline` 移除」，非本次强制 | 待修复 |
 
 ### 范围外发现
 
@@ -284,7 +284,7 @@ npm run lint                                                          #（nodejs
 | m-11 | 聚合算子白名单 4 处字面量重复 | 未修复 | `pipeline/group.rs:22 AGG_OPS`、`pipeline/relation_filter.rs:36 CMP_OPS`/`:39 SIMPLE_AGG_OPS`、`schema/registry.rs:347 OPS` 仍各为字面量数组 | ❌ 未修复 |
 | I-1 | 调试脚本 `py-store/.out/_dbg_plan.py` 进 diff | 已修复 | `py-store` `git status --short` 已无该文件（`git checkout` 还原生效） | ✅ 已修复 |
 | I-2 | `dialect/row.rs` 根分桶线性 `find` | 未修复 | `core/src/dialect/row.rs:21` 仍 `buckets.iter_mut().find(...)` | ❌ 未修复（Info，非强制） |
-| I-3 | 历史 test-eval 文档残留 `setAllowUserPipeline` 引用 | 未修复 | `doc/test-eval/2026/09/未处理-rust-store测试评测报告.md:97` 仍提 `setAllowUserPipeline` | ❌ 未修复（Info，非强制） |
+| I-3 | 历史 test-eval 文档残留 `setAllowUserPipeline` 引用 | 未修复 | `doc/test-eval/2026/09/rust-store测试评测报告.md:97` 仍提 `setAllowUserPipeline` | ❌ 未修复（Info，非强制） |
 
 **附：本轮另核实的 clippy 清零修复（均落地，未见语义副作用）**：`schema/registry.rs:11` 改 `#[derive(Debug, Clone, Default)]`；`pipeline/relation_filter.rs:258` 抽 `type ParsedRelPredicate`（type_complexity）；`computes/inject.rs:84` 改 `v.get("inject").or(Some(v))`；`dialect/write/insert.rs` Postgres/MySQL 冲突子句拆分为不同分支（identical-blocks 消除）。
 
@@ -430,7 +430,7 @@ npm run lint                                                          #（nodejs
 | m-8 | rust-store 无 `CHANGELOG.md`、README 未记录新能力 | 已修复 | 新增 `rust-store/CHANGELOG.md`（Breaking / New Features / Migration 三段，覆盖 `lookup→agg`、`$pipeline`/`plan_aggregate` 移除、RBAC R0 收口、object/array 读写显式报错）；`rust-store/README.md:36-46` 新增「GQL 能力（归一化）」表并链接 CHANGELOG | ✅ 已修复 |
 | m-10 | 宿主 `_explicitNull`/`_explicit_null` 三态改写、`mutation_degraded` 发射无对应测试 | 已修复 | 新增 `py-store/tests/test_mongo_executor.py`（6 用例：三态改写 3 + `exec_mongo` 接线 2 + `mutation_degraded` 1；断言 `{f:null}`→`{$eq:None,$exists:True}`、嵌套对象/数组下钻、`$` 算子对象不改写、sink 事件 `type/code/layer`）；新增 `nodejs-store/tests/native-boundary.test.js`（4 用例，与 Python 侧同构）。实测增量 py-store 86→92、nodejs-store 80→84，与新增用例数完全吻合 | ✅ 已修复（断言具体，非伪测试） |
 | I-2 | `dialect/row.rs` 根分桶线性 `find`（最坏 O(行数 × 根数)） | 已修复 | `core/src/dialect/row.rs:18-30` 改为 `HashMap<Value, usize>` 索引 + 保序 `Vec<Vec<&Value>>`；键仍为 `root_key(shape,row).unwrap_or_else(\|\| Value::from(i as u64))`，插入顺序即键首次出现顺序，桶内行序不变 | ✅ 已修复（与旧线性 `find` 分组语义等价，见「等价性裁定」） |
-| I-3 | 历史 test-eval 文档残留 `setAllowUserPipeline` 引用 | 已修复 | `rust-store/doc/test-eval/2026/09/未处理-rust-store测试评测报告.md:97`（C6 行）加注「`setAllowUserPipeline` 已随归一化 P3『砍 `$pipeline` 逃生舱』移除，本条为历史快照，现状见 rust-store/CHANGELOG.md」 | ✅ 已修复 |
+| I-3 | 历史 test-eval 文档残留 `setAllowUserPipeline` 引用 | 已修复 | `rust-store/doc/test-eval/2026/09/rust-store测试评测报告.md:97`（C6 行）加注「`setAllowUserPipeline` 已随归一化 P3『砍 `$pipeline` 逃生舱』移除，本条为历史快照，现状见 rust-store/CHANGELOG.md」 | ✅ 已修复 |
 
 ### 等价性裁定（重点复核三项）
 
