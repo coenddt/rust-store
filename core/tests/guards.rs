@@ -542,6 +542,138 @@ fn rel_pred_filter_array_index_path_rejected_in_both_profiles() {
     }
 }
 
+// ─── 关系聚合谓词子级 filter 内嵌套关系下推（§4.1 #4 → 8c-2） ──
+
+/// 嵌套关系 schema：Course --lessons--> Lesson --parts--> LessonPart（`parts.subs` 自引用造三级）
+fn nested_registry() -> Registry {
+    let mut reg = Registry::new();
+    reg.register(&json!({
+        "name": "Course", "collection": "courses", "timestamps": true,
+        "fields": { "title": { "type": "string" } },
+        "relations": {
+            "lessons": { "model": "Lesson", "type": "many", "localField": "_id", "foreignField": "courseId" }
+        }
+    }))
+    .unwrap();
+    reg.register(&json!({
+        "name": "Lesson", "collection": "lessons", "timestamps": true,
+        "fields": { "name": { "type": "string" }, "courseId": { "type": "string" } },
+        "relations": {
+            "parts": { "model": "LessonPart", "type": "many", "localField": "_id", "foreignField": "lessonId" }
+        }
+    }))
+    .unwrap();
+    reg.register(&json!({
+        "name": "LessonPart", "collection": "lesson_parts", "timestamps": true,
+        "fields": { "lessonId": { "type": "string" }, "price": { "type": "int" } },
+        "relations": {
+            "subs": { "model": "LessonPart", "type": "many", "localField": "_id", "foreignField": "lessonId" }
+        }
+    }))
+    .unwrap();
+    reg
+}
+
+/// 嵌套关系参数：`lessons` 关系 filter 内下钻 `parts.*`
+fn nested_pred(filter: Value) -> Map<String, Value> {
+    params_of(json!({ "c0": { "lessons": { "$filter": filter, "$count": { "$gt": 1 } } } }))
+}
+
+#[test]
+fn nested_relation_filter_allowed_in_standard() {
+    // 8c-2：standard 档放行一层嵌套关系下钻（标量 / 与标量并列 / 逻辑组内）
+    for filter in [
+        json!({ "parts.price": { "$gt": 10 } }),
+        json!({ "name": "L1", "parts.price": { "$gt": 10 } }),
+        json!({ "$and": [ { "parts.price": { "$gt": 10 } }, { "name": "L1" } ] }),
+    ] {
+        plan_query(
+            REL_PRED_GQL,
+            &nested_pred(filter.clone()),
+            &nested_registry(),
+            None,
+        )
+        .unwrap_or_else(|e| panic!("standard 档嵌套关系 filter {filter} 应放行: {e}"));
+    }
+}
+
+#[test]
+fn nested_relation_stage_shape_mongo() {
+    // Mongo 侧：内层 `$lookup`（`as` = `__rn0__parts`）先于本层 `$match`，且嵌套条件经前缀化点号路径
+    let plan = plan_query(
+        REL_PRED_GQL,
+        &nested_pred(json!({ "parts.price": { "$gt": 10 } })),
+        &nested_registry(),
+        None,
+    )
+    .expect("standard 档嵌套下钻应放行");
+    let pipeline = plan.commands[0]["pipeline"].as_array().unwrap();
+    let outer = pipeline
+        .iter()
+        .find_map(|s| s.get("$lookup"))
+        .expect("外层关系谓词 $lookup");
+    let inner_stages = outer["pipeline"].as_array().unwrap();
+    assert_eq!(
+        inner_stages[0]["$lookup"]["as"], "__rn0__parts",
+        "内层嵌套 $lookup 应先于本层 $match: {inner_stages:?}"
+    );
+    let match_doc = inner_stages[1]["$match"].clone();
+    assert!(
+        match_doc.to_string().contains(r#""__rn0__parts.price""#),
+        "嵌套条件须前缀化为点号路径: {match_doc}"
+    );
+}
+
+#[test]
+fn nested_relation_filter_rejected_in_text2query() {
+    let mut reg = nested_registry();
+    reg.set_profile(Profile::Text2Query);
+    let err = plan_query(
+        REL_PRED_GQL,
+        &nested_pred(json!({ "parts.price": { "$gt": 10 } })),
+        &reg,
+        Some(&Context::system()),
+    )
+    .expect_err("text2query 档嵌套关系下钻必须显式报错");
+    assert!(err.contains("功能收缩"), "应报功能收缩：{err}");
+}
+
+#[test]
+fn nested_relation_three_level_path_rejected() {
+    let err = plan_query(
+        REL_PRED_GQL,
+        &nested_pred(json!({ "parts.subs.price": { "$gt": 10 } })),
+        &nested_registry(),
+        None,
+    )
+    .expect_err("三级关系路径必须显式报错");
+    assert!(err.contains("三级关系路径"), "应报三级关系路径：{err}");
+}
+
+#[test]
+fn nested_relation_inside_or_rejected() {
+    let err = plan_query(
+        REL_PRED_GQL,
+        &nested_pred(json!({ "$or": [ { "parts.price": { "$gt": 10 } } ] })),
+        &nested_registry(),
+        None,
+    )
+    .expect_err("$or 内嵌套关系路径必须显式报错");
+    assert!(err.contains("$or"), "应报 $or 限制：{err}");
+}
+
+#[test]
+fn nested_relation_bare_reference_rejected() {
+    let err = plan_query(
+        REL_PRED_GQL,
+        &nested_pred(json!({ "parts": { "$exists": true } })),
+        &nested_registry(),
+        None,
+    )
+    .expect_err("纯关系引用必须显式报错（须写成 关系.字段）");
+    assert!(err.contains("关系引用"), "应报关系引用：{err}");
+}
+
 // ─── 权限 RBAC（R0）：聚合 / 关系侧信道收口（F2/F3/F6/L1/L6/F5/X1） ─
 
 use rust_store_core::command::{finalize_query, ERR_PERMISSION, ERR_PERM_PREFIX};

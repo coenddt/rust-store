@@ -1099,6 +1099,108 @@ fn dialect_relation_predicate_json_filter_pushdown() {
     );
 }
 
+// ─── §4.1 #4 → 8c-2：关系谓词子级 filter 内嵌套关系下钻的嵌套 EXISTS ──
+
+/// 嵌套关系 schema：Order --items--> OrderItem --addons--> OrderAddon
+const RP_NESTED_SCHEMAS: &str = r#"[
+  {
+    "name": "Order", "collection": "orders", "timestamps": false,
+    "fields": { "code": { "type": "string" } },
+    "relations": {
+      "items": { "model": "OrderItem", "type": "many", "localField": "_id", "foreignField": "orderId" }
+    }
+  },
+  {
+    "name": "OrderItem", "collection": "order_items", "timestamps": false,
+    "fields": { "orderId": { "type": "string" }, "sku": { "type": "string" } },
+    "relations": {
+      "addons": { "model": "OrderAddon", "type": "many", "localField": "_id", "foreignField": "itemId" }
+    }
+  },
+  {
+    "name": "OrderAddon", "collection": "order_addons", "timestamps": false,
+    "fields": { "itemId": { "type": "string" }, "price": { "type": "int" } },
+    "relations": {}
+  }
+]"#;
+
+/// 嵌套关系下钻命令（专用 schema 集，避免污染 `SCHEMAS` 的既有断言）
+fn rp_nested_cmd(c0: Value) -> (Value, Registry) {
+    let schemas: Vec<Value> = serde_json::from_str(RP_NESTED_SCHEMAS).expect("schemas 解析失败");
+    let registry = registry_with(&schemas);
+    let mut ast = parse_gql("Order($condition:@c0){ _id }").expect("GQL 解析失败");
+    let mut params = Map::new();
+    params.insert("c0".to_string(), c0);
+    let pipeline = build_pipeline(&mut ast, &params, &registry, None).expect("build_pipeline");
+    (
+        json!({ "kind": "aggregate", "collection": "orders", "pipeline": pipeline }),
+        registry,
+    )
+}
+
+/// 子级 filter 内一层嵌套关系下钻 → 嵌套 `EXISTS`（相关子查询挂在子表 `c` 上，不扇出），
+/// 跨后端归一一致；参数顺序与 SQL 文本占位符一致（嵌套 filter 值在前、HAVING 常量在后）。
+#[test]
+fn dialect_relation_predicate_nested_exists() {
+    let (cmd, reg) = rp_nested_cmd(json!({
+        "items": { "$filter": { "addons.price": { "$gt": 10 } }, "$count": { "$gt": 1 } }
+    }));
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let out = translate(backend, &cmd, &reg).expect("translate");
+        assert_eq!(
+            out["unsupported"].as_array().map(|a| a.len()),
+            Some(0),
+            "[{backend:?}] 嵌套关系下钻应完全下推: {out}"
+        );
+        let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+        let norm = normalize(text);
+        assert!(
+            norm.contains("exists (select 1 from order_items c where c.orderid = orders._id")
+                || norm.contains("exists (select 1 from order_items c where c.orderid = t._id"),
+            "[{backend:?}] 外层应为 EXISTS 相关子查询: {text}"
+        );
+        assert!(
+            norm.contains("and exists (select 1 from order_addons n0 where n0.itemid = c._id and n0.price > ?)"),
+            "[{backend:?}] 内层应为嵌套 EXISTS（挂在 c 上）: {text}"
+        );
+        assert!(
+            norm.contains("group by c.orderid having count(*) > ?"),
+            "[{backend:?}] 外层应为 GROUP BY + HAVING: {text}"
+        );
+        let params = out["stmts"][0]["params"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(params, vec![json!(10), json!(1)], "[{backend:?}] {out}");
+    }
+}
+
+/// 嵌套条件与子级标量 filter 并存：标量走子表 `c`、嵌套走孙表 `n0`，参数顺序与文本一致。
+#[test]
+fn dialect_relation_predicate_nested_with_scalar_sibling() {
+    let (cmd, reg) = rp_nested_cmd(json!({
+        "items": {
+            "$filter": { "sku": "x", "addons.price": { "$gt": 10 } },
+            "$count": { "$gt": 1 }
+        }
+    }));
+    let out = translate(Backend::Postgres, &cmd, &reg).expect("translate");
+    let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("c.\"sku\" = $1"),
+        "子级标量 filter 应留在子表 c 上: {text}"
+    );
+    assert!(
+        text.contains("n0.\"price\" > $2"),
+        "嵌套 filter 应落在孙表 n0 上: {text}"
+    );
+    assert_eq!(
+        out["stmts"][0]["params"],
+        json!(["x", 10, 1]),
+        "参数顺序须与 SQL 文本占位符一致（子级标量 → 嵌套 filter → HAVING）: {out}"
+    );
+}
+
 // ─── §9.7 布尔归一 / PG 浮点字面量类型标注（场景矩阵暴露的两个跨后端缺口）──
 
 /// §9.7「布尔归一」：schema 的 `boolean` 字段在 SQL 侧存为 `0/1`（MySQL `TINYINT(1)`、

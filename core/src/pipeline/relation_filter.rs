@@ -34,6 +34,31 @@ use super::util::{collect_having_agg_refs, non_nullish};
 /// `as` 形态：`__rp{序号}__{关系名}`（关系名用于在目标 schema 上定位 `RelationDef`）。
 pub const REL_PRED_PREFIX: &str = "__rp";
 
+/// 嵌套关系 `$lookup.as` 前缀（8c-2）：关系谓词 `filter` 内下钻子 schema 的关系时，
+/// 内层 `$lookup` 的 `as` 形态为 `__rn{序号}__{关系名}`（关系名在**子 schema** 上定位
+/// `RelationDef`；SQL 侧据此识别并翻译为嵌套 `EXISTS`）。
+pub const REL_NESTED_PREFIX: &str = "__rn";
+
+/// 嵌套关系过滤（关系谓词 `filter` 内下钻子 schema 的关系，如 `items.price`）—— §4.1 #4 → 8c-2。
+///
+/// 语义：子行（关系目标）**再**满足其自身某个关系的条件（一层），
+/// Mongo 侧走内层 `$lookup` + 点号路径（数组 ANY）；SQL 侧走嵌套 `EXISTS`（不扇出）。
+#[derive(Debug, Clone)]
+pub struct NestedRelFilter {
+    /// 子 schema 的关系名（如 `items`）
+    pub rel_name: String,
+    /// Mongo 内层 `$lookup.as`（`__rn{序号}__{关系名}`）
+    pub as_name: String,
+    /// 该嵌套关系的目标 model
+    pub model: String,
+    /// 该嵌套关系的本地键（父 = 子 schema 表的字段）
+    pub local_field: String,
+    /// 该嵌套关系的外键（孙表字段）
+    pub foreign_field: String,
+    /// 该层下的条件（字段键为**去前缀**路径，如 `price` / `meta.level`）
+    pub filter: Value,
+}
+
 /// 比较算子白名单（谓词值形状 `{ "$of"?: field, "<比较算子>": value }`）
 const CMP_OPS: [&str; 6] = ["$gt", "$gte", "$lt", "$lte", "$eq", "$ne"];
 
@@ -50,8 +75,10 @@ pub struct RelPredicate {
     pub local_field: String,
     /// 关系外键（子表标量列，子 pipeline `$group` 键）
     pub foreign_field: String,
-    /// 子级过滤（仅标量域）；None = 无
+    /// 子级过滤（已剥离嵌套关系路径；仅标量 / 对象点号路径 / 数组整值）；None = 无
     pub filter: Option<Value>,
+    /// 子级过滤中的嵌套关系下钻（一层；8c-2）
+    pub nested: Vec<NestedRelFilter>,
     /// 本块聚合别名 → 聚合定义（仅保留 having 引用到的）
     pub agg: Vec<(String, AggDef)>,
     /// 谓词条件（仅可引用本块 agg 别名）
@@ -101,6 +128,16 @@ pub fn plan(
             let rel_schema = registry.get(&p.model)?;
             if let Some(filter) = &p.filter {
                 check_filter_readable(rel_schema, ctx, filter)?;
+            }
+            // 8c-2：嵌套关系下钻 —— 嵌套关系本身（R6）与其字段（F3）都要过读权限
+            for n in &p.nested {
+                if let Some(readable) = get_readable_relations(rel_schema, ctx) {
+                    if !readable.contains(&n.rel_name) {
+                        return Err(ERR_PERMISSION.to_string());
+                    }
+                }
+                let nested_schema = registry.get(&n.model)?;
+                check_filter_readable(nested_schema, ctx, &n.filter)?;
             }
             for (_, def) in &p.agg {
                 if let Some(field) = &def.field {
@@ -241,11 +278,16 @@ fn build_pred(
         .iter()
         .any(|k| obj.contains_key(*k));
     let profile = registry.profile();
-    let (filter, agg, having, extra_neg) = if is_main {
-        parse_main(rel_schema, rel_name, obj, profile)?
+    let (filter, mut nested, agg, having, extra_neg) = if is_main {
+        parse_main(rel_schema, registry, rel_name, obj, profile)?
     } else {
-        parse_simple(rel_schema, rel_name, obj, profile)?
+        parse_simple(rel_schema, registry, rel_name, obj, profile)?
     };
+
+    // 内层 `$lookup.as` 编号（单个关系谓词内局部唯一；SQL 侧据此前缀识别嵌套条件）
+    for (i, n) in nested.iter_mut().enumerate() {
+        n.as_name = format!("{}{}__{}", REL_NESTED_PREFIX, i, n.rel_name);
+    }
 
     let as_name = format!("{}{}__{}", REL_PRED_PREFIX, preds.len(), rel_name);
     preds.push(RelPredicate {
@@ -255,6 +297,7 @@ fn build_pred(
         local_field: rel_def.local_field.clone(),
         foreign_field: rel_def.foreign_field.clone(),
         filter,
+        nested,
         agg,
         having,
         negated: negated ^ extra_neg,
@@ -262,12 +305,22 @@ fn build_pred(
     Ok(())
 }
 
-/// 关系聚合谓词解析结果：`(filter?, agg, having, negated)`
-type ParsedRelPredicate = Result<(Option<Value>, Vec<(String, AggDef)>, Value, bool), String>;
+/// 关系聚合谓词解析结果：`(filter?, nested, agg, having, negated)`
+type ParsedRelPredicate = Result<
+    (
+        Option<Value>,
+        Vec<NestedRelFilter>,
+        Vec<(String, AggDef)>,
+        Value,
+        bool,
+    ),
+    String,
+>;
 
 /// 主形式：`{ filter?, agg, having }`
 fn parse_main(
     rel_schema: &Schema,
+    registry: &Registry,
     rel_name: &str,
     obj: &Map<String, Value>,
     profile: Profile,
@@ -287,10 +340,19 @@ fn parse_main(
             "关系聚合谓词 \"{rel_name}\" 的 having 必须是条件对象"
         ));
     }
-    let filter = non_nullish(obj.get("filter")).cloned();
-    if let Some(f) = &filter {
-        validate_pred_filter(rel_schema, rel_name, f, profile)?;
-    }
+    let mut nested: Vec<NestedRelFilter> = Vec::new();
+    let filter = match non_nullish(obj.get("filter")).cloned() {
+        Some(f) => non_empty_obj(parse_pred_filter(
+            rel_schema,
+            registry,
+            rel_name,
+            &f,
+            profile,
+            &mut nested,
+            false,
+        )?),
+        None => None,
+    };
 
     // agg：省略无法推导 having 引用的算子/字段 → Err（绝不臆测）
     let agg_v = non_nullish(obj.get("agg")).ok_or_else(|| {
@@ -322,23 +384,32 @@ fn parse_main(
         .into_iter()
         .filter(|(a, _)| refs.contains(a))
         .collect();
-    Ok((filter, agg, having, false))
+    Ok((filter, nested, agg, having, false))
 }
 
 /// 简写形式：可选 `$filter` ＋ 恰好一个聚合谓词
 fn parse_simple(
     rel_schema: &Schema,
+    registry: &Registry,
     rel_name: &str,
     obj: &Map<String, Value>,
     profile: Profile,
 ) -> ParsedRelPredicate {
     let mut filter: Option<Value> = None;
+    let mut nested: Vec<NestedRelFilter> = Vec::new();
     let mut ops: Vec<(&String, &Value)> = Vec::new();
     for (k, v) in obj {
         if k == "$filter" {
             if !v.is_null() {
-                validate_pred_filter(rel_schema, rel_name, v, profile)?;
-                filter = Some(v.clone());
+                filter = non_empty_obj(parse_pred_filter(
+                    rel_schema,
+                    registry,
+                    rel_name,
+                    v,
+                    profile,
+                    &mut nested,
+                    false,
+                )?);
             }
         } else if k == "$exists" || AGG_OPS.contains(&k.as_str()) {
             ops.push((k, v));
@@ -361,6 +432,7 @@ fn parse_simple(
                 .ok_or_else(|| format!("关系聚合谓词 \"{rel_name}\" 的 $exists 必须是布尔"))?;
             Ok((
                 filter,
+                nested,
                 vec![(
                     "n".to_string(),
                     AggDef {
@@ -379,6 +451,7 @@ fn parse_simple(
             }
             Ok((
                 filter,
+                nested,
                 vec![(
                     "n".to_string(),
                     AggDef {
@@ -397,6 +470,7 @@ fn parse_simple(
             validate_scalar_field(rel_schema, rel_name, &f)?;
             Ok((
                 filter,
+                nested,
                 vec![(
                     "v".to_string(),
                     AggDef {
@@ -496,31 +570,44 @@ fn check_filter_readable(
     Ok(())
 }
 
-/// 子级过滤（`filter` / `$filter`）键校验 —— **按档分流**（执行文档 §4.1 #4）。
+/// 子级过滤（`filter` / `$filter`）解析 + 校验 —— **按档分流**（执行文档 §4.1 #4）。
+///
+/// 返回**剥离嵌套关系路径后**的过滤（标量 / 对象点号路径 / 数组整值 / 逻辑组），
+/// 并把命中的嵌套关系下钻收集进 `nested`（8c-2，仅一层）。
 ///
 /// `standard` 档：数组字段整值（U1）、对象字段整值（U2）、对象点号路径（U3）放行
 /// （SQL 侧已落 JSON 列并由 `dialect` 翻译，见 8b）；`text2query` 档维持显式 Err（功能收缩）。
-/// 两档一律 Err：关系字段（一级关系谓词内不做嵌套关系下钻）、数组字段索引路径（`tags.0`，
-/// 各后端索引语义不一致）、schema 外字段、操作符键（filter 仅接受字段条件）。
-fn validate_pred_filter(
+/// 两档一律 Err：数组字段索引路径（`tags.0`，各后端索引语义不一致）、schema 外字段、
+/// 操作符键（filter 仅接受字段条件）、**三级关系路径**、**`$or`/`$nor` 内的嵌套关系路径**
+/// （Mongo 点号 ANY 无法与 SQL 的 OR-EXISTS 逐字节对齐 —— 绝不静默近似）。
+fn parse_pred_filter(
     rel_schema: &Schema,
+    registry: &Registry,
     rel_name: &str,
     filter: &Value,
     profile: Profile,
-) -> Result<(), String> {
+    nested: &mut Vec<NestedRelFilter>,
+    in_or: bool,
+) -> Result<Value, String> {
     let Value::Object(m) = filter else {
         return Err(format!(
             "关系聚合谓词 \"{rel_name}\" 的 filter 必须是对象"
         ));
     };
+    let mut out = Map::new();
     for (k, v) in m {
         if matches!(k.as_str(), "$and" | "$or" | "$nor") {
             let arr = v
                 .as_array()
                 .ok_or_else(|| format!("关系聚合谓词 \"{rel_name}\" 的 filter 中 {k} 需要数组"))?;
+            let child_or = in_or || matches!(k.as_str(), "$or" | "$nor");
+            let mut na = Vec::with_capacity(arr.len());
             for it in arr {
-                validate_pred_filter(rel_schema, rel_name, it, profile)?;
+                na.push(parse_pred_filter(
+                    rel_schema, registry, rel_name, it, profile, nested, child_or,
+                )?);
             }
+            out.insert(k.clone(), Value::Array(na));
             continue;
         }
         if k.starts_with('$') {
@@ -528,9 +615,111 @@ fn validate_pred_filter(
                 "关系聚合谓词 \"{rel_name}\" 的 filter 不支持操作符 \"{k}\"（仅字段条件）"
             ));
         }
-        validate_pred_field(rel_schema, rel_name, k, profile)?;
+        let root = k.split('.').next().unwrap_or(k);
+        let Some(rel_def) = rel_schema.relations.get(root) else {
+            validate_pred_field(rel_schema, rel_name, k, profile)?;
+            out.insert(k.clone(), v.clone());
+            continue;
+        };
+        // ── 嵌套关系下钻（8c-2）：仅支持 `关系.字段`，仅一层，且不得出现在 `$or`/`$nor` 内 ──
+        if profile == Profile::Text2Query {
+            return Err(format!(
+                "关系聚合谓词 \"{rel_name}\" 字段 \"{k}\" 是嵌套关系路径\
+                 （8c-2：text2query 档功能收缩）"
+            ));
+        }
+        if in_or {
+            return Err(format!(
+                "关系聚合谓词 \"{rel_name}\" 字段 \"{k}\" 是嵌套关系路径（不支持出现在 $or/$nor 内：\
+                 两端下推语义无法逐字节对齐）"
+            ));
+        }
+        if root == k {
+            return Err(format!(
+                "关系聚合谓词 \"{rel_name}\" 字段 \"{k}\" 是关系引用\
+                 （须写成 关系名.字段 形式，如 \"{root}.<字段>\"）"
+            ));
+        }
+        let rest = &k[root.len() + 1..];
+        let nested_schema = registry.get(&rel_def.model)?;
+        let rest_root = rest.split('.').next().unwrap_or(rest);
+        if nested_schema.relations.contains_key(rest_root) {
+            return Err(format!(
+                "关系聚合谓词 \"{rel_name}\" 字段 \"{k}\" 是三级关系路径（本轮仅支持一层嵌套关系下钻）"
+            ));
+        }
+        validate_pred_field(nested_schema, rel_name, rest, profile)?;
+        let mut cm = Map::new();
+        cm.insert(rest.to_string(), v.clone());
+        let cond = Value::Object(cm);
+        match nested.iter().position(|n| n.rel_name == root) {
+            Some(i) => nested[i].filter = merge_and(&nested[i].filter, &cond),
+            None => nested.push(NestedRelFilter {
+                rel_name: root.to_string(),
+                as_name: String::new(), // 由 build_pred 统一编号
+                model: rel_def.model.clone(),
+                local_field: rel_def.local_field.clone(),
+                foreign_field: rel_def.foreign_field.clone(),
+                filter: cond,
+            }),
+        }
     }
-    Ok(())
+    Ok(Value::Object(out))
+}
+
+/// 剥离嵌套关系路径后可能得到空对象（filter 全为嵌套关系下钻）→ `None`，
+/// 避免在 Mongo `$match` / SQL 子查询 WHERE 里塞入无意义的空条件。
+fn non_empty_obj(v: Value) -> Option<Value> {
+    if v.as_object().map(|m| m.is_empty()).unwrap_or(false) {
+        None
+    } else {
+        Some(v)
+    }
+}
+
+/// 合并两个过滤条件为 `$and`（展平已有顶层 `$and`，避免层层嵌套）
+///
+/// SQL 侧 [`crate::dialect::select::relation_agg`] 剥离嵌套关系前缀键时复用同一合并口径。
+pub(crate) fn merge_and(a: &Value, b: &Value) -> Value {
+    let mut parts: Vec<Value> = Vec::new();
+    let flattened = a
+        .as_object()
+        .filter(|m| m.len() == 1)
+        .and_then(|m| m.get("$and"))
+        .and_then(|v| v.as_array());
+    match flattened {
+        Some(arr) => parts.extend(arr.iter().cloned()),
+        None => parts.push(a.clone()),
+    }
+    parts.push(b.clone());
+    json!({ "$and": parts })
+}
+
+/// 给过滤条件的字段键加前缀（嵌套关系下钻 → `__rn{i}__.`；逻辑组递归）
+fn prefix_filter(v: &Value, prefix: &str) -> Result<Value, String> {
+    match v {
+        Value::Object(m) => {
+            let mut out = Map::new();
+            for (k, val) in m {
+                if matches!(k.as_str(), "$and" | "$or" | "$nor") {
+                    let arr = val
+                        .as_array()
+                        .ok_or_else(|| format!("嵌套关系过滤中 {k} 需要数组"))?;
+                    let mut na = Vec::with_capacity(arr.len());
+                    for it in arr {
+                        na.push(prefix_filter(it, prefix)?);
+                    }
+                    out.insert(k.clone(), Value::Array(na));
+                } else if k.starts_with('$') {
+                    out.insert(k.clone(), val.clone());
+                } else {
+                    out.insert(format!("{}{}", prefix, k), val.clone());
+                }
+            }
+            Ok(Value::Object(out))
+        }
+        other => Ok(other.clone()),
+    }
 }
 
 /// 过滤键的字段形态校验（判定与 `types::validate_condition_shape` 同构，文案带关系名前缀）
@@ -616,6 +805,33 @@ fn build_lookup_stage(
     if let Some(f) = &p.filter {
         ands.push(f.clone());
     }
+    // 8c-2：嵌套关系下钻 —— 内层 `$lookup`（须先于本层 `$match`）+ 条件的字段键加前缀
+    let mut nested_stages: Vec<Value> = Vec::new();
+    for n in &p.nested {
+        let n_schema = registry.get(&n.model)?;
+        let n_is_array = is_array_local_field(rel_schema, &n.local_field);
+        let n_let = format!("nrel_{}", n.local_field);
+        let mut n_match: Vec<Value> = vec![rel_match_expr(&n.foreign_field, &n_let, n_is_array)];
+        // 孙行越权防护（F3：与子行 owner 注入同源）
+        if let Some(owner) = merge_owner_condition(n_schema, ctx, None) {
+            n_match.push(owner);
+        }
+        let n_match_doc = if n_match.len() == 1 {
+            n_match.remove(0)
+        } else {
+            json!({ "$and": n_match })
+        };
+        let mut n_let_map = Map::new();
+        n_let_map.insert(n_let, rel_let_expr(&n.local_field, n_is_array));
+        let mut n_inner = Map::new();
+        n_inner.insert("from".to_string(), Value::String(n_schema.collection.clone()));
+        n_inner.insert("let".to_string(), Value::Object(n_let_map));
+        n_inner.insert("pipeline".to_string(), json!([{ "$match": n_match_doc }]));
+        n_inner.insert("as".to_string(), Value::String(n.as_name.clone()));
+        nested_stages.push(json!({ "$lookup": Value::Object(n_inner) }));
+        // 嵌套条件去前缀路径 → `__rn{i}__.xxx` 点号路径（数组 ANY，与 SQL 嵌套 EXISTS 同语义）
+        ands.push(prefix_filter(&n.filter, &format!("{}.", n.as_name))?);
+    }
     if let Some(owner) = merge_owner_condition(rel_schema, ctx, None) {
         ands.push(owner);
     }
@@ -635,20 +851,20 @@ fn build_lookup_stage(
     let mut let_map = Map::new();
     let_map.insert(let_var, rel_let_expr(&p.local_field, is_array));
 
+    // 子 pipeline：内层 `$lookup`（嵌套关系）→ `$match`（外键 + filter + nested + owner）
+    // → `$group` → `$match`(having)
+    let mut stages: Vec<Value> = nested_stages;
+    stages.push(json!({ "$match": match_doc }));
+    stages.push(json!({ "$group": Value::Object(group_map) }));
+    stages.push(json!({ "$match": p.having.clone() }));
+
     let mut inner = Map::new();
     inner.insert(
         "from".to_string(),
         Value::String(rel_schema.collection.clone()),
     );
     inner.insert("let".to_string(), Value::Object(let_map));
-    inner.insert(
-        "pipeline".to_string(),
-        json!([
-            { "$match": match_doc },
-            { "$group": Value::Object(group_map) },
-            { "$match": p.having.clone() },
-        ]),
-    );
+    inner.insert("pipeline".to_string(), Value::Array(stages));
     inner.insert("as".to_string(), Value::String(p.as_name.clone()));
     Ok(json!({ "$lookup": Value::Object(inner) }))
 }
@@ -656,6 +872,13 @@ fn build_lookup_stage(
 /// 从 `as` 名解析关系名（`__rp{序号}__{关系名}`）
 pub fn rel_name_from_as(as_name: &str) -> Option<&str> {
     let rest = as_name.strip_prefix(REL_PRED_PREFIX)?;
+    let (_, rel) = rest.split_once("__")?;
+    Some(rel)
+}
+
+/// 从嵌套关系 `as` 名解析关系名（`__rn{序号}__{关系名}`，关系名在**子 schema** 上）
+pub fn nested_rel_name_from_as(as_name: &str) -> Option<&str> {
+    let rest = as_name.strip_prefix(REL_NESTED_PREFIX)?;
     let (_, rel) = rest.split_once("__")?;
     Some(rel)
 }
