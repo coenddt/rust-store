@@ -1,6 +1,6 @@
 [package]
 name = "rust-store-core"
-version = "2.3.0"
+version = "2.4.0"
 edition = "2021"
 description = "One data engine for MongoDB, MySQL, PostgreSQL and SQLite: a MongoDB-style GQL query language, permission checks, computed columns, command planning and SQL dialect translation. Pure logic, no IO."
 # license 供 crates.io 展示 SPDX 标识；MIT 原文由同目录 LICENSE 随 .crate 一同分发
