@@ -4,6 +4,16 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 2.5.0 (2026-09-29)
+
+### New Features
+
+- **原生 SQL 语句编译器（`raw_stmt_compile`，`dialect/raw.rs`）**：为宿主 `execute_raw` /
+  `executeRaw` 提供 core 侧唯一实现——位置档（params 为数组/null：SQL 原样透传，对标 SQLAlchemy
+  `exec_driver_sql()`）与命名档（params 为对象：`:name` 按出现顺序编译为方言占位符、参数按引用
+  顺序重排、同名复用，跳过 `::` cast / 引号 / 注释边界，对标 SQLAlchemy `text()`）两档，附读写
+  推断；`core-py` / `core-node` 双绑定透传。
+
 ## 2.3.0 (2026-09-27)
 
 ### New Features
