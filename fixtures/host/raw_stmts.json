@@ -1,0 +1,182 @@
+{
+  "_doc": "Host 同构契约 fixture —— 原生 SQL 语句编译（Rust core compile_raw_stmt / Py raw_stmt_compile / Js rawStmtCompile）。权威消费方：rust-store/core/tests/raw_stmt.rs；双宿主测试本地硬编码对齐用例，不跨仓读此文件。",
+  "_semantics": "params 数组/null=位置档（sql 原样透传）；对象=命名档（:name 编译为方言占位符、按出现顺序重排、同名复用；::、引号内、注释内不编译；缺名/多余名 Err）；isWrite null=按首词推断（SELECT/WITH/EXPLAIN/SHOW/PRAGMA/TABLE→读，其余→写，前导 ( 剥离一层）",
+  "cases": [
+    {
+      "name": "positional-mysql",
+      "backend": "mysql",
+      "sql": "SELECT * FROM t WHERE a = ? AND b = ?",
+      "params": [1, "x"],
+      "isWrite": null,
+      "expected": { "sql": "SELECT * FROM t WHERE a = ? AND b = ?", "params": [1, "x"], "isWrite": false }
+    },
+    {
+      "name": "positional-pg",
+      "backend": "postgres",
+      "sql": "SELECT * FROM t WHERE a = $1 AND b = $2",
+      "params": ["p", "q"],
+      "isWrite": null,
+      "expected": { "sql": "SELECT * FROM t WHERE a = $1 AND b = $2", "params": ["p", "q"], "isWrite": false }
+    },
+    {
+      "name": "positional-sqlite-write",
+      "backend": "sqlite",
+      "sql": "UPDATE t SET a = ? WHERE id = ?",
+      "params": ["v", 1],
+      "isWrite": null,
+      "expected": { "sql": "UPDATE t SET a = ? WHERE id = ?", "params": ["v", 1], "isWrite": true }
+    },
+    {
+      "name": "named-mysql",
+      "backend": "mysql",
+      "sql": "SELECT * FROM t WHERE a = :x AND b = :y",
+      "params": { "x": 1, "y": "s" },
+      "isWrite": null,
+      "expected": { "sql": "SELECT * FROM t WHERE a = ? AND b = ?", "params": [1, "s"], "isWrite": false }
+    },
+    {
+      "name": "named-pg",
+      "backend": "postgres",
+      "sql": "SELECT * FROM t WHERE a = :x AND b = :y",
+      "params": { "x": 1, "y": "s" },
+      "isWrite": null,
+      "expected": { "sql": "SELECT * FROM t WHERE a = $1 AND b = $2", "params": [1, "s"], "isWrite": false }
+    },
+    {
+      "name": "named-sqlite-write",
+      "backend": "sqlite",
+      "sql": "INSERT INTO t(a) VALUES (:v)",
+      "params": { "v": 9 },
+      "isWrite": null,
+      "expected": { "sql": "INSERT INTO t(a) VALUES (?)", "params": [9], "isWrite": true }
+    },
+    {
+      "name": "named-reuse-pg",
+      "backend": "postgres",
+      "sql": "SELECT :k + :k AS s",
+      "params": { "k": 5 },
+      "isWrite": null,
+      "expected": { "sql": "SELECT $1 + $2 AS s", "params": [5, 5], "isWrite": false }
+    },
+    {
+      "name": "named-pg-cast",
+      "backend": "postgres",
+      "sql": "SELECT :x::text AS t",
+      "params": { "x": "a" },
+      "isWrite": null,
+      "expected": { "sql": "SELECT $1::text AS t", "params": ["a"], "isWrite": false }
+    },
+    {
+      "name": "quoted-single-literal",
+      "backend": "mysql",
+      "sql": "SELECT * FROM t WHERE a = ':' AND b = :x",
+      "params": { "x": 1 },
+      "isWrite": null,
+      "expected": { "sql": "SELECT * FROM t WHERE a = ':' AND b = ?", "params": [1], "isWrite": false }
+    },
+    {
+      "name": "quoted-double-ident",
+      "backend": "postgres",
+      "sql": "SELECT \"a:b\" FROM t WHERE c = :x",
+      "params": { "x": 1 },
+      "isWrite": null,
+      "expected": { "sql": "SELECT \"a:b\" FROM t WHERE c = $1", "params": [1], "isWrite": false }
+    },
+    {
+      "name": "line-comment-colon",
+      "backend": "mysql",
+      "sql": "SELECT 1 -- :skip here\nFROM t WHERE a = :x",
+      "params": { "x": 1 },
+      "isWrite": null,
+      "expected": { "sql": "SELECT 1 -- :skip here\nFROM t WHERE a = ?", "params": [1], "isWrite": false }
+    },
+    {
+      "name": "block-comment-colon",
+      "backend": "postgres",
+      "sql": "SELECT /* :skip */ :x FROM t",
+      "params": { "x": "v" },
+      "isWrite": null,
+      "expected": { "sql": "SELECT /* :skip */ $1 FROM t", "params": ["v"], "isWrite": false }
+    },
+    {
+      "name": "named-jsonb-op-pg",
+      "backend": "postgres",
+      "sql": "SELECT :v::jsonb ? 'k' FROM t",
+      "params": { "v": "{}" },
+      "isWrite": null,
+      "expected": { "sql": "SELECT $1::jsonb ? 'k' FROM t", "params": ["{}"], "isWrite": false }
+    },
+    {
+      "name": "named-empty-object",
+      "backend": "postgres",
+      "sql": "SELECT 1",
+      "params": {},
+      "isWrite": null,
+      "expected": { "sql": "SELECT 1", "params": [], "isWrite": false }
+    },
+    {
+      "name": "named-missing",
+      "backend": "mysql",
+      "sql": "SELECT * FROM t WHERE a = :x",
+      "params": {},
+      "isWrite": null,
+      "error": "未在 params 中提供"
+    },
+    {
+      "name": "named-unused",
+      "backend": "mysql",
+      "sql": "SELECT 1",
+      "params": { "x": 1, "y": 2 },
+      "isWrite": null,
+      "error": "未使用的命名参数"
+    },
+    {
+      "name": "params-scalar",
+      "backend": "mysql",
+      "sql": "SELECT 1",
+      "params": 5,
+      "isWrite": null,
+      "error": "仅支持数组（位置档）或对象（命名档）"
+    },
+    {
+      "name": "infer-read",
+      "backend": "mysql",
+      "sql": "EXPLAIN SELECT 1",
+      "params": null,
+      "isWrite": null,
+      "expected": { "sql": "EXPLAIN SELECT 1", "params": [], "isWrite": false }
+    },
+    {
+      "name": "infer-unknown-write",
+      "backend": "postgres",
+      "sql": "VACUUM ANALYZE t",
+      "params": null,
+      "isWrite": null,
+      "expected": { "sql": "VACUUM ANALYZE t", "params": [], "isWrite": true }
+    },
+    {
+      "name": "infer-empty",
+      "backend": "mysql",
+      "sql": "   ",
+      "params": null,
+      "isWrite": null,
+      "error": "原生 SQL 文本为空"
+    },
+    {
+      "name": "explicit-write-overrides-read",
+      "backend": "mysql",
+      "sql": "SELECT * FROM t",
+      "params": null,
+      "isWrite": true,
+      "expected": { "sql": "SELECT * FROM t", "params": [], "isWrite": true }
+    },
+    {
+      "name": "infer-leading-paren",
+      "backend": "postgres",
+      "sql": "(WITH c AS (SELECT 1 AS n) SELECT n FROM c)",
+      "params": null,
+      "isWrite": null,
+      "expected": { "sql": "(WITH c AS (SELECT 1 AS n) SELECT n FROM c)", "params": [], "isWrite": false }
+    }
+  ]
+}

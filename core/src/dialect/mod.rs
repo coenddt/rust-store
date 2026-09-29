@@ -17,6 +17,7 @@ pub mod filter;
 pub mod introspect;
 pub mod ir;
 pub mod overlay;
+pub mod raw;
 pub mod row;
 pub mod select;
 pub mod translate;
@@ -25,6 +26,7 @@ pub mod write;
 // 保持对外路径稳定：`crate::dialect::*` 直接可用（函数与其同名模块共存）
 pub use introspect::{introspect_to_schema_json, schema_def_from_rows};
 pub use overlay::merge_schema;
+pub use raw::{compile_raw_stmt, RawStmt};
 pub use row::restore_rows_json;
 pub use translate::translate;
 
