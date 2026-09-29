@@ -38,6 +38,8 @@ export declare class Registry {
   schemaFromRows(rows: any, backend: string): any
   /** 合并 introspected 基础 schema 与本地 overlay（权限 / 计算列 / 覆盖） */
   mergeSchema(base: any, overlay: any): any
+  /** 原生 SQL 语句编译：位置档透传 / 命名档 `:name` 编译 + 读写推断（C4；js 端 `rawStmtCompile`） */
+  rawStmtCompile(backend: string, text: string, params: any, isWrite?: boolean | undefined | null): any
   /**
    * 生成联邦计划：按 schema 的 `(datasource, namespace)` 与数据源 kind 把一条 GQL
    * 拆成「各源命令序列 + 内存 join 边」；Host 逐源执行命令后调 `mergeFederated`

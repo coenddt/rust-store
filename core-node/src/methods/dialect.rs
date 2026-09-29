@@ -5,6 +5,7 @@ use napi_derive::napi;
 use serde_json::Value;
 
 use rust_store_core::dialect::{
+    compile_raw_stmt as core_compile_raw_stmt,
     introspect_to_schema_json as core_introspect_to_schema_json, merge_schema as core_merge_schema,
     restore_rows_json as core_restore_rows_json, translate as core_dialect_translate, Backend,
 };
@@ -40,5 +41,23 @@ impl Registry {
     #[napi]
     pub fn merge_schema(&self, base: Value, overlay: Value) -> Result<Value> {
         core_merge_schema(&base, &overlay).map_err(err)
+    }
+
+    /// 原生 SQL 语句编译：位置档透传 / 命名档 `:name` 编译 + 读写推断（C4；js 端 `rawStmtCompile`）
+    #[napi]
+    pub fn raw_stmt_compile(
+        &self,
+        backend: String,
+        text: String,
+        params: Value,
+        is_write: Option<bool>,
+    ) -> Result<Value> {
+        let backend = Backend::parse(&backend).map_err(err)?;
+        let stmt = core_compile_raw_stmt(backend, &text, params, is_write).map_err(err)?;
+        Ok(serde_json::json!({
+            "sql": stmt.sql,
+            "params": stmt.params,
+            "isWrite": stmt.is_write,
+        }))
     }
 }
