@@ -1,0 +1,20 @@
+[package]
+name = "rust-store"
+version = "0.1.0"
+edition = "2021"
+description = "Pure-Rust host for rust-store-core: drives IO (SQLite via sqlx in v0) on top of the shared GQL engine — the Rust sibling of nodejs-store / py-store."
+license = "MIT"
+repository = "https://github.com/coenddt/rust-store"
+
+[lib]
+name = "rust_store"
+path = "src/lib.rs"
+
+[dependencies]
+rust-store-core = { path = "../core" }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+tokio = { version = "1", features = ["rt", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
