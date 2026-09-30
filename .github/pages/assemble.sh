@@ -54,6 +54,8 @@ find "$SRC/use-cases" -name '*.md' -print0 | xargs -0 sed -i \
 sed -i \
   -e "s#](README\.zh-CN\.md)#](https://github.com/${REPO_SLUG}/blob/${BRANCH}/README.zh-CN.md)#g" \
   -e "s#](LICENSE)#](https://github.com/${REPO_SLUG}/blob/${BRANCH}/LICENSE)#g" \
+  -e "s#](doc/transaction-capabilities\.md)#](https://github.com/${REPO_SLUG}/blob/${BRANCH}/doc/transaction-capabilities.md)#g" \
+  -e "s#](doc/transaction-capabilities\.zh-CN\.md)#](https://github.com/${REPO_SLUG}/blob/${BRANCH}/doc/transaction-capabilities.zh-CN.md)#g" \
   -e 's#](doc/use-cases/)#](use-cases/)#g' \
   "$SRC/readme.md"
 

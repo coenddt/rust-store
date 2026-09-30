@@ -4,6 +4,27 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 2.6.0 (2026-09-30)
+
+### Added
+
+- **mutation 关系谓词归一**（`command/mutate`）：条件含关系名时经 `relation_filter::plan`
+  （含 R6/F3 读权限）产 preCommand（aggregate：`$lookup` 挂数组 + `$match` 代理键 + `$_id`
+  投影），主命令条件改写为 `_id $in`（占位由宿主回填）；`parse_simple` 新增整值条件对象糖
+  （无 `$` 键 ≡ `$filter` + `$exists: true`；含 `$` 键走原解析，J 组负例文案不变）。
+- **自增主键契约**：`FieldDef.strategy`（仅 `autoincrement`，注册期校验）；`needs_new_id`
+  对 autoincrement 恒 false；`build_insert_doc` 放行无 `_id` 文档；SQL INSERT 自动追加
+  `RETURNING _id`（支持 RETURNING 的后端）；`apply_defaults_and_computes` 对 autoincrement
+  `_id` 跳过类型默认值（`int→0` 会伪装「已赋值」）；归档派生剔除该策略。
+- **`$group by` one 关系路径**：`validate_by_key` 放行 one 关系路径（many 显式 Err）；
+  Mongo 侧 `build_stages` 发射 `$lookup`+`$unwind(preserve)`；SQL 侧 `translate_group`
+  生成 `LEFT JOIN g_<rel>` 聚合（空匹配归 NULL 组，语义对齐）。
+
+### 证据
+
+core 单测 158/158；场景 e2e（`manager-transaction` 9 × 4 × 双宿主）与 course-platform 回归
+（101 × 4 × 双宿主）全绿。宿主侧用户可见变更见各自仓库 CHANGELOG。
+
 ## 2.5.0 (2026-09-29)
 
 ### New Features
