@@ -48,16 +48,6 @@ pub enum PoolConn {
     Postgres(Box<sqlx::pool::PoolConnection<sqlx::Postgres>>),
 }
 
-/// 事务句柄：裸连接 + 直发 BEGIN/COMMIT/ROLLBACK（sqlx Transaction 借用连接，
-/// 无法与枚举变体共存；直发语句与其内部实现同构）。
-/// 契约：commit / rollback 必须显式调用；Drop 不兜底——
-/// 未提交即丢弃的路径由调用方先 rollback（禁把打开事务还给池）。
-pub enum Txn {
-    Sqlite(Box<PoolConn>),
-    Mysql(Box<PoolConn>),
-    Postgres(Box<PoolConn>),
-}
-
 impl Pool {
     pub async fn acquire(&self) -> Result<PoolConn, String> {
         Ok(match self {
@@ -66,58 +56,6 @@ impl Pool {
             Pool::Postgres(p) => PoolConn::Postgres(Box::new(p.acquire().await.map_err(|e| e.to_string())?)),
         })
     }
-
-    pub async fn begin(&self) -> Result<Txn, String> {
-        let mut conn = self.acquire().await?;
-        let stmt = "BEGIN";
-        let res = match &mut conn {
-            PoolConn::Sqlite(c) => sqlx::raw_sql(stmt).execute(&mut ***c).await.map(|_| ()),
-            PoolConn::Mysql(c) => sqlx::raw_sql(stmt).execute(&mut ***c).await.map(|_| ()),
-            PoolConn::Postgres(c) => sqlx::raw_sql(stmt).execute(&mut ***c).await.map(|_| ()),
-        };
-        res.map_err(|e| format!("开启事务失败: {e}"))?;
-        Ok(match conn {
-            PoolConn::Sqlite(_) => Txn::Sqlite(Box::new(conn)),
-            PoolConn::Mysql(_) => Txn::Mysql(Box::new(conn)),
-            PoolConn::Postgres(_) => Txn::Postgres(Box::new(conn)),
-        })
-    }
-}
-
-impl Txn {
-    pub fn conn(&mut self) -> Conn<'_> {
-        match &mut *self.handle() {
-            PoolConn::Sqlite(c) => Conn::Sqlite(&mut ***c),
-            PoolConn::Mysql(c) => Conn::Mysql(&mut ***c),
-            PoolConn::Postgres(c) => Conn::Postgres(&mut ***c),
-        }
-    }
-
-    fn handle(&mut self) -> &mut PoolConn {
-        match self {
-            Txn::Sqlite(c) | Txn::Mysql(c) | Txn::Postgres(c) => c,
-        }
-    }
-
-    pub async fn commit(self) -> Result<(), String> {
-        exec_tx_ctl(self, "COMMIT").await
-    }
-
-    pub async fn rollback(self) -> Result<(), String> {
-        exec_tx_ctl(self, "ROLLBACK").await
-    }
-}
-
-async fn exec_tx_ctl(tx: Txn, stmt: &str) -> Result<(), String> {
-    let mut conn = match tx {
-        Txn::Sqlite(c) | Txn::Mysql(c) | Txn::Postgres(c) => c,
-    };
-    let res = match &mut *conn {
-        PoolConn::Sqlite(c) => sqlx::raw_sql(stmt).execute(&mut ***c).await.map(|_| ()),
-        PoolConn::Mysql(c) => sqlx::raw_sql(stmt).execute(&mut ***c).await.map(|_| ()),
-        PoolConn::Postgres(c) => sqlx::raw_sql(stmt).execute(&mut ***c).await.map(|_| ()),
-    };
-    res.map_err(|e| format!("事务控制语句 {stmt} 失败: {e}"))
 }
 
 /// 可执行连接（借用视图）

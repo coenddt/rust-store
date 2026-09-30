@@ -30,6 +30,52 @@ use sqlx::SqlitePool;
 
 pub use exec::REL_PRED_IDS;
 
+/// 归档 + 删除事务段（sqlx 原生 Transaction，按后端宏生成三份）。
+/// 归档命令由同步闭包 `make_archive` 依 find 结果在事务内生成（core 纯逻辑，持 registry 读锁）。
+/// 任意一步失败：显式 rollback 并原样上抛（禁「已删未归档」静默失守）。
+macro_rules! run_remove_tx {
+    ($fn_name:ident, $conn_ty:ty, $variant:ident) => {
+        async fn $fn_name(
+            conn: &mut $conn_ty,
+            find: Option<&exec::Translated>,
+            make_archive: &mut (dyn FnMut(&[Value]) -> Result<Option<exec::Translated>, String> + Send),
+            delete: &exec::Translated,
+        ) -> Result<(u64, u64), String> {
+            use sqlx::Connection as _;
+            let mut tx = conn.begin().await.map_err(|e| format!("开启事务失败: {e}"))?;
+            let seq = async {
+                let mut archived: u64 = 0;
+                if let Some(t) = find {
+                    let outcome = exec::exec_translated(exec::Conn::$variant(&mut *tx), t).await?;
+                    if !outcome.docs.is_empty() {
+                        if let Some(arch) = make_archive(&outcome.docs)? {
+                            let a = exec::exec_translated(exec::Conn::$variant(&mut *tx), &arch).await?;
+                            archived = a.changes;
+                        }
+                    }
+                }
+                let deleted = exec::exec_translated(exec::Conn::$variant(&mut *tx), delete).await?.changes;
+                Ok((deleted, archived))
+            }
+            .await;
+            match seq {
+                Ok(v) => {
+                    tx.commit().await.map_err(|e| format!("事务提交失败: {e}"))?;
+                    Ok(v)
+                }
+                Err(e) => {
+                    let _ = tx.rollback().await;
+                    Err(e)
+                }
+            }
+        }
+    };
+}
+
+run_remove_tx!(run_remove_tx_sqlite, sqlx::SqliteConnection, Sqlite);
+run_remove_tx!(run_remove_tx_mysql, sqlx::MySqlConnection, Mysql);
+run_remove_tx!(run_remove_tx_pg, sqlx::PgConnection, Postgres);
+
 /// 纯 Rust 宿主。`Registry` 用 RwLock 包裹：注册期写、运行期读（plan/translate/finalize 全是 &Registry）。
 pub struct Store {
     registry: RwLock<Registry>,
@@ -270,7 +316,20 @@ impl Store {
 
     /// 删除（归档编排：find 源文档 → plan_archive_docs 写归档表 → deleteMany；
     /// 关系谓词条件先执行 preCommand 取命中 `_id`。返回 `{deletedCount, archivedCount}`）
-    pub async fn remove(
+    ///
+    /// 返回类型显式 BoxFuture：事务借用链（Txn→Conn 枚举）在 async-trait 的
+    /// `Box<dyn Future + Send>` 泛化检查下触发保守误报（"not general enough"），
+    /// 显式具体化 future + Send 边界，调用方（如 store-api 适配层）即可直接 await。
+    pub fn remove<'a>(
+        &'a self,
+        schema_name: &'a str,
+        condition: &'a Value,
+        ctx: Option<&'a Context>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send + 'a>> {
+        Box::pin(self.remove_inner(schema_name, condition, ctx))
+    }
+
+    async fn remove_inner(
         &self,
         schema_name: &str,
         condition: &Value,
@@ -312,38 +371,37 @@ impl Store {
         }
 
         // 归档 + 删除编排：同一事务内顺序执行（对齐 nodejs write.js:167-168 runAtomic）——
-        // 归档落库与源删除原子生效，任一步失败显式回滚（禁「已删未归档」的静默失守）
-        let mut tx = self.pool.begin().await?;
-        let mut archived_count: u64 = 0;
-
-        let find_command = plan.get("findCommand").cloned().filter(|v| !v.is_null());
-        if let Some(find_cmd) = find_command {
-            let translated = exec::translate_command(self.backend, &find_cmd, &self.registry)?;
-            let outcome = exec::exec_translated(tx.conn(), &translated).await?;
-            if !outcome.docs.is_empty() {
-                let archive_plan = {
-                    let reg = self.read_reg()?;
-                    plan_archive_docs(schema_name, &reg, &outcome.docs, id::now())?
-                };
-                if let Some(arch_cmd) = archive_plan.get("command").cloned() {
-                    let translated = exec::translate_command(self.backend, &arch_cmd, &self.registry)?;
-                    let arch = exec::exec_translated(tx.conn(), &translated).await?;
-                    archived_count = arch.changes;
-                }
-            }
-        }
-
-        let translated = exec::translate_command(self.backend, &delete_command, &self.registry)?;
-        let outcome = match exec::exec_translated(tx.conn(), &translated).await {
-            Ok(o) => o,
-            Err(e) => {
-                // 失败路径显式回滚（Txn Drop 不兜底，禁把打开事务还给池）
-                let _ = tx.rollback().await;
-                return Err(e);
+        // 归档落库与源删除原子生效，任一步失败显式回滚（禁「已删未归档」的静默失守）。
+        // 事务按后端宏分派（sqlx 原生 Transaction；归档命令由同步闭包在事务内依 find 结果生成）
+        let find_translated = match plan.get("findCommand").cloned().filter(|v| !v.is_null()) {
+            Some(cmd) => Some(exec::translate_command(self.backend, &cmd, &self.registry)?),
+            None => None,
+        };
+        let delete_translated = exec::translate_command(self.backend, &delete_command, &self.registry)?;
+        let (backend, registry) = (&self.backend, &self.registry);
+        let mut make_archive = move |docs: &[Value]| -> Result<Option<exec::Translated>, String> {
+            let archive_plan =
+                exec::with_registry(registry, |reg| plan_archive_docs(schema_name, reg, docs, id::now()))?;
+            match archive_plan.get("command").cloned() {
+                Some(cmd) if !cmd.is_null() => exec::translate_command(*backend, &cmd, registry).map(Some),
+                _ => Ok(None),
             }
         };
-        let deleted_count = outcome.changes;
-        tx.commit().await?;
+
+        let (deleted_count, archived_count) = match &self.pool {
+            Pool::Sqlite(p) => {
+                let mut conn = p.acquire().await.map_err(|e| e.to_string())?;
+                run_remove_tx_sqlite(&mut *conn, find_translated.as_ref(), &mut make_archive, &delete_translated).await
+            }
+            Pool::Mysql(p) => {
+                let mut conn = p.acquire().await.map_err(|e| e.to_string())?;
+                run_remove_tx_mysql(&mut *conn, find_translated.as_ref(), &mut make_archive, &delete_translated).await
+            }
+            Pool::Postgres(p) => {
+                let mut conn = p.acquire().await.map_err(|e| e.to_string())?;
+                run_remove_tx_pg(&mut *conn, find_translated.as_ref(), &mut make_archive, &delete_translated).await
+            }
+        }?;
 
         Ok(json!({
             "deletedCount": deleted_count,
