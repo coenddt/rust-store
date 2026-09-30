@@ -4,9 +4,9 @@
 //! 驱动 IO（v0：SQLite via sqlx）、供给 now 与 new_id（core 无时钟无随机源）、
 //! 归档与两阶段等命令序列编排。
 //!
-//! v0 范围（诚实声明）：单 SQLite 源的 query / query_one / insert / update / remove；
-//! 两阶段查询、探针重入、归档编排（归档+删除事务化）已实现；
-//! Mongo 源、MySQL/PG 连接、联邦与 mutation 步骤编排属后续阶段。
+//! v1 范围（诚实声明）：单 SQL 源（SQLite / MySQL / PostgreSQL）的 query / query_one /
+//! insert / update / remove；两阶段查询、探针重入、归档编排（归档+删除事务化）已实现；
+//! Mongo 源、联邦与 mutation 步骤编排属后续阶段。
 
 pub mod exec;
 pub mod id;
@@ -14,6 +14,7 @@ pub mod id;
 use std::sync::RwLock;
 
 use crate::id::now_ms;
+use exec::Pool;
 
 use rust_store_core::command::{
     finalize_query, plan_archive_docs, plan_insert, plan_query, plan_query_one, plan_remove,
@@ -23,36 +24,63 @@ use rust_store_core::dialect::Backend;
 use rust_store_core::permission::Context;
 use rust_store_core::schema::Registry;
 use serde_json::{json, Map, Value};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{Connection as _, SqlitePool};
+use sqlx::MySqlPool;
+use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 pub use exec::REL_PRED_IDS;
 
 /// 纯 Rust 宿主。`Registry` 用 RwLock 包裹：注册期写、运行期读（plan/translate/finalize 全是 &Registry）。
 pub struct Store {
     registry: RwLock<Registry>,
-    pool: SqlitePool,
+    pool: Pool,
     backend: Backend,
     rng: RwLock<u64>,
 }
 
 impl Store {
-    /// 连接一个 SQLite 数据库（`sqlite://path.db` 或 `sqlite::memory:`）
-    pub async fn connect_sqlite(url: &str) -> Result<Self, String> {
-        let opts: SqliteConnectOptions = url
-            .parse()
-            .map_err(|e| format!("SQLite 连接串非法: {e}"))?;
-        let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect_with(opts)
-            .await
-            .map_err(|e| format!("SQLite 连接失败: {e}"))?;
+    /// 连接一个数据源，按 URL scheme 分派后端：
+    /// `sqlite://…`/`sqlite::memory:` → SQLite；`mysql://…` → MySQL；`postgres://…`/`postgresql://…` → PG。
+    pub async fn connect(url: &str) -> Result<Self, String> {
+        let pool = if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+            Pool::Postgres(
+                PgPool::connect(url)
+                    .await
+                    .map_err(|e| format!("PostgreSQL 连接失败: {e}"))?,
+            )
+        } else if url.starts_with("mysql://") {
+            Pool::Mysql(
+                MySqlPool::connect(url)
+                    .await
+                    .map_err(|e| format!("MySQL 连接失败: {e}"))?,
+            )
+        } else if url.starts_with("sqlite:") {
+            Pool::Sqlite(
+                SqlitePool::connect(url)
+                    .await
+                    .map_err(|e| format!("SQLite 连接失败: {e}"))?,
+            )
+        } else {
+            return Err(format!(
+                "无法识别的数据源 URL（{url}）：支持 sqlite:// / mysql:// / postgres://"
+            ));
+        };
+        let backend = match pool {
+            Pool::Sqlite(_) => Backend::Sqlite,
+            Pool::Mysql(_) => Backend::Mysql,
+            Pool::Postgres(_) => Backend::Postgres,
+        };
         Ok(Store {
             registry: RwLock::new(Registry::new()),
             pool,
-            backend: Backend::Sqlite,
+            backend,
             rng: RwLock::new(now_ms() as u64 ^ 0x9E3779B97F4A7C15),
         })
+    }
+
+    /// 连接 SQLite（`Store::connect` 的 SQLite 便捷入口，行为等价）
+    pub async fn connect_sqlite(url: &str) -> Result<Self, String> {
+        Self::connect(url).await
     }
 
     /// 注册一个 schema 定义（与 nodejs-store `store.register(defn)` 同一 JSON 契约；
@@ -73,12 +101,50 @@ impl Store {
     }
 
     /// 底层连接池（DDL / 维护脚本逃生口；日常读写走 Store API）
-    pub fn sqlite_pool(&self) -> &SqlitePool {
+    pub fn pool(&self) -> &Pool {
         &self.pool
+    }
+
+    /// SQLite 连接池（仅 SQLite 源；其余后端显式报错，禁静默返回空池）
+    pub fn sqlite_pool(&self) -> Result<&SqlitePool, String> {
+        match &self.pool {
+            Pool::Sqlite(p) => Ok(p),
+            _ => Err("非 SQLite 源：请改用 pool() 并按后端类型访问".to_string()),
+        }
+    }
+
+    /// 在本源上原样执行维护语句（DDL / 清理脚本逃生口；逐条执行，任何失败显式报错）
+    pub async fn execute_ddl(&self, stmts: &[&str]) -> Result<(), String> {
+        let mut conn = self.pool.acquire().await.map_err(|e| e.to_string())?;
+        for s in stmts {
+            let outcome = exec::exec_translated(
+                conn.conn(),
+                &exec::Translated {
+                    stmts: vec![exec::SqlStmtJson {
+                        text: (*s).to_string(),
+                        params: Vec::new(),
+                        is_write: !s.trim().to_uppercase().starts_with("SELECT"),
+                        row_shape: Value::Null,
+                        returning: Vec::new(),
+                    }],
+                },
+            )
+            .await?;
+            let _ = outcome;
+        }
+        Ok(())
     }
 
     pub fn list_schemas(&self) -> Vec<String> {
         exec::with_registry(&self.registry, |reg| Ok(reg.list())).unwrap_or_default()
+    }
+
+    /// schema 的标量字段名列表（注册顺序；供 HTTP 适配层生成显式投影——
+    /// GQL 无投影的契约语义是「只返回 _id」，见 core compute_keep）
+    pub fn schema_fields(&self, schema_name: &str) -> Result<Vec<String>, String> {
+        exec::with_registry(&self.registry, |reg| {
+            Ok(reg.get(schema_name)?.fields.keys().cloned().collect())
+        })
     }
 
     /// GQL 查询（列表）。
@@ -101,7 +167,7 @@ impl Store {
 
         // ② 执行第一条
         let mut conn = self.pool.acquire().await.map_err(|e| e.to_string())?;
-        let outcome = exec::exec_translated(&mut conn, &translated).await?;
+        let outcome = exec::exec_translated(conn.conn(), &translated).await?;
 
         // ③ 两阶段：第一阶段取 ids → 替换占位符 → 执行第二阶段 → 还原排序
         if plan.mode == rust_store_core::command::Mode::TwoPhase {
@@ -113,7 +179,7 @@ impl Store {
                 .ok_or_else(|| "TwoPhase 计划缺少第二条命令".to_string())?;
             exec::substitute_ids(&mut second, PHASE1_IDS, &ids);
             let t1 = exec::translate_command(self.backend, &second, &self.registry)?;
-            let o1 = exec::exec_translated(&mut conn, &t1).await?;
+            let o1 = exec::exec_translated(conn.conn(), &t1).await?;
             let mut items = o1.docs;
             exec::with_registry(&self.registry, |_reg| {
                 restore_sort_order(&mut items, &ids, plan.sort.as_ref());
@@ -140,7 +206,7 @@ impl Store {
         };
         let translated = exec::translate_command(self.backend, &plan.commands[0], &self.registry)?;
         let mut conn = self.pool.acquire().await.map_err(|e| e.to_string())?;
-        let outcome = exec::exec_translated(&mut conn, &translated).await?;
+        let outcome = exec::exec_translated(conn.conn(), &translated).await?;
         drop(conn);
         let items = outcome.docs;
         let items = self.finalize(plan.postprocess.as_ref(), items, ctx).await?;
@@ -171,7 +237,7 @@ impl Store {
 
         let mut conn = self.pool.acquire().await.map_err(|e| e.to_string())?;
         let translated = exec::translate_command(self.backend, &command, &self.registry)?;
-        let outcome = exec::exec_translated(&mut conn, &translated).await?;
+        let outcome = exec::exec_translated(conn.conn(), &translated).await?;
         drop(conn);
 
         // autoincrement：INSERT ... RETURNING _id → 回读补入 returns（对齐 nodejs write.js:22-35）
@@ -197,7 +263,7 @@ impl Store {
         let command = self.plan_update_with_probe(schema_name, condition, data, ctx, now).await?;
         let mut conn = self.pool.acquire().await.map_err(|e| e.to_string())?;
         let translated = exec::translate_command(self.backend, &command, &self.registry)?;
-        let outcome = exec::exec_translated(&mut conn, &translated).await?;
+        let outcome = exec::exec_translated(conn.conn(), &translated).await?;
         drop(conn);
         Ok(outcome.docs.into_iter().next())
     }
@@ -235,7 +301,7 @@ impl Store {
         if let Some(pre_cmd) = pre {
             let translated = exec::translate_command(self.backend, &pre_cmd, &self.registry)?;
             let mut conn = self.pool.acquire().await.map_err(|e| e.to_string())?;
-            let outcome = exec::exec_translated(&mut conn, &translated).await?;
+            let outcome = exec::exec_translated(conn.conn(), &translated).await?;
             drop(conn);
             let ids = exec::extract_ids(&outcome.docs);
             if let Some(obj) = delete_command.as_object_mut() {
@@ -246,15 +312,14 @@ impl Store {
         }
 
         // 归档 + 删除编排：同一事务内顺序执行（对齐 nodejs write.js:167-168 runAtomic）——
-        // 归档落库与源删除原子生效，任一步失败整体回滚（禁「已删未归档」的静默失守）
-        let mut conn = self.pool.acquire().await.map_err(|e| e.to_string())?;
-        let mut tx = conn.begin().await.map_err(|e| format!("开启事务失败: {e}"))?;
+        // 归档落库与源删除原子生效，任一步失败显式回滚（禁「已删未归档」的静默失守）
+        let mut tx = self.pool.begin().await?;
         let mut archived_count: u64 = 0;
 
         let find_command = plan.get("findCommand").cloned().filter(|v| !v.is_null());
         if let Some(find_cmd) = find_command {
             let translated = exec::translate_command(self.backend, &find_cmd, &self.registry)?;
-            let outcome = exec::exec_translated(&mut tx, &translated).await?;
+            let outcome = exec::exec_translated(tx.conn(), &translated).await?;
             if !outcome.docs.is_empty() {
                 let archive_plan = {
                     let reg = self.read_reg()?;
@@ -262,17 +327,23 @@ impl Store {
                 };
                 if let Some(arch_cmd) = archive_plan.get("command").cloned() {
                     let translated = exec::translate_command(self.backend, &arch_cmd, &self.registry)?;
-                    let arch = exec::exec_translated(&mut tx, &translated).await?;
+                    let arch = exec::exec_translated(tx.conn(), &translated).await?;
                     archived_count = arch.changes;
                 }
             }
         }
 
         let translated = exec::translate_command(self.backend, &delete_command, &self.registry)?;
-        let outcome = exec::exec_translated(&mut tx, &translated).await?;
+        let outcome = match exec::exec_translated(tx.conn(), &translated).await {
+            Ok(o) => o,
+            Err(e) => {
+                // 失败路径显式回滚（Txn Drop 不兜底，禁把打开事务还给池）
+                let _ = tx.rollback().await;
+                return Err(e);
+            }
+        };
         let deleted_count = outcome.changes;
-        tx.commit().await.map_err(|e| format!("事务提交失败: {e}"))?;
-        drop(conn);
+        tx.commit().await?;
 
         Ok(json!({
             "deletedCount": deleted_count,
@@ -346,7 +417,7 @@ impl Store {
     async fn run_probe(&self, probe_cmd: &Value) -> Result<Option<Value>, String> {
         let translated = exec::translate_command(self.backend, probe_cmd, &self.registry)?;
         let mut conn = self.pool.acquire().await.map_err(|e| e.to_string())?;
-        let outcome = exec::exec_translated(&mut conn, &translated).await?;
+        let outcome = exec::exec_translated(conn.conn(), &translated).await?;
         drop(conn);
         Ok(outcome.docs.into_iter().next())
     }

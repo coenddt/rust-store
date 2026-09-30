@@ -24,7 +24,7 @@ async fn fresh_store() -> Store {
         .expect("注册失败");
     // SQL 后端每表必建 __present 哨兵列（存「显式存在字段集合」；见 nodejs-store/src/ddl.js:10
     // 与 core dialect/write/insert.rs::present_value —— dialect 层物理契约）
-    let pool = store.sqlite_pool();
+    let pool = store.sqlite_pool().expect("SQLite 源");
     sqlx::query("CREATE TABLE \"user\" (_id TEXT PRIMARY KEY, name TEXT, age REAL, createdAt INTEGER, updatedAt INTEGER, \"__present\" TEXT)")
         .execute(pool)
         .await
@@ -65,7 +65,7 @@ async fn insert_query_update_remove_e2e() {
 
     // query_one：命中
     let one = store
-        .query_one("user($condition: @c0)", &params(&[("c0", json!({ "_id": uid.clone() }))]), None)
+        .query_one("user($condition: @c0) { name, age }", &params(&[("c0", json!({ "_id": uid.clone() }))]), None)
         .await
         .expect("query_one 失败");
     assert!(one.is_some());
@@ -100,14 +100,14 @@ async fn insert_query_update_remove_e2e() {
 
     // 删除后查不到
     let after = store
-        .query_one("user($condition: @c0)", &params(&[("c0", json!({ "_id": uid }))]), None)
+        .query_one("user($condition: @c0) { name, age }", &params(&[("c0", json!({ "_id": uid }))]), None)
         .await
         .expect("query 失败");
     assert!(after.is_none());
 
     // 归档表有记录（直接 SQL 验证）
     let archived: (String,) = sqlx::query_as("SELECT name FROM \"user_deleted\" LIMIT 1")
-        .fetch_one(store.sqlite_pool())
+        .fetch_one(store.sqlite_pool().expect("SQLite 源"))
         .await
         .expect("归档表查询失败");
     assert_eq!(archived.0, "alice");

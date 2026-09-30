@@ -13,8 +13,12 @@ path = "src/lib.rs"
 [dependencies]
 rust-store-core = { path = "../core" }
 serde_json = "1"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "mysql", "postgres"] }
 tokio = { version = "1", features = ["rt", "time"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[features]
+# 真实 MySQL/PG e2e 门控（需本机可用的 e2e 库；CI 用 service containers 时开启）
+real-db = []
