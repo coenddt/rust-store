@@ -5,8 +5,8 @@
 //! 归档与两阶段等命令序列编排。
 //!
 //! v0 范围（诚实声明）：单 SQLite 源的 query / query_one / insert / update / remove；
-//! 两阶段查询、探针重入、归档编排已实现；Mongo 源、事务化 remove、
-//! MySQL/PG 连接、联邦与 mutation 步骤编排属后续阶段。
+//! 两阶段查询、探针重入、归档编排（归档+删除事务化）已实现；
+//! Mongo 源、MySQL/PG 连接、联邦与 mutation 步骤编排属后续阶段。
 
 pub mod exec;
 pub mod id;
@@ -24,7 +24,7 @@ use rust_store_core::permission::Context;
 use rust_store_core::schema::Registry;
 use serde_json::{json, Map, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::SqlitePool;
+use sqlx::{Connection as _, SqlitePool};
 
 pub use exec::REL_PRED_IDS;
 
@@ -245,14 +245,16 @@ impl Store {
             }
         }
 
-        // 归档 + 删除编排（单一连接顺序执行；事务化在后续阶段补齐）
+        // 归档 + 删除编排：同一事务内顺序执行（对齐 nodejs write.js:167-168 runAtomic）——
+        // 归档落库与源删除原子生效，任一步失败整体回滚（禁「已删未归档」的静默失守）
         let mut conn = self.pool.acquire().await.map_err(|e| e.to_string())?;
+        let mut tx = conn.begin().await.map_err(|e| format!("开启事务失败: {e}"))?;
         let mut archived_count: u64 = 0;
 
         let find_command = plan.get("findCommand").cloned().filter(|v| !v.is_null());
         if let Some(find_cmd) = find_command {
             let translated = exec::translate_command(self.backend, &find_cmd, &self.registry)?;
-            let outcome = exec::exec_translated(&mut conn, &translated).await?;
+            let outcome = exec::exec_translated(&mut tx, &translated).await?;
             if !outcome.docs.is_empty() {
                 let archive_plan = {
                     let reg = self.read_reg()?;
@@ -260,15 +262,16 @@ impl Store {
                 };
                 if let Some(arch_cmd) = archive_plan.get("command").cloned() {
                     let translated = exec::translate_command(self.backend, &arch_cmd, &self.registry)?;
-                    let arch = exec::exec_translated(&mut conn, &translated).await?;
+                    let arch = exec::exec_translated(&mut tx, &translated).await?;
                     archived_count = arch.changes;
                 }
             }
         }
 
         let translated = exec::translate_command(self.backend, &delete_command, &self.registry)?;
-        let outcome = exec::exec_translated(&mut conn, &translated).await?;
+        let outcome = exec::exec_translated(&mut tx, &translated).await?;
         let deleted_count = outcome.changes;
+        tx.commit().await.map_err(|e| format!("事务提交失败: {e}"))?;
         drop(conn);
 
         Ok(json!({

@@ -1,0 +1,17 @@
+[package]
+name = "rust-store-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "rust-store 的 C ABI 绑定（go-store 宿主用）：JSON 字符串边界 + FnRegistry 回调桥"
+publish = false
+
+[lib]
+name = "rust_store_ffi"
+crate-type = ["cdylib"]
+# 对拍测试在 go-store 的 Go 测试里跑（纯 Go 侧可脱离 Node/Python 宿主加载本 cdylib），
+# Rust 侧无独立单测 —— 与 core-node 同策略，关闭 lib test。
+test = false
+
+[dependencies]
+rust-store-core = { path = "../core" }
+serde_json = "1"
