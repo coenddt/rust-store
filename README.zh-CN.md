@@ -27,6 +27,7 @@
 - [后端与方言](#后端与方言)
 - [权限模型](#权限模型)
 - [测试与对拍](#测试与对拍)
+- [事务型能力](#事务型能力)
 - [边界与常见坑](#边界与常见坑)
 - [FAQ](#faq)
 - [相关项目](#相关项目)
@@ -301,6 +302,23 @@ schema 级 `read` / `write`、字段级 `field.read` / `field.write`、关系级
 - 权限上下文是**显式入参**（`ctx`）—— 这是与旧隐式 `AsyncLocalStorage` 风格设计的刻意差异。
 
 面向 AI 查询宿主的接入守卫：`timestamps` 值校验（仅 `true` / `false` / `"ms"` / `"s"`，非法值注册即报错）与联邦 `degraded` 事件（`{code, layer, message, hint}`，见 `plan.degraded`），令无法下推的跨源分页/排序绝不静默阻断查询。守卫测试见 `core/tests/guards.rs`。
+
+## 事务型能力
+
+面向事务型业务（订单、库存——写竞争 + 复杂读）的引擎层能力增补，由两个宿主共享：
+mutation 关系谓词（含整值条件糖）、自增主键、`$group by` one 关系路径。
+引擎说明、代码路径与 parity 守护：
+**[doc/transaction-capabilities.zh-CN.md](doc/transaction-capabilities.zh-CN.md)** ·
+[English](doc/transaction-capabilities.md).
+
+- mutation 条件命中已声明关系时归一为 preCommand（SQL 侧 → `EXISTS`，Mongo 侧原生命令）
+  + `_id $in`——修复此前 MongoDB 侧的静默 no-op。
+- `_id: {strategy: "autoincrement"}` 的 schema 绕过宿主 ID 供给；支持的 SQL 后端 INSERT
+  追加 `RETURNING _id`；`int → 0` 隐式默认不再作用于该列。
+- `$group by` 接受 one 关系路径（Mongo `$lookup`+`$unwind`、SQL `LEFT JOIN`）；many 路径
+  显式报错。
+- 双宿主 DDL 生成器（逐字节一致）现在还会从 `schema.indexes` 产出
+  `CREATE [UNIQUE] INDEX`。
 
 ## 测试与对拍
 

@@ -11,7 +11,8 @@ use crate::schema::Registry;
 use crate::types::{validate_condition, validate_condition_shape};
 
 use super::{
-    build_raw_update, build_set_data, has_raw_operators, is_blank_condition, needs_new_id, IdCursor,
+    build_raw_update, build_set_data, has_raw_operators, is_blank_condition, needs_new_id,
+    plan_rel_pred_mutation, IdCursor,
 };
 
 /// 批量插入（对应 JS `insertMany`）。
@@ -99,6 +100,24 @@ pub fn plan_update_many(
         }
         json!({ "$set": Value::Object(set_data) })
     };
+
+    // 关系谓词条件（阶段1 T1-02）：条件含 schema 关系名 → 归一为
+    // preCommand（aggregate 取命中 `_id`）+ `_id $in` 改写条件。
+    // SQL 侧 preCommand 翻译为 EXISTS（§9.6 下推），主命令 `_id $in` 是标量条件；
+    // Mongo 侧两段原生命令直接可执行 —— 修复原「关系谓词被静默忽略为 no-op」。
+    if condition
+        .as_object()
+        .map(|m| m.keys().any(|k| schema.relations.contains_key(k)))
+        .unwrap_or(false)
+    {
+        let pre = plan_rel_pred_mutation(schema, registry, ctx, condition)?;
+        let rewritten = pre.condition;
+        let mut command = cmd_update_many(schema, &rewritten, &update_doc);
+        if let Some(obj) = command.as_object_mut() {
+            obj.insert("preCommand".to_string(), pre.lookup_command);
+        }
+        return Ok(json!({ "command": command }));
+    }
 
     let command = cmd_update_many(schema, condition, &update_doc);
     Ok(json!({ "command": command }))

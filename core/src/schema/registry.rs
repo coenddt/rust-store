@@ -298,6 +298,7 @@ fn add_timestamp_fields(fields: &mut HashMap<String, FieldDef>) {
             read: None,
             write: None,
             fields: None,
+            strategy: None,
         });
     }
 }
@@ -447,6 +448,13 @@ fn archive_defn(obj: &Map<String, Value>, name: &str, collection: &str) -> Value
         .cloned()
         .unwrap_or_default();
     arch_fields.insert("deletedAt".to_string(), json!({ "type": "number" }));
+    // 剔除 `_id` 的自增策略：归档表显式拷贝源行 `_id` 值（upsert-by-_id 幂等），
+    // 不走数据库自增；DDL 侧也据此保持归档表 `_id` 为普通主键列
+    if let Some(idf) = arch_fields.get_mut("_id") {
+        if let Some(o) = idf.as_object_mut() {
+            o.remove("strategy");
+        }
+    }
     let mut arch = json!({
         "name": format!("{}Deleted", name),
         "collection": format!("{}_deleted", collection),

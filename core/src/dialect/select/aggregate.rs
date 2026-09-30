@@ -479,6 +479,7 @@ pub(super) fn translate_aggregate(
         let stmt = group_agg::translate_group(
             backend,
             schema,
+            registry,
             &spec,
             &root_matches,
             group_having.as_ref(),

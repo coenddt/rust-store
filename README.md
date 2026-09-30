@@ -30,6 +30,7 @@
 - [Backends and dialects](#backends-and-dialects)
 - [Permission model](#permission-model)
 - [Testing and parity](#testing-and-parity)
+- [Transactional capabilities](#transactional-capabilities)
 - [Boundaries and gotchas](#boundaries-and-gotchas)
 - [FAQ](#faq)
 - [Related projects](#related-projects)
@@ -303,6 +304,24 @@ Schema-level `read` / `write`, field-level `field.read` / `field.write`, relatio
 - The permission context is an **explicit parameter** (`ctx`) — this is a deliberate difference from older implicit `AsyncLocalStorage`-style designs.
 
 Guarding helpers for AI query hosts: `timestamps` value validation (only `true` / `false` / `"ms"` / `"s"`, invalid values fail at registration) and federation `degraded` events (`{code, layer, message, hint}`, returned in `plan.degraded`) so non-pushdownable cross-source pagination/sort never blocks a query silently. See `core/tests/guards.rs`.
+
+## Transactional capabilities
+
+Engine-side additions for transactional workloads (relation predicates in mutations with
+plain-condition sugar, autoincrement primary keys, `$group by` one-relation paths), shared
+by both hosts. Engine notes, code paths and parity guardrails:
+**[doc/transaction-capabilities.md](doc/transaction-capabilities.md)** ·
+[中文](doc/transaction-capabilities.zh-CN.md).
+
+- Mutation conditions referencing a declared relation normalize into a preCommand
+  (aggregate → `EXISTS` on SQL, native on Mongo) plus `_id $in` — fixing the previous
+  silent no-op on the MongoDB side.
+- `_id: {strategy: "autoincrement"}` schemas bypass host ID supply; SQL INSERTs gain
+  `RETURNING _id` where supported, and implicit `int → 0` defaults no longer apply.
+- `$group by` accepts `one`-relation paths (`$lookup`+`$unwind` on Mongo, `LEFT JOIN` on
+  SQL); `many` paths fail explicitly.
+- Host DDL generators (byte-identical across hosts) now also emit `CREATE [UNIQUE] INDEX`
+  from `schema.indexes`.
 
 ## Testing and parity
 

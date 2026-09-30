@@ -184,6 +184,7 @@ fn agg_expr(backend: Backend, schema: &Schema, a: &GroupAggCol) -> Result<String
 pub(super) fn translate_group(
     backend: Backend,
     schema: &Schema,
+    registry: &crate::schema::Registry,
     spec: &GroupSpec,
     root_matches: &[Value],
     having: Option<&Value>,
@@ -194,9 +195,48 @@ pub(super) fn translate_group(
     param_seq: &mut usize,
     warnings: &mut Vec<String>,
 ) -> Result<SqlStmt, String> {
-    // ── 分组键 → 本表标量列 ──
+    // ── 分组键 → 本表标量列 / one 关系路径列（阶段1 T1-03） ──
+    // 关系路径 by 键（`product.category`）→ `LEFT JOIN <rel 表> g_<rel> ON g.fk = t.local`
+    // + 表达式 `g_<rel>.<col>`（LEFT JOIN 空匹配 → NULL 组，与 Mongo preserveNullAndEmptyArrays
+    // 对齐）。仅 one 关系（many 扇出破坏计数语义，规划层已 Err）。
+    let mut join_sql = String::new();
     let mut keys: Vec<(String, String)> = Vec::new(); // (输出名, SQL 表达式)
+    let mut joined_rels: Vec<(&str, &crate::schema::RelationDef)> = Vec::new();
     for k in &spec.keys {
+        if let Some((head, rest)) = k.field.split_once('.') {
+            if let Some(rel) = schema.relations.get(head) {
+                if rel.rel_type != "one" {
+                    return Err(format!(
+                        "SQL 后端不支持 $group 的 by 键 \"{}\"（many 关系路径扇出会破坏聚合语义）",
+                        k.field
+                    ));
+                }
+                let rel_schema = registry.get(&rel.model)?;
+                let col = scalar_column(rel_schema, rest).ok_or_else(|| {
+                    format!(
+                        "SQL 后端无法把 $group 的 by 键 \"{}\" 映射到关系 \"{}\" 的标量列",
+                        k.field, head
+                    )
+                })?;
+                if !joined_rels.iter().any(|(n, _)| *n == head) {
+                    let g_alias = q(backend, &format!("g_{}", head));
+                    join_sql.push_str(&format!(
+                        " LEFT JOIN {} {} ON {}.{} = t.{}",
+                        tname(backend, rel_schema),
+                        g_alias,
+                        g_alias,
+                        q(backend, &rel.foreign_field),
+                        q(backend, &rel.local_field),
+                    ));
+                    joined_rels.push((head, rel));
+                }
+                keys.push((
+                    k.out.clone(),
+                    format!("{}.{}", q(backend, &format!("g_{}", head)), q(backend, &col)),
+                ));
+                continue;
+            }
+        }
         let col = scalar_column(schema, &k.field).ok_or_else(|| {
             format!(
                 "SQL 后端无法把 $group 的 by 键 \"{}\" 映射到本表标量列（object/array 点号路径未映射为列）",
@@ -376,10 +416,11 @@ pub(super) fn translate_group(
     params.extend(limit_params);
 
     let text = format!(
-        "SELECT {} FROM {}{}{}{}{}{}",
+        "SELECT {} FROM {}{}{}{}{}{}{}",
         cols_sql.join(", "),
         tname(backend, schema),
         " t",
+        &join_sql,
         where_sql,
         group_sql,
         having_sql,

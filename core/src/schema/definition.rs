@@ -15,6 +15,10 @@ pub struct FieldDef {
     pub write: Option<Vec<String>>,
     /// 嵌套 object 字段的原始定义（未规范化，与 JS 保持一致）
     pub fields: Option<Value>,
+    /// ID 供给策略（阶段2）：仅 `_id` 字段有意义 —— `"autoincrement"` = 数据库自增列
+    /// 赋值（SQL 后端），宿主不生成、core 不注入 `_id`；Mongo 后端无自增语义，
+    /// 执行器对此显式报错（AUTOINCREMENT_NOT_SUPPORTED）。其余值非法（注册期校验）。
+    pub strategy: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +85,14 @@ impl Schema {
     pub fn ns(&self) -> Option<&str> {
         self.namespace.as_deref().filter(|s| !s.is_empty())
     }
+
+    /// `_id` 是否声明 `strategy: "autoincrement"`（阶段2：数据库自增主键）
+    pub fn id_is_autoincrement(&self) -> bool {
+        self.fields
+            .get("_id")
+            .and_then(|f| f.strategy.as_deref())
+            == Some("autoincrement")
+    }
 }
 
 /// 规范化 fields 定义（字符串简写 → `{type, required:false}`）
@@ -98,6 +110,7 @@ pub(super) fn normalize_fields(v: Option<&Value>) -> Result<HashMap<String, Fiel
                 read: None,
                 write: None,
                 fields: None,
+                strategy: None,
             }
         } else if let Some(o) = val.as_object() {
             FieldDef {
@@ -111,6 +124,16 @@ pub(super) fn normalize_fields(v: Option<&Value>) -> Result<HashMap<String, Fiel
                 read: str_list(o.get("read")),
                 write: str_list(o.get("write")),
                 fields: o.get("fields").filter(|v| is_truthy(v)).cloned(),
+                strategy: match o.get("strategy").and_then(|v| v.as_str()) {
+                    None => None,
+                    Some(v @ "autoincrement") => Some(v.to_string()),
+                    // no-error-masking：未知策略显式拒绝，禁止静默吞掉后按默认行为跑
+                    Some(other) => {
+                        return Err(format!(
+                            "字段 {key} 的 strategy \"{other}\" 非法（仅支持 \"autoincrement\"，且仅限 _id 字段）"
+                        ))
+                    }
+                },
             }
         } else {
             // 非字符串、非对象的定义（如 `fields: { price: 123 }`）= 脏 schema，

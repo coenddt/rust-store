@@ -209,6 +209,8 @@ pub fn build_pipeline(
             non_nullish(root_sort.as_ref()),
             non_nullish(root_skip.as_ref()),
             non_nullish(root_limit.as_ref()),
+            schema,
+            registry,
         )?;
         return Ok(Value::Array(stages));
     }

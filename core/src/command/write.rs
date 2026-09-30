@@ -63,7 +63,12 @@ pub(super) fn build_insert_doc(
     // 无 idPrefix 且无 _id → 显式报错（缺陷 D-03）：静默产出「无 _id 文档」会让
     // Host 返回 _id=undefined，且 Mongo 自动 ObjectId 会触发跨绑定序列化崩溃
     if !doc.get("_id").map(is_truthy).unwrap_or(false) {
-        if !schema.id_prefix.is_empty() {
+        if schema.id_is_autoincrement() {
+            // 阶段2：数据库自增主键 —— doc 不注入 `_id`（SQL INSERT 列白名单来自 doc 键，
+            // 无 `_id` 列即由数据库赋值；PG/SQLite 走 RETURNING 回读、MySQL 走宿主
+            // lastrowid）。Mongo 无自增语义，由宿主 Mongo 执行器对此形态显式报错
+            // （AUTOINCREMENT_NOT_SUPPORTED），禁 ObjectId 静默顶替。
+        } else if !schema.id_prefix.is_empty() {
             doc.insert("_id".to_string(), json!(new_id));
         } else {
             return Err(format!(

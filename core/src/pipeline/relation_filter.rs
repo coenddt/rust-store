@@ -387,7 +387,12 @@ fn parse_main(
     Ok((filter, nested, agg, having, false))
 }
 
-/// 简写形式：可选 `$filter` ＋ 恰好一个聚合谓词
+/// 简写形式：可选 `$filter` ＋ 恰好一个聚合谓词；或**整值条件对象**（阶段1）。
+///
+/// 整值条件对象：`{"<rel>": {"category": "meat"}}` —— spec 全部键都不带 `$` 前缀、
+/// 也不是主形式键（filter/agg/having）时，视为 `$filter: {该对象}` + `$exists: true`
+/// （semi-join 语义糖）。与 query / mutation 的「按关联表字段过滤」自然写法对齐；
+/// 含任何 `$` 键时走原有解析（错误文案保持逐字节不变，守护既有 J 组负例）。
 fn parse_simple(
     rel_schema: &Schema,
     registry: &Registry,
@@ -395,6 +400,41 @@ fn parse_simple(
     obj: &Map<String, Value>,
     profile: Profile,
 ) -> ParsedRelPredicate {
+    // ── 整值条件对象识别（必须在 $ 键检查之前）──
+    let has_dollar = obj.keys().any(|k| k.starts_with('$'));
+    let has_main = ["filter", "agg", "having"]
+        .iter()
+        .any(|k| obj.contains_key(*k));
+    if !has_dollar && !has_main && !obj.is_empty() {
+        let mut nested2: Vec<NestedRelFilter> = Vec::new();
+        // 整对象即 filter：`{"category": "meat"}` → parse_pred_filter 校验字段可翻译性
+        let cond = Value::Object(obj.clone());
+        let f = parse_pred_filter(
+            rel_schema,
+            registry,
+            rel_name,
+            &cond,
+            profile,
+            &mut nested2,
+            false,
+        )?;
+        let f = non_empty_obj(f).ok_or_else(|| {
+            format!("关系聚合谓词 \"{rel_name}\" 的条件对象不能为空")
+        })?;
+        return Ok((
+            Some(f),
+            nested2,
+            vec![(
+                "n".to_string(),
+                AggDef {
+                    op: "$count".to_string(),
+                    field: None,
+                },
+            )],
+            cond_obj("n", "$gt", &json!(0)),
+            false,
+        ));
+    }
     let mut filter: Option<Value> = None;
     let mut nested: Vec<NestedRelFilter> = Vec::new();
     let mut ops: Vec<(&String, &Value)> = Vec::new();

@@ -46,6 +46,10 @@ impl GroupSpec {
 
 /// `by` 键校验：仅标量域（含 object 点号路径）；关系 / 数组 / 裸对象 / schema 外字段 → Err。
 ///
+/// **关系路径 by 键（阶段1 T1-03）**：`by: ["product.category"]`（`product` 为 **one 关系**
+/// 且叶子是目标表标量字段）→ 合法，Mongo 侧由调用方发射 `$lookup` + `$unwind`（one 不扇出，
+/// 行数与计数语义不变）；**many 关系路径扇出行数会破坏 `$count:*` 等聚合语义 → 显式 Err**。
+///
 /// **按档分流**：`by` 键里的 object 点号路径（如 `meta.level`）是
 /// ⚠️ DB 独有能力（仅 MongoDB）：不建议用于业务查询 ——
 ///    会带来跨方言维护的特殊化处理；仅适合数据迁移 / 功能脚本。
@@ -56,6 +60,25 @@ fn validate_by_key(schema: &Schema, key: &str, registry: &Registry) -> Result<()
         return Err(format!(
             "$group 的 by 键 \"{key}\" 是关系名（分组键仅支持标量域，不支持关系字段）"
         ));
+    }
+    // 关系路径（`product.category`）：head 命中关系名 → 校验 one 关系 + 叶子标量
+    if let Some((head, rest)) = key.split_once('.') {
+        if let Some(rel) = schema.relations.get(head) {
+            if rel.rel_type != "one" {
+                return Err(format!(
+                    "$group 的 by 键 \"{key}\" 走 many 关系 \"{}\"（会扇出行数破坏聚合语义；仅支持 one 关系路径）",
+                    head
+                ));
+            }
+            let root = rest.split('.').next().unwrap_or(rest);
+            if !schema_fields_of(registry, &rel.model).contains(&root.to_string()) {
+                return Err(format!(
+                    "$group 的 by 键 \"{key}\" 引用了关系 \"{}\" 的 schema 外字段 \"{root}\"",
+                    head
+                ));
+            }
+            return Ok(());
+        }
     }
     let root = key.split('.').next().unwrap_or(key);
     let Some(fd) = schema.fields.get(root) else {
@@ -74,6 +97,14 @@ fn validate_by_key(schema: &Schema, key: &str, registry: &Registry) -> Result<()
         )),
         _ => Ok(()),
     }
+}
+
+/// 目标 schema 的字段名集（relation 路径 by 键的叶子校验用；未知 model → 空集 → Err）
+fn schema_fields_of(registry: &Registry, model: &str) -> Vec<String> {
+    registry
+        .get(model)
+        .map(|s| s.fields.keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 /// `agg` 字段校验：仅本表标量字段；关系 / 数组 / 对象 / 点号路径 / schema 外字段 → Err
@@ -242,6 +273,11 @@ pub fn validate_having(spec: &GroupSpec, having: &Value) -> Result<(), String> {
 }
 
 /// 构建根级 `$group` 聚合控制（Mongo 阶段数组，含末段投影）
+///
+/// 阶段1 T1-03：by 键含 **one 关系路径**（`product.category`）时，返回
+/// `lookup_stages`（`$lookup` + `$unwind`，one 不扇出行数不变），调用方置于
+/// `$match` / `$group` 之前；by 键在 `$group._id` 与投影里按 `"<rel>.<field>"` 原样
+/// 引用（`$lookup` 已把关联文档并入该键名下）。
 // 聚合阶段构建需 spec / 字段 / 条件 / having / 排序 / 分页等完整上下文，拆结构体反而增加跨模块传递成本
 #[allow(clippy::too_many_arguments)]
 pub fn build_stages(
@@ -253,6 +289,8 @@ pub fn build_stages(
     sort: Option<&Value>,
     skip: Option<&Value>,
     limit: Option<&Value>,
+    schema: &Schema,
+    registry: &Registry,
 ) -> Result<Vec<Value>, String> {
     if !relations_empty {
         return Err(
@@ -299,6 +337,61 @@ pub fn build_stages(
         .collect();
 
     let mut stages: Vec<Value> = Vec::new();
+
+    // one 关系路径 by 键（阶段1 T1-03）：`$lookup` + `$unwind`（one 不扇出，行数不变），
+    // 置于 `$match` 之前 —— `$unwind` 后 by 键 `"<rel>.<field>"` 成为普通点号路径引用。
+    // preserveNullAndEmptyArrays：无匹配行保留（by 键为 null 组，对齐 SQL LEFT JOIN 语义）。
+    let mut rel_by_keys: Vec<(String, &str, String, String)> = Vec::new(); // (by键, rel名, local, foreign)
+    for key in &spec.by {
+        if let Some((head, rest)) = key.split_once('.') {
+            if let Some(rel) = schema.relations.get(head) {
+                rel_by_keys.push((
+                    key.clone(),
+                    head,
+                    rel.local_field.clone(),
+                    rel.foreign_field.clone(),
+                ));
+                let _ = rest;
+            }
+        }
+    }
+    if !rel_by_keys.is_empty() {
+        let mut seen: Vec<&str> = Vec::new();
+        for (key, head, local, foreign) in &rel_by_keys {
+            if seen.contains(head) {
+                continue;
+            }
+            seen.push(head);
+            let rel = &schema.relations[*head];
+            let rel_schema = registry.get(&rel.model)?;
+            let mut let_map = Map::new();
+            let_map.insert(
+                format!("g_{}", head),
+                json!(format!("${}", local)),
+            );
+            let mut inner = Map::new();
+            inner.insert("from".to_string(), json!(rel_schema.collection));
+            inner.insert("let".to_string(), Value::Object(let_map));
+            // 外键匹配：one 关系 local 是标量，`$$g_<head>` 直接等值
+            inner.insert(
+                "pipeline".to_string(),
+                json!([{ "$match": { "$expr": { "$eq": [
+                    format!("${}", foreign),
+                    format!("$$g_{}", head)
+                ] } } }]),
+            );
+            inner.insert("as".to_string(), json!(head));
+            stages.push(json!({ "$lookup": Value::Object(inner) }));
+            stages.push(json!({
+                "$unwind": {
+                    "path": format!("${}", head),
+                    "preserveNullAndEmptyArrays": true
+                }
+            }));
+            let _ = key;
+        }
+    }
+
     if let Some(cond) = non_nullish(condition) {
         validate_condition(cond)?;
         stages.push(json!({ "$match": cond }));

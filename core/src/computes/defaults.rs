@@ -94,8 +94,13 @@ pub fn apply_defaults_and_computes(
     for (key, field) in &schema.fields {
         let absent = obj.get(key).map(|v| v.is_null()).unwrap_or(true);
         if absent {
-            if let Some(defn) = field_default(field) {
-                obj.insert(key.clone(), defn);
+            // 阶段2：autoincrement 主键的缺失 ≠ 类型零值 —— 类型默认（int→0）会把
+            // 「数据库待赋值」伪装成 `_id: 0`，宿主据此误判已回填 → 显式留空，
+            // 由 SQL RETURNING / lastrowid 回读后由宿主回填真实自增值
+            if !(key == "_id" && schema.id_is_autoincrement()) {
+                if let Some(defn) = field_default(field) {
+                    obj.insert(key.clone(), defn);
+                }
             }
         }
         if is_object_field(field) {

@@ -10,7 +10,7 @@
 use serde_json::{json, Map, Value};
 
 use crate::permission::{filter_writable_data, Context};
-use crate::schema::Schema;
+use crate::schema::{Registry, Schema};
 use crate::types::is_truthy;
 
 mod many;
@@ -23,6 +23,47 @@ pub use upsert::plan_upsert;
 pub(in crate::command) use upsert::{
     build_upsert_conditions, build_upsert_update, upsert_one_update,
 };
+
+/// mutation 关系谓词归一（阶段1 T1-02/T1-04）：条件含 schema 关系名时，
+/// 借 §9.6 关系聚合谓词规划（`relation_filter::plan`：读权限 R6/F3 校验 + 代理键改写），
+/// 产出 **preCommand（aggregate 取命中 `_id`）**，主命令条件改写为 `_id $in`。
+///
+/// - SQL 侧：preCommand 由 aggregate 翻译下推为 `EXISTS`（§10.5），主命令 `_id $in`
+///   是标量条件 —— 两段均为既有翻译路径，dialect 层零改动；
+/// - Mongo 侧：两段原生命令直接可执行 —— 修复原「关系谓词被静默忽略为 no-op」；
+/// - `_id $in []`（空集）：各后端均翻译为恒假（不命中任何行），语义 = 无匹配行。
+pub(crate) struct RelPredMutationPlan {
+    pub lookup_command: Value,
+    pub condition: Value,
+}
+
+pub(crate) fn plan_rel_pred_mutation(
+    schema: &Schema,
+    registry: &Registry,
+    ctx: Option<&Context>,
+    condition: &Value,
+) -> Result<RelPredMutationPlan, String> {
+    let Some(plan) = crate::pipeline::plan_relation_filter(schema, registry, ctx, condition)?
+    else {
+        // 调用方仅在确认含关系名键时进入本函数；防御性兜底保持显式
+        return Err("内部错误：关系谓词规划返回 None（拒绝静默）".to_string());
+    };
+    // preCommand pipeline = lookups（挂关系数组）+ $match（代理键改写条件：数组非空 + 标量条件
+    // + 权限注入）+ `$_id` 投影 —— 行集由这一步完整计算。
+    // 主命令条件 = `_id $in` 占位，**不带代理键**：代理键（`__rp….0 $exists`）只属于 preCommand
+    // 的 `$match`；主命令（updateMany/deleteMany 的 SQL 翻译走无关系解析器的 build_filter）
+    // 不识别代理键。Host 执行 preCommand 后以真实 `_id` 列表回填占位；
+    // `$in: []` 空集在各后端语义一致 = 不命中任何行。
+    let mut pipeline = plan.lookups.clone();
+    pipeline.push(serde_json::json!({ "$match": plan.condition }));
+    pipeline.push(serde_json::json!({ "$project": { "_id": 1 } }));
+    let lookup_command = crate::command::cmd::cmd_aggregate(schema, &pipeline);
+    let cond = json!({ "_id": { "$in": "__REL_PRED_IDS__" } });
+    Ok(RelPredMutationPlan {
+        lookup_command,
+        condition: cond,
+    })
+}
 
 // ─── 共享小工具 ──────────────────────────────────────────────
 //
@@ -51,9 +92,12 @@ impl<'a> IdCursor<'a> {
 }
 
 /// data 是否需要由 Host 供给新 `_id`（无有效 `_id` 且 schema 配了 idPrefix；
-/// 对齐 JS `insert`：仅此情形才调用 `_generateId` 消耗随机源）
+/// 对齐 JS `insert`：仅此情形才调用 `_generateId` 消耗随机源）。
+/// 阶段2：`strategy: "autoincrement"` 的 `_id` 由数据库赋值，恒不消耗 Host 随机源。
 pub(in crate::command) fn needs_new_id(schema: &Schema, data: &Value) -> bool {
-    !data.get("_id").map(is_truthy).unwrap_or(false) && !schema.id_prefix.is_empty()
+    !data.get("_id").map(is_truthy).unwrap_or(false)
+        && !schema.id_prefix.is_empty()
+        && !schema.id_is_autoincrement()
 }
 
 /// 空条件判断（R4 / B-10/B-12）：`{}`、`null`、以及空逻辑组（`{"$and":[]}` 等）

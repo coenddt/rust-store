@@ -88,22 +88,48 @@ pub fn plan_remove(
         return Ok(json!({ "needsProbe": cmd }));
     }
 
+    // 关系谓词条件（阶段1 T1-04）：归一为 preCommand（aggregate 取命中 `_id`）+ `_id $in`。
+    // 归档 find 也用改写后条件（`_id $in` 标量条件，Mongo/SQL 双侧直接可执行）。
+    let has_rel_pred = condition
+        .as_object()
+        .map(|m| m.keys().any(|k| schema.relations.contains_key(k)))
+        .unwrap_or(false);
+    let eff_condition = if has_rel_pred {
+        let pre = super::plan_rel_pred_mutation(schema, registry, ctx, condition)?;
+        let mut delete_command = cmd_delete_many(schema, &pre.condition);
+        if let Some(obj) = delete_command.as_object_mut() {
+            obj.insert("preCommand".to_string(), pre.lookup_command);
+        }
+        return Ok(json!({
+            "archiveCollection": if registry.has(&archive_name_of(schema_name)) { json!(registry.get(&archive_name_of(schema_name))?.collection) } else { Value::Null },
+            "findCommand": cmd_find(schema, &pre.condition, None),
+            "deleteCommand": delete_command,
+        }));
+    } else {
+        condition
+    };
+
     let archive_name = format!("{}Deleted", schema_name);
     let (archive_collection, find_command) = if registry.has(&archive_name) {
         let arch = registry.get(&archive_name)?;
         (
             json!(arch.collection),
-            Some(cmd_find(schema, condition, None)),
+            Some(cmd_find(schema, eff_condition, None)),
         )
     } else {
         (Value::Null, None)
     };
-    let delete_command = cmd_delete_many(schema, condition);
+    let delete_command = cmd_delete_many(schema, eff_condition);
     Ok(json!({
         "archiveCollection": archive_collection,
         "findCommand": find_command,
         "deleteCommand": delete_command,
     }))
+}
+
+/// 归档表 schema 名（`<schema>Deleted`；plan_remove 主体与关系谓词分支共用）
+fn archive_name_of(schema_name: &str) -> String {
+    format!("{}Deleted", schema_name)
 }
 
 /// 归档文档命令：源文档补 `deletedAt` 后批量写入 `<collection>_deleted`
