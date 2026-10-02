@@ -161,6 +161,37 @@ impl Store {
         self.read_reg().map(|r| r.rbac().is_some()).unwrap_or(false)
     }
 
+    /// 豁免角色清单（命中者在一切判决环节直接放行）。判决唯一在 core：本方法仅配置注入。
+    pub fn set_exempt_roles(&self, roles: Vec<String>) -> Result<(), String> {
+        let mut w = self
+            .registry
+            .write()
+            .map_err(|_| "registry 写锁中毒".to_string())?;
+        w.set_exempt_roles(roles);
+        Ok(())
+    }
+
+    /// 拒写角色清单（命中者一切写路径拒绝，读不受影响）
+    pub fn set_deny_write_roles(&self, roles: Vec<String>) -> Result<(), String> {
+        let mut w = self
+            .registry
+            .write()
+            .map_err(|_| "registry 写锁中毒".to_string())?;
+        w.set_deny_write_roles(roles);
+        Ok(())
+    }
+
+    /// 未配置姿态（"open" / "closed"）；未知值显式报错（fail-fast）
+    pub fn set_unconfigured_policy(&self, policy: &str) -> Result<(), String> {
+        let p = rust_store_core::permission::UnconfiguredPolicy::from_str_or_err(policy)?;
+        let mut w = self
+            .registry
+            .write()
+            .map_err(|_| "registry 写锁中毒".to_string())?;
+        w.set_unconfigured_policy(p);
+        Ok(())
+    }
+
     /// 底层连接池（DDL / 维护脚本逃生口；日常读写走 Store API）
     pub fn pool(&self) -> &Pool {
         &self.pool
