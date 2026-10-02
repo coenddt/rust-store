@@ -67,6 +67,44 @@ pub enum Doc<'a> {
     Doc(&'a Value),
 }
 
+/// schema 白名单缺失/为空时的默认姿态（设计 §11.2）。
+/// Open = 现状放行语义（guest 读拒已随清单化移除）；Closed = fail-secure（未配置模型读写全拒）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnconfiguredPolicy {
+    #[default]
+    Open,
+    Closed,
+}
+
+impl UnconfiguredPolicy {
+    /// 字符串 → 姿态；未知值 **Err**（禁静默回落 Open，对齐 `Profile::from_str_or_err`）
+    pub fn from_str_or_err(s: &str) -> Result<Self, String> {
+        match s {
+            "open" => Ok(UnconfiguredPolicy::Open),
+            "closed" => Ok(UnconfiguredPolicy::Closed),
+            other => Err(format!("未知 unconfigured_policy: {other}（仅 open / closed）")),
+        }
+    }
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UnconfiguredPolicy::Open => "open",
+            UnconfiguredPolicy::Closed => "closed",
+        }
+    }
+}
+
+/// 角色清单与未配置姿态（判决的全部用户配置输入，无任何隐藏项——设计 §11.3）。
+/// 默认值即「无豁免 / 无拒写 / Open」：清单化后判决 = 白名单 ∧ RBAC 策略 ∧ 本规则。
+#[derive(Debug, Clone, Default)]
+pub struct RoleRules {
+    /// 豁免角色清单：命中者在一切判决环节（静态 + RBAC）直接放行。默认空。
+    pub exempt_roles: Vec<String>,
+    /// 拒写角色清单：命中者一切写路径拒绝（读不受影响）。默认空。
+    pub deny_write_roles: Vec<String>,
+    /// 未配置姿态。默认 Open。
+    pub unconfigured: UnconfiguredPolicy,
+}
+
 /// 评估当前用户是否满足指定角色白名单
 pub fn evaluate(ctx: Option<&Context>, role_list: Option<&[String]>, doc: Doc) -> bool {
     let empty = role_list.map(|r| r.is_empty()).unwrap_or(true);
@@ -245,6 +283,26 @@ fn has_role(ctx: &Context, role: &str) -> bool {
         .as_ref()
         .map(|r| r.iter().any(|x| x == role))
         .unwrap_or(false)
+}
+
+/// 有效角色集：`roles` 非空用之，否则回落单 `role`——对齐 `rbac::effective_roles`
+/// （rbac.rs）与白名单匹配语义。清单命中一律用本函数（不再存在
+/// 「roles 为空则清单失明」的隐形差异）。
+fn effective(c: &Context) -> Vec<String> {
+    match &c.roles {
+        Some(r) if !r.is_empty() => r.clone(),
+        _ => vec![c.role.clone().unwrap_or_default()],
+    }
+}
+
+/// 有效角色集与清单是否有交集
+fn has_any(c: &Context, list: &[String]) -> bool {
+    effective(c).iter().any(|r| list.iter().any(|x| x == r))
+}
+
+/// [`has_any`] 的 crate 内公开包装：command 层写路径复用，避免各调用点手写 effective 归一
+pub(crate) fn has_any_role(c: &Context, list: &[String]) -> bool {
+    has_any(c, list)
 }
 
 // ─── 所有者条件注入 ──────────────────────────────────────────
