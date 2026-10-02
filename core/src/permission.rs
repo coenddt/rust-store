@@ -82,7 +82,9 @@ impl UnconfiguredPolicy {
         match s {
             "open" => Ok(UnconfiguredPolicy::Open),
             "closed" => Ok(UnconfiguredPolicy::Closed),
-            other => Err(format!("未知 unconfigured_policy: {other}（仅 open / closed）")),
+            other => Err(format!(
+                "未知 unconfigured_policy: {other}（仅 open / closed）"
+            )),
         }
     }
     pub fn as_str(&self) -> &'static str {

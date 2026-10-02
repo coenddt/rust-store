@@ -132,7 +132,9 @@ pub fn plan(
             }
             // 8c-2：嵌套关系下钻 —— 嵌套关系本身（R6）与其字段（F3）都要过读权限
             for n in &p.nested {
-                if let Some(readable) = get_readable_relations(registry.role_rules(), rel_schema, ctx) {
+                if let Some(readable) =
+                    get_readable_relations(registry.role_rules(), rel_schema, ctx)
+                {
                     if !readable.contains(&n.rel_name) {
                         return Err(ERR_PERMISSION.to_string());
                     }
@@ -423,9 +425,8 @@ fn parse_simple(
             &mut nested2,
             false,
         )?;
-        let f = non_empty_obj(f).ok_or_else(|| {
-            format!("关系聚合谓词 \"{rel_name}\" 的条件对象不能为空")
-        })?;
+        let f = non_empty_obj(f)
+            .ok_or_else(|| format!("关系聚合谓词 \"{rel_name}\" 的条件对象不能为空"))?;
         return Ok((
             Some(f),
             nested2,

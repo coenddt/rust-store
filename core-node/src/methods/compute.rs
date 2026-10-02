@@ -55,10 +55,12 @@ impl Registry {
     pub fn async_fn_refs(&self, model: String, ctx: Option<Value>) -> Result<Vec<String>> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        Ok(select_async_fns(self.core.role_rules(), schema, context.as_ref())
-            .into_iter()
-            .map(|e| e.fn_ref)
-            .collect())
+        Ok(
+            select_async_fns(self.core.role_rules(), schema, context.as_ref())
+                .into_iter()
+                .map(|e| e.fn_ref)
+                .collect(),
+        )
     }
 
     /// 收集关系依赖并注入 AST，返回 `{relDeps, ast, injectInfo}`

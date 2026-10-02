@@ -371,10 +371,7 @@ pub fn build_stages(
             let rel = &schema.relations[*head];
             let rel_schema = registry.get(&rel.model)?;
             let mut let_map = Map::new();
-            let_map.insert(
-                format!("g_{}", head),
-                json!(format!("${}", local)),
-            );
+            let_map.insert(format!("g_{}", head), json!(format!("${}", local)));
             let mut inner = Map::new();
             inner.insert("from".to_string(), json!(rel_schema.collection));
             inner.insert("let".to_string(), Value::Object(let_map));

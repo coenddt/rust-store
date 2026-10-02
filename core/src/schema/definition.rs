@@ -88,10 +88,7 @@ impl Schema {
 
     /// `_id` 是否声明 `strategy: "autoincrement"`（阶段2：数据库自增主键）
     pub fn id_is_autoincrement(&self) -> bool {
-        self.fields
-            .get("_id")
-            .and_then(|f| f.strategy.as_deref())
-            == Some("autoincrement")
+        self.fields.get("_id").and_then(|f| f.strategy.as_deref()) == Some("autoincrement")
     }
 }
 

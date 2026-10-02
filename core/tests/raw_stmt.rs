@@ -14,7 +14,11 @@ const FIXTURE: &str = include_str!("../../fixtures/host/raw_stmts.json");
 fn fixture_table_driven() {
     let doc: Value = serde_json::from_str(FIXTURE).expect("fixture 应为合法 JSON");
     let cases = doc["cases"].as_array().expect("cases 应为数组");
-    assert!(cases.len() >= 14, "覆盖矩阵 ≥14 例，实际 {} 例", cases.len());
+    assert!(
+        cases.len() >= 14,
+        "覆盖矩阵 ≥14 例，实际 {} 例",
+        cases.len()
+    );
     for case in cases {
         let name = case["name"].as_str().expect("case 缺 name");
         let backend = Backend::parse(case["backend"].as_str().expect("case 缺 backend"))

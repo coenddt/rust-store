@@ -19,7 +19,12 @@ use super::{MAX_DEPTH, MAX_PAGINATED_DEPTH};
 
 /// 关系目标行条件注入（静态 owner ∨ RBAC 行条件，供 `$lookup` 内 `$match` 使用）：
 /// 静态 owner 条件与 RBAC 行条件各自独立追加进 `ands`（同层 $and 语义 = 两引擎 deny-wins）
-fn push_row_conditions(ands: &mut Vec<Value>, rel_schema: &Schema, registry: &Registry, ctx: Option<&Context>) {
+fn push_row_conditions(
+    ands: &mut Vec<Value>,
+    rel_schema: &Schema,
+    registry: &Registry,
+    ctx: Option<&Context>,
+) {
     if let Some(owner) = merge_owner_condition(registry.role_rules(), rel_schema, ctx, None) {
         ands.push(owner);
     }

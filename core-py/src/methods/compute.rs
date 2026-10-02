@@ -60,10 +60,12 @@ impl Registry {
     ) -> PyResult<Vec<String>> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx_from(ctx)?;
-        Ok(select_async_fns(self.core.role_rules(), schema, context.as_ref())
-            .into_iter()
-            .map(|e| e.fn_ref)
-            .collect())
+        Ok(
+            select_async_fns(self.core.role_rules(), schema, context.as_ref())
+                .into_iter()
+                .map(|e| e.fn_ref)
+                .collect(),
+        )
     }
 
     /// 收集关系依赖并注入 AST，返回 `{relDeps, ast, injectInfo}`

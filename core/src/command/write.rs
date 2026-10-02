@@ -3,9 +3,7 @@
 use serde_json::{json, Map, Value};
 
 use crate::computes::{apply_defaults_and_computes, FnRegistry};
-use crate::permission::{
-    can_write_schema, evaluate, merge_owner_condition, Context, Doc,
-};
+use crate::permission::{can_write_schema, evaluate, merge_owner_condition, Context, Doc};
 use crate::rbac::{
     ensure_write, ensure_write_on_doc, filter_writable_data_overlay, merge_row_condition,
     probe_condition_fields, WriteAction,
@@ -264,24 +262,23 @@ pub fn check_write_perm(
                 Some(&probe_projection(&rbac_fields)),
             ))),
             Probe::NoResult => Err(deny_msg.to_string()),
-                Probe::Found(doc) => {
-                    if evaluate(
-                        registry.role_rules(),
-                        Some(c),
-                        schema.write.as_deref(),
-                        Doc::Doc(doc),
-                    ) {
-                        if needs_row_check {
-                            // 静态 creator 过 → RBAC 行级再判（两引擎都过才放行）
-                            ensure_write_on_doc(registry, schema, Some(c), action, doc)
-                                .map(|_| None)
-                        } else {
-                            Ok(None)
-                        }
+            Probe::Found(doc) => {
+                if evaluate(
+                    registry.role_rules(),
+                    Some(c),
+                    schema.write.as_deref(),
+                    Doc::Doc(doc),
+                ) {
+                    if needs_row_check {
+                        // 静态 creator 过 → RBAC 行级再判（两引擎都过才放行）
+                        ensure_write_on_doc(registry, schema, Some(c), action, doc).map(|_| None)
                     } else {
-                        Err(deny_msg.to_string())
+                        Ok(None)
                     }
+                } else {
+                    Err(deny_msg.to_string())
                 }
+            }
         };
     }
     Err(deny_msg.to_string())

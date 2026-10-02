@@ -12,7 +12,11 @@ use super::super::registry::FnRegistry;
 ///
 /// 无 ctx 时全部执行（与 JS 一致：权限过滤仅在 ctx 存在时生效）；
 /// 有 ctx 时 `comp.read` 校验不过的 asyncFn 被跳过。
-pub fn select_async_fns(rules: &RoleRules, schema: &Schema, ctx: Option<&Context>) -> Vec<ComputeEntry> {
+pub fn select_async_fns(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+) -> Vec<ComputeEntry> {
     let cache = ensure_cache(schema);
     if cache.async_fn_list.is_empty() {
         return Vec::new();

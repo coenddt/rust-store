@@ -56,7 +56,9 @@ pub(super) fn build_insert(backend: Backend, schema: &Schema, doc: &Value) -> Sq
     // 阶段2：数据库自增主键 —— doc 无 `_id` 列时由数据库赋值；支持 RETURNING 的后端
     // 单语句回读自增值（宿主据此把 `_id` 回填进 insert 结果）。MySQL 无 RETURNING，
     // 由宿主执行器 lastrowid 回读。
-    if !cols.iter().any(|c| c == "_id") && schema.id_is_autoincrement() && backend.supports_returning()
+    if !cols.iter().any(|c| c == "_id")
+        && schema.id_is_autoincrement()
+        && backend.supports_returning()
     {
         text.push_str(&format!(" RETURNING {}", q(backend, "_id")));
     }

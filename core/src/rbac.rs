@@ -66,7 +66,7 @@ pub fn write_action_from_str(s: &str) -> Result<WriteAction, String> {
 #[derive(Debug, Clone)]
 pub struct Grant {
     role: String,
-    model: String, // 精确 schema 名或 "*"（通配）
+    model: String,        // 精确 schema 名或 "*"（通配）
     actions: Vec<String>, // 归一化后（"write" 已展开），判定用 contains
     read_fields: Option<HashSet<String>>,
     write_fields: Option<HashSet<String>>,
@@ -129,7 +129,10 @@ impl RbacPolicy {
             Some(other) => return Err(format!("RBAC roles 必须是对象，实际 {other}")),
         }
         if mode == RbacMode::Enforce && managed_roles.is_empty() {
-            return Err("RBAC mode=enforce 时 roles 不能为空（无受管角色 = 策略空转，属配置错误）".to_string());
+            return Err(
+                "RBAC mode=enforce 时 roles 不能为空（无受管角色 = 策略空转，属配置错误）"
+                    .to_string(),
+            );
         }
 
         let mut grants = Vec::new();
@@ -143,7 +146,11 @@ impl RbacPolicy {
             Some(other) => return Err(format!("RBAC grants 必须是数组，实际 {other}")),
         }
 
-        Ok(Self { mode, managed_roles, grants })
+        Ok(Self {
+            mode,
+            managed_roles,
+            grants,
+        })
     }
 }
 
@@ -166,7 +173,9 @@ fn parse_grant(idx: usize, v: &Value) -> Result<Grant, String> {
         .and_then(|x| x.as_array())
         .ok_or_else(|| format!("RBAC grants[{idx}].actions 必须是非空数组"))?;
     if actions_raw.is_empty() {
-        return Err(format!("RBAC grants[{idx}].actions 不能为空（不授权请移除该 grant）"));
+        return Err(format!(
+            "RBAC grants[{idx}].actions 不能为空（不授权请移除该 grant）"
+        ));
     }
     let mut actions: Vec<String> = Vec::new();
     for a in actions_raw {
@@ -203,15 +212,16 @@ fn parse_grant(idx: usize, v: &Value) -> Result<Grant, String> {
                 }
                 let mut set = HashSet::new();
                 for f in fs {
-                    let s = f
-                        .as_str()
-                        .filter(|s| !s.is_empty())
-                        .ok_or_else(|| format!("RBAC grants[{idx}].{k} 含非法项 {f}（须非空字符串）"))?;
+                    let s = f.as_str().filter(|s| !s.is_empty()).ok_or_else(|| {
+                        format!("RBAC grants[{idx}].{k} 含非法项 {f}（须非空字符串）")
+                    })?;
                     set.insert(s.to_string());
                 }
                 Ok(Some(set))
             }
-            Some(other) => Err(format!("RBAC grants[{idx}].{k} 必须是字符串数组，实际 {other}")),
+            Some(other) => Err(format!(
+                "RBAC grants[{idx}].{k} 必须是字符串数组，实际 {other}"
+            )),
         }
     };
     let read_fields = parse_fields("readFields")?;
@@ -224,9 +234,7 @@ fn parse_grant(idx: usize, v: &Value) -> Result<Grant, String> {
     let condition = match o.get("condition") {
         None | Some(Value::Null) => None,
         Some(cm @ Value::Object(_)) => {
-            let entries = cm
-                .as_object()
-                .expect("已按 Object 匹配，此处必为对象");
+            let entries = cm.as_object().expect("已按 Object 匹配，此处必为对象");
             for (k, val) in entries {
                 if k.is_empty() || k.starts_with('$') {
                     return Err(format!(
@@ -248,7 +256,15 @@ fn parse_grant(idx: usize, v: &Value) -> Result<Grant, String> {
         }
     };
 
-    Ok(Grant { role, model, actions, read_fields, write_fields, owner_only, condition })
+    Ok(Grant {
+        role,
+        model,
+        actions,
+        read_fields,
+        write_fields,
+        owner_only,
+        condition,
+    })
 }
 
 // ─── 判决 ────────────────────────────────────────────────────
@@ -313,8 +329,7 @@ pub fn decide(
                 Some(s) => read_union.extend(s.iter().cloned()),
             }
         }
-        if g
-            .actions
+        if g.actions
             .iter()
             .any(|a| a == "insert" || a == "update" || a == "remove")
         {
@@ -324,9 +339,21 @@ pub fn decide(
             }
         }
     }
-    let read_fields = if read_all || read_union.is_empty() { None } else { Some(read_union) };
-    let write_fields = if write_all || write_union.is_empty() { None } else { Some(write_union) };
-    Some(ModelDecision { allowed_actions, read_fields, write_fields })
+    let read_fields = if read_all || read_union.is_empty() {
+        None
+    } else {
+        Some(read_union)
+    };
+    let write_fields = if write_all || write_union.is_empty() {
+        None
+    } else {
+        Some(write_union)
+    };
+    Some(ModelDecision {
+        allowed_actions,
+        read_fields,
+        write_fields,
+    })
 }
 
 // ─── 叠加原语（registry.rbac() == None 时全部直通） ──────────
@@ -337,7 +364,9 @@ pub fn ensure_read(
     schema: &Schema,
     ctx: Option<&Context>,
 ) -> Result<(), String> {
-    let Some(p) = registry.rbac() else { return Ok(()) };
+    let Some(p) = registry.rbac() else {
+        return Ok(());
+    };
     match decide(p, &registry.role_rules().exempt_roles, ctx, &schema.name) {
         None => Ok(()),
         Some(d) if d.allowed_actions.contains("read") => Ok(()),
@@ -352,7 +381,9 @@ pub fn ensure_write(
     ctx: Option<&Context>,
     action: WriteAction,
 ) -> Result<(), String> {
-    let Some(p) = registry.rbac() else { return Ok(()) };
+    let Some(p) = registry.rbac() else {
+        return Ok(());
+    };
     match decide(p, &registry.role_rules().exempt_roles, ctx, &schema.name) {
         None => Ok(()),
         Some(d) if d.allowed_actions.contains(action.as_str()) => Ok(()),
@@ -371,12 +402,21 @@ pub fn ensure_write_on_doc(
     action: WriteAction,
     doc: &Value,
 ) -> Result<(), String> {
-    let Some(p) = registry.rbac() else { return Ok(()) };
+    let Some(p) = registry.rbac() else {
+        return Ok(());
+    };
     let Some(c) = ctx else { return Ok(()) };
     if c.internal {
         return Ok(());
     }
-    let Some(d) = decide(p, &registry.role_rules().exempt_roles, Some(c), &schema.name) else { return Ok(()) };
+    let Some(d) = decide(
+        p,
+        &registry.role_rules().exempt_roles,
+        Some(c),
+        &schema.name,
+    ) else {
+        return Ok(());
+    };
     if !d.allowed_actions.contains(action.as_str()) {
         return Err(deny_msg(action.as_str(), &schema.name));
     }
@@ -415,7 +455,12 @@ pub fn row_condition(
     if c.internal {
         return None;
     }
-    decide(p, &registry.role_rules().exempt_roles, Some(c), &schema.name)?;
+    decide(
+        p,
+        &registry.role_rules().exempt_roles,
+        Some(c),
+        &schema.name,
+    )?;
     let roles = effective_roles(c);
     let mut conds: Vec<Value> = Vec::new();
     for g in p.grants.iter().filter(|g| {
@@ -463,9 +508,15 @@ pub fn overlay_readable_fields(
     ctx: Option<&Context>,
     base: Option<HashSet<String>>,
 ) -> Option<HashSet<String>> {
-    let Some(p) = registry.rbac() else { return base };
-    let Some(d) = decide(p, &registry.role_rules().exempt_roles, ctx, model) else { return base };
-    let Some(rf) = &d.read_fields else { return base };
+    let Some(p) = registry.rbac() else {
+        return base;
+    };
+    let Some(d) = decide(p, &registry.role_rules().exempt_roles, ctx, model) else {
+        return base;
+    };
+    let Some(rf) = &d.read_fields else {
+        return base;
+    };
     match base {
         None => {
             let mut s: HashSet<String> = rf.clone();
@@ -490,9 +541,15 @@ pub fn overlay_writable_fields(
     ctx: Option<&Context>,
     base: Option<HashSet<String>>,
 ) -> Option<HashSet<String>> {
-    let Some(p) = registry.rbac() else { return base };
-    let Some(d) = decide(p, &registry.role_rules().exempt_roles, ctx, model) else { return base };
-    let Some(wf) = &d.write_fields else { return base };
+    let Some(p) = registry.rbac() else {
+        return base;
+    };
+    let Some(d) = decide(p, &registry.role_rules().exempt_roles, ctx, model) else {
+        return base;
+    };
+    let Some(wf) = &d.write_fields else {
+        return base;
+    };
     match base {
         None => {
             let mut s: HashSet<String> = wf.clone();
@@ -552,12 +609,21 @@ pub fn is_field_readable_overlay(
     if !crate::permission::is_field_readable(registry.role_rules(), schema, ctx, field) {
         return false;
     }
-    let Some(p) = registry.rbac() else { return true };
+    let Some(p) = registry.rbac() else {
+        return true;
+    };
     let Some(c) = ctx else { return true };
     if c.internal {
         return true;
     }
-    let Some(d) = decide(p, &registry.role_rules().exempt_roles, Some(c), &schema.name) else { return true };
+    let Some(d) = decide(
+        p,
+        &registry.role_rules().exempt_roles,
+        Some(c),
+        &schema.name,
+    ) else {
+        return true;
+    };
     match &d.read_fields {
         None => true,
         Some(rf) => rf.contains(field.split('.').next().unwrap_or(field)),
@@ -573,12 +639,21 @@ pub fn probe_condition_fields(
     ctx: Option<&Context>,
     action: &str,
 ) -> Vec<String> {
-    let Some(p) = registry.rbac() else { return Vec::new() };
+    let Some(p) = registry.rbac() else {
+        return Vec::new();
+    };
     let Some(c) = ctx else { return Vec::new() };
     if c.internal {
         return Vec::new();
     }
-    if decide(p, &registry.role_rules().exempt_roles, Some(c), &schema.name).is_none() {
+    if decide(
+        p,
+        &registry.role_rules().exempt_roles,
+        Some(c),
+        &schema.name,
+    )
+    .is_none()
+    {
         return Vec::new();
     }
     let roles = effective_roles(c);
@@ -633,5 +708,7 @@ fn doc_matches_eq(doc: &Value, cond: &Value) -> bool {
     let (Some(obj), Some(cond_map)) = (doc.as_object(), cond.as_object()) else {
         return false;
     };
-    cond_map.iter().all(|(k, v)| obj.get(k).map(|dv| dv == v).unwrap_or(false))
+    cond_map
+        .iter()
+        .all(|(k, v)| obj.get(k).map(|dv| dv == v).unwrap_or(false))
 }

@@ -232,7 +232,11 @@ pub(super) fn translate_group(
                 }
                 keys.push((
                     k.out.clone(),
-                    format!("{}.{}", q(backend, &format!("g_{}", head)), q(backend, &col)),
+                    format!(
+                        "{}.{}",
+                        q(backend, &format!("g_{}", head)),
+                        q(backend, &col)
+                    ),
                 ));
                 continue;
             }

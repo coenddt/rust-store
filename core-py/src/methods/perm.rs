@@ -180,8 +180,9 @@ impl Registry {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx_from(ctx)?;
         Ok(match action.as_str() {
-            "read" => rust_store_core::rbac::ensure_read(&self.core, schema, context.as_ref())
-                .is_ok(),
+            "read" => {
+                rust_store_core::rbac::ensure_read(&self.core, schema, context.as_ref()).is_ok()
+            }
             a => {
                 let wa = rust_store_core::rbac::write_action_from_str(a).map_err(err)?;
                 rust_store_core::rbac::ensure_write(&self.core, schema, context.as_ref(), wa)
@@ -252,8 +253,9 @@ impl Registry {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx_from(ctx)?;
         // None（无行级收紧）→ null（对齐 merge_owner_condition 绑定的既有形态）
-        let cond = rust_store_core::rbac::row_condition(&self.core, schema, context.as_ref(), &action)
-            .unwrap_or(Value::Null);
+        let cond =
+            rust_store_core::rbac::row_condition(&self.core, schema, context.as_ref(), &action)
+                .unwrap_or(Value::Null);
         to_py(py, cond)
     }
 }

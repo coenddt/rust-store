@@ -628,10 +628,7 @@ fn rel_pred_filter_shape_rejected_in_text2query() {
             Some(&Context::system()),
         )
         .expect_err("text2query 档关系谓词 filter 必须显式报错");
-        assert!(
-            err.starts_with(ERR_TEXT2QUERY),
-            "应携带档位哨兵前缀: {err}"
-        );
+        assert!(err.starts_with(ERR_TEXT2QUERY), "应携带档位哨兵前缀: {err}");
         assert!(err.contains(code), "应报 {code}：{err}");
     }
 }
@@ -1521,8 +1518,8 @@ fn t2q_shape_errors_carry_stable_prefix_and_feature_tag() {
             "[8c-2 嵌套关系路径]",
         ),
     ] {
-        let err = plan_query(gql, &params, reg, Some(&ctx))
-            .expect_err("text2query 档收缩必须显式 Err");
+        let err =
+            plan_query(gql, &params, reg, Some(&ctx)).expect_err("text2query 档收缩必须显式 Err");
         assert!(
             err.starts_with(ERR_TEXT2QUERY),
             "收缩 Err 应以哨兵前缀开头: {err}"

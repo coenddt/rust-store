@@ -420,7 +420,15 @@ pub fn process_node(
     // ⑦ 权限裁剪（读权限 + Owner 级 read 校验；字段/计算列维度叠加 RBAC 交集）
     if ctx.is_some() {
         apply_readable_prune(fields, relations, schema, ctx, registry, &mut keep);
-        apply_owner_read_prune(doc, fields, relations, registry.role_rules(), schema, ctx, &mut keep);
+        apply_owner_read_prune(
+            doc,
+            fields,
+            relations,
+            registry.role_rules(),
+            schema,
+            ctx,
+            &mut keep,
+        );
     }
 
     // ⑧ 裁剪字段 + 点号父对象中未请求的子字段

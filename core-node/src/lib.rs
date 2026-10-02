@@ -135,7 +135,9 @@ impl Registry {
     /// 判决唯一在 core：宿主仅透传配置与查询面，plan 链路拦截自动生效。
     #[napi]
     pub fn set_rbac(&mut self, policy: Option<Value>) -> Result<()> {
-        self.core.set_rbac(policy.as_ref()).map_err(napi::Error::from_reason)
+        self.core
+            .set_rbac(policy.as_ref())
+            .map_err(napi::Error::from_reason)
     }
 
     /// RBAC 策略是否已注入

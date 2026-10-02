@@ -44,12 +44,24 @@ pub fn compile_raw_stmt(
     let is_write = is_write.unwrap_or_else(|| infer_is_write(trimmed));
     match params {
         // R2 位置档：原样透传（Null 视为空参数组）
-        Value::Array(items) => Ok(RawStmt { sql: text.to_string(), params: items, is_write }),
-        Value::Null => Ok(RawStmt { sql: text.to_string(), params: Vec::new(), is_write }),
+        Value::Array(items) => Ok(RawStmt {
+            sql: text.to_string(),
+            params: items,
+            is_write,
+        }),
+        Value::Null => Ok(RawStmt {
+            sql: text.to_string(),
+            params: Vec::new(),
+            is_write,
+        }),
         // R3–R6 命名档：`:name` 编译 + 参数重排 + 一致性校验
         Value::Object(names) => {
             let (sql, ordered) = compile_named(backend, text, &names)?;
-            Ok(RawStmt { sql, params: ordered, is_write })
+            Ok(RawStmt {
+                sql,
+                params: ordered,
+                is_write,
+            })
         }
         other => Err(format!(
             "原生 SQL params 仅支持数组（位置档）或对象（命名档），收到 {}",

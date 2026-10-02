@@ -22,8 +22,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use rust_store_core::command::{
-    finalize_query, plan_archive_docs, plan_insert, plan_query, plan_query_one,
-    plan_remove, plan_update, restore_sort_order, Probe, PHASE1_IDS,
+    finalize_query, plan_archive_docs, plan_insert, plan_query, plan_query_one, plan_remove,
+    plan_update, restore_sort_order, Probe, PHASE1_IDS,
 };
 use rust_store_core::computes::FnRegistry;
 use rust_store_core::dialect::{restore_rows_json, translate, Backend};
@@ -39,7 +39,9 @@ pub const PHASE1_IDS_STR: &str = PHASE1_IDS;
 static NEXT_HANDLE: AtomicUsize = AtomicUsize::new(1);
 static REGISTRIES: Mutex<Option<HashMap<usize, Registry>>> = Mutex::new(None);
 
-fn with_registries<T>(f: impl FnOnce(&mut HashMap<usize, Registry>) -> Result<T, String>) -> Result<T, String> {
+fn with_registries<T>(
+    f: impl FnOnce(&mut HashMap<usize, Registry>) -> Result<T, String>,
+) -> Result<T, String> {
     let mut guard = REGISTRIES.lock().unwrap_or_else(|p| p.into_inner());
     let map = guard.get_or_insert_with(HashMap::new);
     f(map)
@@ -82,7 +84,9 @@ fn call_go_compute(kind: c_int, fn_ref: &str, payload: &Value) -> Result<Value, 
     if ret.is_null() {
         return Err(format!("计算列 {fn_ref} 的 Go 回调返回空指针"));
     }
-    let s = unsafe { CStr::from_ptr(ret) }.to_string_lossy().into_owned();
+    let s = unsafe { CStr::from_ptr(ret) }
+        .to_string_lossy()
+        .into_owned();
     if free_fp != 0 {
         let free: GoFreeFn = unsafe { std::mem::transmute(free_fp as *mut ()) };
         free(ret);
@@ -99,9 +103,9 @@ impl FnRegistry for BridgeFnRegistry {
     fn call_sync(&self, fn_ref: &str, doc: &Value) -> Result<Value, String> {
         let payload = json!({ "handle": self.handle, "doc": doc, "ctx": Value::Null });
         let out = call_go_compute(0, fn_ref, &payload)?;
-        out.get("value").cloned().ok_or_else(|| {
-            format!("计算列 {fn_ref} 的 Go 回调返回缺少 value 字段")
-        })
+        out.get("value")
+            .cloned()
+            .ok_or_else(|| format!("计算列 {fn_ref} 的 Go 回调返回缺少 value 字段"))
     }
 
     fn call_async(
@@ -112,9 +116,10 @@ impl FnRegistry for BridgeFnRegistry {
     ) -> Result<(), String> {
         let payload = json!({ "handle": self.handle, "docs": items, "ctx": ctx_to_value(ctx) });
         let out = call_go_compute(1, fn_ref, &payload)?;
-        let docs = out.get("docs").and_then(|d| d.as_array()).ok_or_else(|| {
-            format!("计算列 {fn_ref} 的 Go 回调返回缺少 docs 数组")
-        })?;
+        let docs = out
+            .get("docs")
+            .and_then(|d| d.as_array())
+            .ok_or_else(|| format!("计算列 {fn_ref} 的 Go 回调返回缺少 docs 数组"))?;
         if docs.len() != items.len() {
             return Err(format!(
                 "计算列 {fn_ref} 的 Go 回调返回 docs 数量（{}）与输入（{}）不一致",
@@ -162,9 +167,7 @@ fn value_to_ctx(v: &Value) -> Result<Option<Context>, String> {
     let obj = v
         .as_object()
         .ok_or_else(|| "ctx 必须是对象或 null".to_string())?;
-    let user_id = obj
-        .get("userId")
-        .and_then(|x| x.as_str().map(String::from));
+    let user_id = obj.get("userId").and_then(|x| x.as_str().map(String::from));
     let roles = match obj.get("roles") {
         None | Some(Value::Null) => None,
         Some(Value::Array(a)) => Some(
@@ -178,9 +181,7 @@ fn value_to_ctx(v: &Value) -> Result<Option<Context>, String> {
         ),
         Some(_) => return Err("ctx.roles 必须是数组或 null".to_string()),
     };
-    let role = obj
-        .get("role")
-        .and_then(|x| x.as_str().map(String::from));
+    let role = obj.get("role").and_then(|x| x.as_str().map(String::from));
     let internal = obj
         .get("internal")
         .and_then(|x| x.as_bool())
@@ -351,11 +352,18 @@ pub unsafe extern "C" fn rcore_registry_list(handle: u64) -> *mut c_char {
 /// 注入/清除 RBAC 策略：`policy` 为 null = 清除；否则为策略 JSON。
 /// 解析失败以 `{"ok":false,"error":...}` 显式浮出（fail-fast）。
 #[no_mangle]
-pub unsafe extern "C" fn rcore_registry_set_rbac(handle: u64, policy: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn rcore_registry_set_rbac(
+    handle: u64,
+    policy: *const c_char,
+) -> *mut c_char {
     guard(|| {
         let policy = unsafe { json_arg(policy) }?;
         // JSON "null" / 缺失 → None（清除）；否则 Some
-        let policy_opt = if policy.is_null() { None } else { Some(&policy) };
+        let policy_opt = if policy.is_null() {
+            None
+        } else {
+            Some(&policy)
+        };
         with_registries(|map| {
             let reg = map
                 .get_mut(&(handle as usize))
@@ -389,8 +397,8 @@ pub unsafe extern "C" fn rcore_registry_set_exempt_roles(
 ) -> *mut c_char {
     guard(|| {
         let v = unsafe { json_arg(roles) }?;
-        let list: Vec<String> = serde_json::from_value(v)
-            .map_err(|e| format!("exempt_roles 必须是字符串数组: {e}"))?;
+        let list: Vec<String> =
+            serde_json::from_value(v).map_err(|e| format!("exempt_roles 必须是字符串数组: {e}"))?;
         with_registries(|map| {
             let reg = map
                 .get_mut(&(handle as usize))
@@ -493,8 +501,11 @@ pub unsafe extern "C" fn rcore_rbac_readable_fields(
                 .get(&(handle as usize))
                 .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
             let schema = reg.get(&model)?;
-            let base =
-                rust_store_core::permission::get_readable_fields(reg.role_rules(), schema, ctx.as_ref());
+            let base = rust_store_core::permission::get_readable_fields(
+                reg.role_rules(),
+                schema,
+                ctx.as_ref(),
+            );
             Ok(rust_store_core::rbac::overlay_readable_fields(
                 reg,
                 &model,
@@ -529,8 +540,11 @@ pub unsafe extern "C" fn rcore_rbac_writable_fields(
                 .get(&(handle as usize))
                 .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
             let schema = reg.get(&model)?;
-            let base =
-                rust_store_core::permission::get_writable_fields(reg.role_rules(), schema, ctx.as_ref());
+            let base = rust_store_core::permission::get_writable_fields(
+                reg.role_rules(),
+                schema,
+                ctx.as_ref(),
+            );
             Ok(rust_store_core::rbac::overlay_writable_fields(
                 reg,
                 &model,
@@ -573,7 +587,12 @@ pub unsafe extern "C" fn rcore_rbac_row_condition(
                 .get(&(handle as usize))
                 .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
             let schema = reg.get(&model)?;
-            Ok(rust_store_core::rbac::row_condition(reg, schema, ctx.as_ref(), &action))
+            Ok(rust_store_core::rbac::row_condition(
+                reg,
+                schema,
+                ctx.as_ref(),
+                &action,
+            ))
         })?;
         Ok(cond.unwrap_or(Value::Null))
     })
@@ -639,7 +658,12 @@ pub unsafe extern "C" fn rcore_plan_query_with_count(
             let reg = map
                 .get(&(handle as usize))
                 .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
-            rust_store_core::command::plan_query_with_count(gql, &parse_params(&params)?, reg, ctx.as_ref())
+            rust_store_core::command::plan_query_with_count(
+                gql,
+                &parse_params(&params)?,
+                reg,
+                ctx.as_ref(),
+            )
         })?;
         Ok(plan.to_value())
     })
@@ -701,7 +725,16 @@ pub unsafe extern "C" fn rcore_plan_update(
             let reg = map
                 .get(&(handle as usize))
                 .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
-            plan_update(schema_name, reg, ctx.as_ref(), &condition, &data, &json!({}), now, probe)
+            plan_update(
+                schema_name,
+                reg,
+                ctx.as_ref(),
+                &condition,
+                &data,
+                &json!({}),
+                now,
+                probe,
+            )
         })?;
         Ok(plan)
     })
@@ -788,8 +821,8 @@ pub unsafe extern "C" fn rcore_finalize_prepare(
     guard(|| {
         let post = unsafe { json_arg(postprocess) }?;
         let items_v = unsafe { json_arg(items) }?;
-        let mut items: Vec<Value> = serde_json::from_value(items_v)
-            .map_err(|e| format!("items 必须是文档数组: {e}"))?;
+        let mut items: Vec<Value> =
+            serde_json::from_value(items_v).map_err(|e| format!("items 必须是文档数组: {e}"))?;
         let ctx = unsafe { json_arg(ctx) }?;
         let ctx = value_to_ctx(&ctx)?;
         let fn_registry = bridge(handle);
@@ -797,7 +830,13 @@ pub unsafe extern "C" fn rcore_finalize_prepare(
             let reg = map
                 .get(&(handle as usize))
                 .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
-            prepare_query_wrap(&post, &mut items, reg, as_trait(fn_registry.as_ref()), ctx.as_ref())
+            prepare_query_wrap(
+                &post,
+                &mut items,
+                reg,
+                as_trait(fn_registry.as_ref()),
+                ctx.as_ref(),
+            )
         })?;
         Ok(json!({ "items": items, "asyncFnRefs": refs }))
     })
@@ -822,8 +861,8 @@ pub unsafe extern "C" fn rcore_finalize_strip(
     guard(|| {
         let post = unsafe { json_arg(postprocess) }?;
         let items_v = unsafe { json_arg(items) }?;
-        let mut items: Vec<Value> = serde_json::from_value(items_v)
-            .map_err(|e| format!("items 必须是文档数组: {e}"))?;
+        let mut items: Vec<Value> =
+            serde_json::from_value(items_v).map_err(|e| format!("items 必须是文档数组: {e}"))?;
         rust_store_core::command::strip_query(&post, &mut items);
         Ok(json!(items))
     })
@@ -838,11 +877,11 @@ pub unsafe extern "C" fn rcore_restore_sort_order(
 ) -> *mut c_char {
     guard(|| {
         let items_v = unsafe { json_arg(items) }?;
-        let mut items: Vec<Value> = serde_json::from_value(items_v)
-            .map_err(|e| format!("items 必须是文档数组: {e}"))?;
+        let mut items: Vec<Value> =
+            serde_json::from_value(items_v).map_err(|e| format!("items 必须是文档数组: {e}"))?;
         let ids = unsafe { json_arg(ids) }?;
-        let ids: Vec<Value> = serde_json::from_value(ids)
-            .map_err(|e| format!("ids 必须是数组: {e}"))?;
+        let ids: Vec<Value> =
+            serde_json::from_value(ids).map_err(|e| format!("ids 必须是数组: {e}"))?;
         let sort = unsafe { json_arg(sort) }?;
         let sort_opt = if sort.is_null() { None } else { Some(&sort) };
         restore_sort_order(&mut items, &ids, sort_opt);
@@ -876,8 +915,8 @@ pub unsafe extern "C" fn rcore_finalize_query(
     guard(|| {
         let post = unsafe { json_arg(postprocess) }?;
         let items_v = unsafe { json_arg(items) }?;
-        let mut items: Vec<Value> = serde_json::from_value(items_v)
-            .map_err(|e| format!("items 必须是文档数组: {e}"))?;
+        let mut items: Vec<Value> =
+            serde_json::from_value(items_v).map_err(|e| format!("items 必须是文档数组: {e}"))?;
         let ctx = unsafe { json_arg(ctx) }?;
         let ctx = value_to_ctx(&ctx)?;
         let fn_registry = bridge(handle);
@@ -885,7 +924,13 @@ pub unsafe extern "C" fn rcore_finalize_query(
             let reg = map
                 .get(&(handle as usize))
                 .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
-            finalize_query(&post, &mut items, reg, as_trait(fn_registry.as_ref()), ctx.as_ref())
+            finalize_query(
+                &post,
+                &mut items,
+                reg,
+                as_trait(fn_registry.as_ref()),
+                ctx.as_ref(),
+            )
         })?;
         Ok(json!(items))
     })

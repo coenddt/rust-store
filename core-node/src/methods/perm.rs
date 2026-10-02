@@ -60,13 +60,10 @@ impl Registry {
     ) -> Result<Value> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        Ok(merge_owner_condition(
-            self.core.role_rules(),
-            schema,
-            context.as_ref(),
-            condition,
+        Ok(
+            merge_owner_condition(self.core.role_rules(), schema, context.as_ref(), condition)
+                .unwrap_or(Value::Null),
         )
-        .unwrap_or(Value::Null))
     }
 
     #[napi]
@@ -140,8 +137,9 @@ impl Registry {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
         Ok(match action.as_str() {
-            "read" => rust_store_core::rbac::ensure_read(&self.core, schema, context.as_ref())
-                .is_ok(),
+            "read" => {
+                rust_store_core::rbac::ensure_read(&self.core, schema, context.as_ref()).is_ok()
+            }
             a => {
                 let wa = rust_store_core::rbac::write_action_from_str(a)
                     .map_err(napi::Error::from_reason)?;
@@ -195,12 +193,9 @@ impl Registry {
         }
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        Ok(rust_store_core::rbac::row_condition(
-            &self.core,
-            schema,
-            context.as_ref(),
-            &action,
+        Ok(
+            rust_store_core::rbac::row_condition(&self.core, schema, context.as_ref(), &action)
+                .unwrap_or(Value::Null),
         )
-        .unwrap_or(Value::Null))
     }
 }
