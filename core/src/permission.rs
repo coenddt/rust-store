@@ -105,44 +105,37 @@ pub struct RoleRules {
     pub unconfigured: UnconfiguredPolicy,
 }
 
-/// 评估当前用户是否满足指定角色白名单
-pub fn evaluate(ctx: Option<&Context>, role_list: Option<&[String]>, doc: Doc) -> bool {
-    let empty = role_list.map(|r| r.is_empty()).unwrap_or(true);
-    if empty {
-        // 无角色白名单 = schema/字段无权限配置 → 按角色取默认行为
-        return match ctx {
-            None => true,
-            Some(c) => {
-                if c.internal {
-                    true
-                } else {
-                    !c.roles
-                        .clone()
-                        .unwrap_or_default()
-                        .iter()
-                        .any(|r| r == "guest")
-                }
-            }
-        };
-    }
-
+/// 评估当前用户是否满足指定角色白名单。
+///
+/// 判决输入全部来自 `rules`（用户配置，默认 []/[]/Open），无任何内置角色硬编码：
+/// - 豁免：有效角色 ∩ `rules.exempt_roles` ≠ ∅ → true（默认空 = 无豁免）。豁免检查
+///   **先于**未配置姿态——设计 §11.3「一切判决环节直通」：`set_exempt_roles` 与
+///   `Closed` 并存时豁免仍生效（豁免是显式信任声明，姿态管不住它）；
+/// - 未配置（role_list 缺失/空）：`Open` 放行（guest 读拒已随清单化移除——迁移差异，
+///   设计 §11.4）；`Closed` 对非内部用户全拒（fail-secure）；ctx=None 与 internal
+///   的直通不受姿态影响（无 ctx 维度归 `require_context` 管，设计 §11.6）。
+pub fn evaluate(
+    rules: &RoleRules,
+    ctx: Option<&Context>,
+    role_list: Option<&[String]>,
+    doc: Doc,
+) -> bool {
     let Some(c) = ctx else { return true };
     if c.internal {
         return true;
     }
-
-    let roles = c.roles.clone().unwrap_or_default();
-    // super_admin / admin 自动放行
-    if roles.iter().any(|r| r == "super_admin" || r == "admin") {
+    // 豁免清单（默认空——无隐形豁免；清单化语义见设计 §11.3）
+    if has_any(c, &rules.exempt_roles) {
         return true;
+    }
+    let empty = role_list.map(|r| r.is_empty()).unwrap_or(true);
+    if empty {
+        // 未配置姿态显式化（原 empty 分支的 guest 读拒随清单化移除）
+        return rules.unconfigured == UnconfiguredPolicy::Open;
     }
 
     // ① 角色匹配
-    let effective = if roles.is_empty() {
-        vec![c.role.clone().unwrap_or_default()]
-    } else {
-        roles
-    };
+    let effective = effective(c);
     // `empty` 已早退，此处 role_list 必为 Some 且非空
     let Some(list) = role_list else { return true };
     if list.iter().any(|r| effective.iter().any(|x| x == r)) {
@@ -176,13 +169,17 @@ fn match_creator(ctx: &Context, doc: Doc, role_list: &[String]) -> bool {
 // ─── 字段级过滤（读） ─────────────────────────────────────────
 
 /// ctx 为 None 时返回 None（= 不做裁剪）
-pub fn get_readable_fields(schema: &Schema, ctx: Option<&Context>) -> Option<HashSet<String>> {
+pub fn get_readable_fields(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+) -> Option<HashSet<String>> {
     let c = ctx?;
     let mut allowed = HashSet::new();
     for (key, field) in &schema.fields {
         match &field.read {
             Some(rl) => {
-                if evaluate(Some(c), Some(rl), Doc::Missing) {
+                if evaluate(rules, Some(c), Some(rl), Doc::Missing) {
                     allowed.insert(key.clone());
                 }
             }
@@ -194,13 +191,17 @@ pub fn get_readable_fields(schema: &Schema, ctx: Option<&Context>) -> Option<Has
     Some(allowed)
 }
 
-pub fn get_readable_computes(schema: &Schema, ctx: Option<&Context>) -> Option<HashSet<String>> {
+pub fn get_readable_computes(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+) -> Option<HashSet<String>> {
     let c = ctx?;
     let mut allowed = HashSet::new();
     for (key, comp) in &schema.computes {
         match &comp.read {
             Some(rl) => {
-                if evaluate(Some(c), Some(rl), Doc::Missing) {
+                if evaluate(rules, Some(c), Some(rl), Doc::Missing) {
                     allowed.insert(key.clone());
                 }
             }
@@ -212,13 +213,17 @@ pub fn get_readable_computes(schema: &Schema, ctx: Option<&Context>) -> Option<H
     Some(allowed)
 }
 
-pub fn get_readable_relations(schema: &Schema, ctx: Option<&Context>) -> Option<HashSet<String>> {
+pub fn get_readable_relations(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+) -> Option<HashSet<String>> {
     let c = ctx?;
     let mut allowed = HashSet::new();
     for (key, rel) in &schema.relations {
         match &rel.read {
             Some(rl) => {
-                if evaluate(Some(c), Some(rl), Doc::Missing) {
+                if evaluate(rules, Some(c), Some(rl), Doc::Missing) {
                     allowed.insert(key.clone());
                 }
             }
@@ -235,20 +240,30 @@ pub fn get_readable_relations(schema: &Schema, ctx: Option<&Context>) -> Option<
 /// - `ctx = None` → 放行（fail-open，与默认姿态一致）；
 /// - 字段未在 schema `fields` 中声明 → 放行（无 `field.read` 配置可依）；
 /// - 字段在 schema 中且配了 `read` 白名单 → 按 [`get_readable_fields`] 判定。
-pub fn is_field_readable(schema: &Schema, ctx: Option<&Context>, field: &str) -> bool {
+pub fn is_field_readable(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    field: &str,
+) -> bool {
     let root = field.split('.').next().unwrap_or(field);
     if !schema.fields.contains_key(root) {
         return true;
     }
-    match get_readable_fields(schema, ctx) {
+    match get_readable_fields(rules, schema, ctx) {
         None => true,
         Some(allowed) => allowed.contains(root),
     }
 }
 
 /// 单个关系读权限判定（R6/L1）。`ctx = None` → 放行（fail-open）。
-pub fn is_relation_readable(schema: &Schema, ctx: Option<&Context>, rel: &str) -> bool {
-    match get_readable_relations(schema, ctx) {
+pub fn is_relation_readable(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    rel: &str,
+) -> bool {
+    match get_readable_relations(rules, schema, ctx) {
         None => true,
         Some(allowed) => allowed.contains(rel),
     }
@@ -256,26 +271,25 @@ pub fn is_relation_readable(schema: &Schema, ctx: Option<&Context>, rel: &str) -
 
 // ─── Schema 级检查 ────────────────────────────────────────────
 
-pub fn can_read_schema(schema: &Schema, ctx: Option<&Context>) -> bool {
-    evaluate(ctx, schema.read.as_deref(), Doc::Missing)
+pub fn can_read_schema(rules: &RoleRules, schema: &Schema, ctx: Option<&Context>) -> bool {
+    evaluate(rules, ctx, schema.read.as_deref(), Doc::Missing)
 }
 
-/// 游客无论 schema.write 如何配置，均无写入权限
-pub fn can_write_schema(schema: &Schema, ctx: Option<&Context>) -> bool {
+/// 拒写清单命中者一切写路径拒绝（读不受影响，默认空——无拒写）；
+/// R2 语义保留：write 显式配置为空白名单（`[]`）= 未声明任何可写角色 → 拒绝一切写，
+/// 豁免清单命中者与 internal 例外。
+pub fn can_write_schema(rules: &RoleRules, schema: &Schema, ctx: Option<&Context>) -> bool {
     if let Some(c) = ctx {
-        if has_role(c, "guest") {
+        if has_any(c, &rules.deny_write_roles) {
             return false;
         }
-        // R2：write 显式配置为空白名单（`[]`）= 未声明任何可写角色 → 拒绝一切写，
-        // 但 super_admin/admin 仍保留编辑权；internal 一律放行。
         if !c.internal && matches!(schema.write, Some(ref w) if w.is_empty()) {
-            let roles = c.roles.clone().unwrap_or_default();
-            if !roles.iter().any(|r| r == "super_admin" || r == "admin") {
+            if !has_any(c, &rules.exempt_roles) {
                 return false;
             }
         }
     }
-    evaluate(ctx, schema.write.as_deref(), Doc::Missing)
+    evaluate(rules, ctx, schema.write.as_deref(), Doc::Missing)
 }
 
 fn has_role(ctx: &Context, role: &str) -> bool {
@@ -307,7 +321,11 @@ pub(crate) fn has_any_role(c: &Context, list: &[String]) -> bool {
 
 // ─── 所有者条件注入 ──────────────────────────────────────────
 
-pub fn should_inject_owner_condition(schema: &Schema, ctx: Option<&Context>) -> bool {
+pub fn should_inject_owner_condition(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+) -> bool {
     let Some(c) = ctx else { return false };
     // JS `!ctx.userId`：空串同样视为缺席
     if c.user_id.as_deref().map(|s| s.is_empty()).unwrap_or(true) {
@@ -316,15 +334,10 @@ pub fn should_inject_owner_condition(schema: &Schema, ctx: Option<&Context>) -> 
     if c.internal {
         return false;
     }
-    let roles = c.roles.clone().unwrap_or_default();
-    if roles.iter().any(|r| r == "super_admin" || r == "admin") {
+    if has_any(c, &rules.exempt_roles) {
         return false;
     }
-    let effective = if roles.is_empty() {
-        vec![c.role.clone().unwrap_or_default()]
-    } else {
-        roles
-    };
+    let effective = effective(c);
     let read = schema.read.clone().unwrap_or_default();
     let real_roles: Vec<&String> = read.iter().filter(|r| *r != "creator").collect();
     if real_roles.iter().any(|r| effective.iter().any(|x| x == *r)) {
@@ -335,11 +348,12 @@ pub fn should_inject_owner_condition(schema: &Schema, ctx: Option<&Context>) -> 
 
 /// 非 admin 用户只看自己的数据：`creator` 专属读权限时注入 `createdBy` 条件
 pub fn merge_owner_condition(
+    rules: &RoleRules,
     schema: &Schema,
     ctx: Option<&Context>,
     condition: Option<Value>,
 ) -> Option<Value> {
-    if !should_inject_owner_condition(schema, ctx) {
+    if !should_inject_owner_condition(rules, schema, ctx) {
         return condition;
     }
     let owner = json!({ "createdBy": ctx?.user_id });
@@ -351,14 +365,18 @@ pub fn merge_owner_condition(
 
 // ─── 字段级过滤（写） ─────────────────────────────────────────
 
-pub fn get_writable_fields(schema: &Schema, ctx: Option<&Context>) -> Option<HashSet<String>> {
+pub fn get_writable_fields(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+) -> Option<HashSet<String>> {
     let c = ctx?;
-    let schema_writable = can_write_schema(schema, ctx);
+    let schema_writable = can_write_schema(rules, schema, ctx);
     let mut allowed = HashSet::new();
     for (key, field) in &schema.fields {
         match &field.write {
             Some(wl) => {
-                if evaluate(Some(c), Some(wl), Doc::Missing) {
+                if evaluate(rules, Some(c), Some(wl), Doc::Missing) {
                     allowed.insert(key.clone());
                 }
             }
@@ -373,8 +391,13 @@ pub fn get_writable_fields(schema: &Schema, ctx: Option<&Context>) -> Option<Has
 }
 
 /// 过滤写入数据：只保留当前用户可写的字段（点号路径按 root 字段检查）
-pub fn filter_writable_data(schema: &Schema, ctx: Option<&Context>, data: &Value) -> Value {
-    let Some(writable) = get_writable_fields(schema, ctx) else {
+pub fn filter_writable_data(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    data: &Value,
+) -> Value {
+    let Some(writable) = get_writable_fields(rules, schema, ctx) else {
         return data.clone();
     };
     let Some(obj) = data.as_object() else {
