@@ -187,7 +187,8 @@ ModelName($condition:@c0,$sort:@s1,$skip:@sk,$limit:@l1) {
 - `dialect/` 子模块：`translate`（总入口）、`ir`（`RowShape`/`SqlStmt`）、`filter/`、`select/`（`find`/`aggregate`/`group_agg`/`lookup_join`）、`write/`（`insert`/`update`/`upsert`）、`row`（行还原）、`overlay`、`introspect`。
 - datasource 注册：Host 传 `dsConfig = { "sources": { "<name>": "<kind>" } }`（`null` = 单源 Mongo）。
 - SQL 同源跨 namespace 仍下推（qualified `JOIN`），Mongo 跨 db 剥离为内存 join（联邦）。
-- 权限模型（`core/src/permission.rs`）：schema 级 `read`/`write` + 字段级 `field.read`/`field.write` + 关系级 `rel.read` + 计算列级 `comp.read`；`super_admin`/`admin`/`internal` 全放行；`guest` 无论 schema 配置均无写权限；`write: []` 空白名单 = 拒绝一切写；`creator` 伪角色按 `doc.createdBy == ctx.userId` 动态判定。
+- 权限模型（`core/src/permission.rs`）：schema 级 `read`/`write` + 字段级 `field.read`/`field.write` + 关系级 `rel.read` + 计算列级 `comp.read`；`write: []` 空白名单 = 拒绝一切写；`creator` 伪角色按 `doc.createdBy == ctx.userId` 动态判定。
+- **角色规则已清单化（取代旧硬编码，`core/src/schema/registry.rs:146-157`）**：豁免 `set_exempt_roles`（默认空 ⇒ `super_admin`/`admin` **不再默认放行**）、拒写 `set_deny_write_roles`（默认空 ⇒ `guest` **不再必然无写**）、未配置姿态 `set_unconfigured_policy`（默认 `Open`）三者均为 Registry 可配置清单；`internal` 标志位（`Context::system()`）保留。判决 = 白名单 ∧ RBAC 策略 ∧ 清单与姿态，无不可关闭的隐形规则。
 - 权限上下文 **显式入参**（`ctx`），不再是 JS 的隐式 `AsyncLocalStorage` —— 这是与旧 JS 实现的 P0 契约差异。
 
 ## 8. 测试与发布
