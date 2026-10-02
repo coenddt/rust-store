@@ -170,4 +170,10 @@ export declare class Registry {
   setRbac(policy?: any | undefined | null): void
   /** RBAC 策略是否已注入 */
   rbacEnabled(): boolean
+  /** 豁免角色清单（命中者在一切判决环节直接放行）。判决唯一在 core：本层零判决。 */
+  setExemptRoles(roles: Array<string>): void
+  /** 拒写角色清单（命中者一切写路径拒绝，读不受影响） */
+  setDenyWriteRoles(roles: Array<string>): void
+  /** 未配置姿态（"open" / "closed"）；未知值抛错（fail-fast，对齐 setRbac） */
+  setUnconfiguredPolicy(policy: string): void
 }
