@@ -159,7 +159,7 @@ pub fn plan_upsert(
     validate_condition(condition)?;
     // §11.4（D2）：写路径条件与读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
     validate_condition_shape(schema, condition, registry.profile())?;
-    if !can_write_schema(schema, ctx) {
+    if !can_write_schema(registry.role_rules(), schema, ctx) {
         return Err(ERR_NO_WRITE.to_string());
     }
     // RBAC 表级写判定（upsert 按 Insert 动作判，deny-wins）

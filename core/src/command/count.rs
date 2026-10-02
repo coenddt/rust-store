@@ -91,7 +91,7 @@ pub fn plan_query_with_count(
         .filter(is_truthy)
         .unwrap_or_else(|| json!({}));
     // 静态 owner 条件叠加 RBAC 行条件（两引擎 $and，deny-wins）
-    let owner_merged = merge_owner_condition(schema, ctx, Some(count_filter));
+    let owner_merged = merge_owner_condition(registry.role_rules(), schema, ctx, Some(count_filter));
     let count_filter = merge_row_condition(registry, schema, ctx, "read", owner_merged)
         .unwrap_or_else(|| json!({}));
 

@@ -50,7 +50,7 @@ pub fn prepare_query(
     }
 
     // 返回 Host 需异步执行的回调标识
-    Ok(select_async_fns(schema, ctx)
+    Ok(select_async_fns(registry.role_rules(), schema, ctx)
         .into_iter()
         .map(|e| e.fn_ref)
         .collect())
@@ -98,7 +98,7 @@ pub fn finalize_query(
     // ② 批量 asyncFn（权限过滤）
     let ast = postprocess_ast(postprocess)?;
     let schema = registry.get(&ast.model)?;
-    run_async_fns(items, schema, ctx, fn_registry)?;
+    run_async_fns(items, registry.role_rules(), schema, ctx, fn_registry)?;
 
     // ③ 剥离依赖注入的字段
     strip_query(postprocess, items);

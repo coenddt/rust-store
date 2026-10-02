@@ -104,7 +104,7 @@ pub fn plan_federated(
     ensure_context(registry, ctx)?;
     let root_schema = registry.get(&ast.model)?.clone();
 
-    if ctx.is_some() && !can_read_schema(&root_schema, ctx) {
+    if ctx.is_some() && !can_read_schema(registry.role_rules(), &root_schema, ctx) {
         return Err(ERR_PERMISSION.to_string());
     }
     // RBAC 表级读判定（deny-wins，叠加于静态白名单之后）
@@ -118,7 +118,8 @@ pub fn plan_federated(
     if ctx.is_some() {
         if let Some(r) = ast.params.get("condition").cloned() {
             let key = r.get(1..).unwrap_or("").to_string();
-            let owner_merged = merge_owner_condition(&root_schema, ctx, params.get(&key).cloned());
+            let owner_merged =
+                merge_owner_condition(registry.role_rules(), &root_schema, ctx, params.get(&key).cloned());
             match merge_row_condition(registry, &root_schema, ctx, "read", owner_merged) {
                 Some(v) => {
                     params.insert(key, v);

@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::permission::{
     evaluate, get_readable_computes, get_readable_fields, get_readable_relations, Context, Doc,
+    RoleRules,
 };
 use crate::pipeline::{flatten_object_fields_impl, RelAst};
 use crate::schema::{Registry, Schema};
@@ -158,7 +159,7 @@ fn descend_relations(
     fn_registry: Option<&dyn FnRegistry>,
 ) -> Result<(), String> {
     let readable = if ctx.is_some() {
-        get_readable_relations(schema, ctx)
+        get_readable_relations(registry.role_rules(), schema, ctx)
     } else {
         None
     };
@@ -268,18 +269,18 @@ fn apply_readable_prune(
     keep: &mut HashSet<String>,
 ) {
     let readable_fields = crate::rbac::overlay_readable_fields(
-        registry.rbac(),
+        registry,
         &schema.name,
         ctx,
-        get_readable_fields(schema, ctx),
+        get_readable_fields(registry.role_rules(), schema, ctx),
     );
     let readable_computes = crate::rbac::overlay_readable_fields(
-        registry.rbac(),
+        registry,
         &schema.name,
         ctx,
-        get_readable_computes(schema, ctx),
+        get_readable_computes(registry.role_rules(), schema, ctx),
     );
-    let readable_relations = get_readable_relations(schema, ctx);
+    let readable_relations = get_readable_relations(registry.role_rules(), schema, ctx);
 
     for key in fields {
         if key == "_id" {
@@ -314,6 +315,7 @@ fn apply_owner_read_prune(
     doc: &Value,
     fields: &[String],
     relations: &[(String, RelAst)],
+    rules: &RoleRules,
     schema: &Schema,
     ctx: Option<&Context>,
     keep: &mut HashSet<String>,
@@ -324,7 +326,7 @@ fn apply_owner_read_prune(
         }
         if let Some(field) = schema.fields.get(key) {
             if let Some(rl) = &field.read {
-                if !evaluate(ctx, Some(rl), Doc::Doc(doc)) {
+                if !evaluate(rules, ctx, Some(rl), Doc::Doc(doc)) {
                     keep.remove(key);
                 }
             }
@@ -336,7 +338,7 @@ fn apply_owner_read_prune(
             continue;
         }
         if let Some(rl) = &comp.read {
-            if !evaluate(ctx, Some(rl), Doc::Doc(doc)) {
+            if !evaluate(rules, ctx, Some(rl), Doc::Doc(doc)) {
                 keep.remove(key);
             }
         }
@@ -348,7 +350,7 @@ fn apply_owner_read_prune(
         }
         if let Some(rel) = schema.relations.get(rel_name) {
             if let Some(rl) = &rel.read {
-                if !evaluate(ctx, Some(rl), Doc::Doc(doc)) {
+                if !evaluate(rules, ctx, Some(rl), Doc::Doc(doc)) {
                     keep.remove(rel_name);
                 }
             }
@@ -418,7 +420,7 @@ pub fn process_node(
     // ⑦ 权限裁剪（读权限 + Owner 级 read 校验；字段/计算列维度叠加 RBAC 交集）
     if ctx.is_some() {
         apply_readable_prune(fields, relations, schema, ctx, registry, &mut keep);
-        apply_owner_read_prune(doc, fields, relations, schema, ctx, &mut keep);
+        apply_owner_read_prune(doc, fields, relations, registry.role_rules(), schema, ctx, &mut keep);
     }
 
     // ⑧ 裁剪字段 + 点号父对象中未请求的子字段

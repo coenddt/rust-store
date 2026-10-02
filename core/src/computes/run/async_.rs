@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::permission::{evaluate, Context, Doc};
+use crate::permission::{evaluate, Context, Doc, RoleRules};
 use crate::schema::Schema;
 
 use super::super::cache::{ensure_cache, ComputeEntry};
@@ -12,7 +12,7 @@ use super::super::registry::FnRegistry;
 ///
 /// 无 ctx 时全部执行（与 JS 一致：权限过滤仅在 ctx 存在时生效）；
 /// 有 ctx 时 `comp.read` 校验不过的 asyncFn 被跳过。
-pub fn select_async_fns(schema: &Schema, ctx: Option<&Context>) -> Vec<ComputeEntry> {
+pub fn select_async_fns(rules: &RoleRules, schema: &Schema, ctx: Option<&Context>) -> Vec<ComputeEntry> {
     let cache = ensure_cache(schema);
     if cache.async_fn_list.is_empty() {
         return Vec::new();
@@ -28,7 +28,7 @@ pub fn select_async_fns(schema: &Schema, ctx: Option<&Context>) -> Vec<ComputeEn
                     .and_then(|comp| comp.read.as_ref());
                 match rl {
                     Some(roles) => {
-                        if evaluate(Some(c), Some(roles), Doc::Missing) {
+                        if evaluate(rules, Some(c), Some(roles), Doc::Missing) {
                             selected.push(entry.clone());
                         }
                     }
@@ -46,6 +46,7 @@ pub fn select_async_fns(schema: &Schema, ctx: Option<&Context>) -> Vec<ComputeEn
 /// 有 ctx 时 `comp.read` 校验不过的 asyncFn 被跳过。
 pub fn run_async_fns(
     items: &mut [Value],
+    rules: &RoleRules,
     schema: &Schema,
     ctx: Option<&Context>,
     fn_registry: Option<&dyn FnRegistry>,
@@ -54,7 +55,7 @@ pub fn run_async_fns(
         return Ok(());
     }
 
-    for entry in select_async_fns(schema, ctx) {
+    for entry in select_async_fns(rules, schema, ctx) {
         match fn_registry {
             Some(r) => r.call_async(&entry.fn_ref, items, ctx)?,
             None => return Err(format!("计算列 {} 未注册异步实现", entry.key)),

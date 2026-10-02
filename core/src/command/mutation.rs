@@ -62,7 +62,7 @@ fn plan_mutation_node(
     out: &mut PlanOut,
 ) -> Result<(), String> {
     let schema = registry.get(schema_name)?;
-    if !can_write_schema(schema, ctx) {
+    if !can_write_schema(registry.role_rules(), schema, ctx) {
         return Err(ERR_NO_WRITE.to_string());
     }
     // RBAC 表级写判定（mutation 步骤按 Insert 判，deny-wins；子模型递归同样受限）
@@ -80,7 +80,7 @@ fn plan_mutation_node(
             let allowed = match ctx {
                 None => true,
                 Some(c) => match &rel_def.read {
-                    Some(rl) => evaluate(Some(c), Some(rl), Doc::Missing),
+                    Some(rl) => evaluate(registry.role_rules(), Some(c), Some(rl), Doc::Missing),
                     None => true,
                 },
             };
@@ -157,7 +157,7 @@ fn plan_mutation_node(
             // type:'one' 子文档强制按 foreignKey upsert（写入形态对齐 JS `_upsertOne`；
             // 权限门禁与字段过滤与 many 路径对齐：can_write_schema + filter_writable_data，
             // 拥有父模型写权限 ≠ 拥有子模型写权限）
-            if !can_write_schema(rel_schema, ctx) {
+            if !can_write_schema(registry.role_rules(), rel_schema, ctx) {
                 return Err(ERR_NO_WRITE.to_string());
             }
             // RBAC 表级写判定（one 子步骤同样叠加，deny-wins）

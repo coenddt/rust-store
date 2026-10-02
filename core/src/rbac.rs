@@ -520,9 +520,9 @@ pub fn filter_writable_data_overlay(
     ctx: Option<&Context>,
     data: &Value,
 ) -> Value {
-    let Some(p) = registry.rbac() else {
+    if registry.rbac().is_none() {
         return crate::permission::filter_writable_data(registry.role_rules(), schema, ctx, data);
-    };
+    }
     let base = get_writable_fields(registry.role_rules(), schema, ctx);
     let writable = overlay_writable_fields(registry, &schema.name, ctx, base);
     let Some(writable) = writable else {

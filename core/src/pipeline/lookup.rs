@@ -20,7 +20,7 @@ use super::{MAX_DEPTH, MAX_PAGINATED_DEPTH};
 /// 关系目标行条件注入（静态 owner ∨ RBAC 行条件，供 `$lookup` 内 `$match` 使用）：
 /// 静态 owner 条件与 RBAC 行条件各自独立追加进 `ands`（同层 $and 语义 = 两引擎 deny-wins）
 fn push_row_conditions(ands: &mut Vec<Value>, rel_schema: &Schema, registry: &Registry, ctx: Option<&Context>) {
-    if let Some(owner) = merge_owner_condition(rel_schema, ctx, None) {
+    if let Some(owner) = merge_owner_condition(registry.role_rules(), rel_schema, ctx, None) {
         ands.push(owner);
     }
     if let Some(rbac_cond) = row_condition(registry, rel_schema, ctx, "read") {
@@ -35,8 +35,8 @@ fn readable_computes_overlay(
     registry: &Registry,
     ctx: Option<&Context>,
 ) -> Option<HashSet<String>> {
-    let base = get_readable_computes(schema, ctx);
-    overlay_readable_fields(registry.rbac(), &schema.name, ctx, base)
+    let base = get_readable_computes(registry.role_rules(), schema, ctx);
+    overlay_readable_fields(registry, &schema.name, ctx, base)
 }
 
 /// 外键匹配表达式：数组字段用 $in，否则 $eq
@@ -346,12 +346,12 @@ pub fn build_agg_stages(
             let field_unreadable = field
                 .as_deref()
                 .map(|f| {
-                    !is_field_readable(rel_schema, ctx, f)
+                    !is_field_readable(registry.role_rules(), rel_schema, ctx, f)
                         || !crate::rbac::is_field_readable_overlay(registry, rel_schema, ctx, f)
                 })
                 .unwrap_or(false);
-            if !is_relation_readable(schema, ctx, &rel_name)
-                || !can_read_schema(rel_schema, ctx)
+            if !is_relation_readable(registry.role_rules(), schema, ctx, &rel_name)
+                || !can_read_schema(registry.role_rules(), rel_schema, ctx)
                 || field_unreadable
             {
                 return Err(ERR_PERMISSION.to_string());

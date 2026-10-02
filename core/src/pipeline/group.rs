@@ -222,7 +222,7 @@ pub fn validate_read_permission(
         return Ok(());
     }
     for key in &spec.by {
-        if !is_field_readable(schema, ctx, key)
+        if !is_field_readable(registry.role_rules(), schema, ctx, key)
             || !crate::rbac::is_field_readable_overlay(registry, schema, ctx, key)
         {
             return Err(ERR_PERMISSION.to_string());
@@ -230,7 +230,7 @@ pub fn validate_read_permission(
     }
     for (_, def) in &spec.agg {
         if let Some(field) = &def.field {
-            if !is_field_readable(schema, ctx, field)
+            if !is_field_readable(registry.role_rules(), schema, ctx, field)
                 || !crate::rbac::is_field_readable_overlay(registry, schema, ctx, field)
             {
                 return Err(ERR_PERMISSION.to_string());

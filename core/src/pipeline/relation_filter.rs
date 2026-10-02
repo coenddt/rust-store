@@ -114,7 +114,7 @@ pub fn plan(
 
     // 关系级读权限（§9.1 R6）：不可读 → Err(ERR_PERMISSION)，绝不静默当 false
     // （R0 决策 #1：表级与关系级策略一致，同一 code + 文案）。
-    if let Some(readable) = get_readable_relations(schema, ctx) {
+    if let Some(readable) = get_readable_relations(registry.role_rules(), schema, ctx) {
         for p in &preds {
             if !readable.contains(&p.rel_name) {
                 return Err(ERR_PERMISSION.to_string());
@@ -132,7 +132,7 @@ pub fn plan(
             }
             // 8c-2：嵌套关系下钻 —— 嵌套关系本身（R6）与其字段（F3）都要过读权限
             for n in &p.nested {
-                if let Some(readable) = get_readable_relations(rel_schema, ctx) {
+                if let Some(readable) = get_readable_relations(registry.role_rules(), rel_schema, ctx) {
                     if !readable.contains(&n.rel_name) {
                         return Err(ERR_PERMISSION.to_string());
                     }
@@ -142,7 +142,7 @@ pub fn plan(
             }
             for (_, def) in &p.agg {
                 if let Some(field) = &def.field {
-                    if !is_field_readable(rel_schema, ctx, field)
+                    if !is_field_readable(registry.role_rules(), rel_schema, ctx, field)
                         || !is_field_readable_overlay(registry, rel_schema, ctx, field)
                     {
                         return Err(ERR_PERMISSION.to_string());
@@ -610,7 +610,7 @@ fn check_filter_readable(
         if k.starts_with('$') {
             continue;
         }
-        if !is_field_readable(rel_schema, ctx, k)
+        if !is_field_readable(registry.role_rules(), rel_schema, ctx, k)
             || !is_field_readable_overlay(registry, rel_schema, ctx, k)
         {
             return Err(ERR_PERMISSION.to_string());
@@ -869,7 +869,7 @@ fn build_lookup_stage(
         let n_let = format!("nrel_{}", n.local_field);
         let mut n_match: Vec<Value> = vec![rel_match_expr(&n.foreign_field, &n_let, n_is_array)];
         // 孙行越权防护（F3：与子行 owner 注入同源）+ RBAC 行条件叠加
-        if let Some(owner) = merge_owner_condition(n_schema, ctx, None) {
+        if let Some(owner) = merge_owner_condition(registry.role_rules(), n_schema, ctx, None) {
             n_match.push(owner);
         }
         if let Some(rbac_cond) = row_condition(registry, n_schema, ctx, "read") {
@@ -894,7 +894,7 @@ fn build_lookup_stage(
         // 嵌套条件去前缀路径 → `__rn{i}__.xxx` 点号路径（数组 ANY，与 SQL 嵌套 EXISTS 同语义）
         ands.push(prefix_filter(&n.filter, &format!("{}.", n.as_name))?);
     }
-    if let Some(owner) = merge_owner_condition(rel_schema, ctx, None) {
+    if let Some(owner) = merge_owner_condition(registry.role_rules(), rel_schema, ctx, None) {
         ands.push(owner);
     }
     // RBAC 行条件叠加（两引擎同层 $and，deny-wins）
