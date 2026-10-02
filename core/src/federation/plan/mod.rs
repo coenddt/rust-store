@@ -26,6 +26,7 @@ use crate::computes::{merge_depends_into_ast, InjectInfo};
 use crate::datasource::DataSourceConfig;
 use crate::permission::{can_read_schema, merge_owner_condition, Context};
 use crate::pipeline::{flatten_object_fields, parse_gql, Ast};
+use crate::rbac::{ensure_read, merge_row_condition};
 use crate::schema::{Profile, Registry, Schema};
 
 use route::{detect_cross_source_sort, walk};
@@ -106,12 +107,19 @@ pub fn plan_federated(
     if ctx.is_some() && !can_read_schema(&root_schema, ctx) {
         return Err(ERR_PERMISSION.to_string());
     }
+    // RBAC 表级读判定（deny-wins，叠加于静态白名单之后）
+    ensure_read(registry, &root_schema, ctx)?;
 
     // 所有者条件注入（与单库 `plan_query_ast_mut` 同语义：非 admin 只看自己的数据）
+    // RBAC 行条件在静态 owner 条件之上叠加（两引擎 $and）。
+    // 边界（维持既有行为零回归）：federation 仅在 GQL 显式携带 $condition 时注入
+    // owner/RBAC 行条件（原实现即无合成注入分支——与单库的 `@__core_owner__` 合成
+    // 注入不同；该既有缺口不在本轮修正，已记录执行账本）。
     if ctx.is_some() {
         if let Some(r) = ast.params.get("condition").cloned() {
             let key = r.get(1..).unwrap_or("").to_string();
-            match merge_owner_condition(&root_schema, ctx, params.get(&key).cloned()) {
+            let owner_merged = merge_owner_condition(&root_schema, ctx, params.get(&key).cloned());
+            match merge_row_condition(registry, &root_schema, ctx, "read", owner_merged) {
                 Some(v) => {
                     params.insert(key, v);
                 }

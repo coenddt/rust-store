@@ -9,6 +9,7 @@ use crate::pipeline::{
     build_pipeline, build_pipeline_projection, build_projection, flatten_object_fields, is_nullish,
     param, parse_gql, Ast, RelAst, REL_PRED_PREFIX,
 };
+use crate::rbac::{ensure_read, merge_row_condition};
 use crate::schema::{Registry, Schema};
 use crate::types::{is_truthy, validate_pipeline_stages};
 
@@ -197,12 +198,16 @@ pub fn plan_query_ast_mut(
     if ctx.is_some() && !can_read_schema(schema, ctx) {
         return Err(ERR_PERMISSION.to_string());
     }
+    // RBAC 表级读判定（deny-wins，叠加于静态白名单之后）
+    ensure_read(registry, schema, ctx)?;
 
     // 所有者条件注入（非 admin 用户只看自己的数据，无需 $condition 也不能越权读全表）
+    // RBAC 行条件在静态 owner 条件之上叠加（两引擎 $and）
     if ctx.is_some() {
         if let Some(r) = ast.params.get("condition").cloned() {
             let key = r.get(1..).unwrap_or("").to_string();
-            match merge_owner_condition(schema, ctx, params.get(&key).cloned()) {
+            let owner_merged = merge_owner_condition(schema, ctx, params.get(&key).cloned());
+            match merge_row_condition(registry, schema, ctx, "read", owner_merged) {
                 Some(v) => {
                     params.insert(key, v);
                 }
@@ -210,11 +215,19 @@ pub fn plan_query_ast_mut(
                     params.remove(&key);
                 }
             }
-        } else if let Some(owner) = merge_owner_condition(schema, ctx, None) {
-            // GQL 未显式给 $condition：注入合成 owner 条件为基准 $match，防越权读全表
-            ast.params
-                .insert("condition".to_string(), "@__core_owner__".to_string());
-            params.insert("__core_owner__".to_string(), owner);
+        } else {
+            // GQL 未显式给 $condition：静态 owner 条件与 RBAC 行条件叠加后非空即
+            // 注入合成条件为基准 $match，防越权读全表（RBAC 关闭时叠加直通 None，
+            // 行为零变化）
+            let static_owner = merge_owner_condition(schema, ctx, None);
+            if let Some(owner) =
+                merge_row_condition(registry, schema, ctx, "read", static_owner)
+                    .filter(|v| v.as_object().map(|o| !o.is_empty()).unwrap_or(false))
+            {
+                ast.params
+                    .insert("condition".to_string(), "@__core_owner__".to_string());
+                params.insert("__core_owner__".to_string(), owner);
+            }
         }
     }
 
@@ -271,6 +284,8 @@ pub fn check_readable_relations(
         if !can_read_schema(rel_schema, ctx) {
             return Err(ERR_PERMISSION.to_string());
         }
+        // RBAC 表级读判定（关系目标模型同样叠加，deny-wins）
+        ensure_read(registry, rel_schema, ctx)?;
         check_readable_relations(&rel_ast.relations, rel_schema, registry, ctx)?;
     }
     Ok(())
@@ -314,7 +329,7 @@ pub fn build_plan(
     } else if grouped {
         None
     } else {
-        build_projection(&fetch_ast, schema, ctx)
+        build_projection(&fetch_ast, schema, ctx, registry.rbac())
     };
 
     let collection = schema.collection.clone();

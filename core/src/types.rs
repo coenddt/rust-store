@@ -2,6 +2,7 @@
 
 use serde_json::{json, Value};
 
+use crate::command::forbid_t2q_shape;
 use crate::schema::{Profile, Schema};
 
 /// 获取指定类型的零值；`date`/`any`/未知类型返回 null
@@ -188,21 +189,27 @@ pub fn validate_condition_shape(
             }
             ("array", false) if profile == Profile::Text2Query => {
                 // U1：standard 放行（JSON 数组包含 / 整体等值）；text2query 功能收缩
-                return Err(format!(
-                    "数组字段 \"{k}\" 不支持过滤条件（U1/D2：text2query 档功能收缩）"
-                ));
+                return forbid_t2q_shape(
+                    profile,
+                    "U1 数组字段条件",
+                    format!("数组字段 \"{k}\" 不支持过滤条件（U1/D2）"),
+                );
             }
             ("object", false) if profile == Profile::Text2Query => {
                 // U2：standard 放行（JSON 对象整值等值，附跨后端键序差异告警）；text2query 功能收缩
-                return Err(format!(
-                    "对象字段 \"{k}\" 不支持过滤条件（U2/D2：text2query 档功能收缩）"
-                ));
+                return forbid_t2q_shape(
+                    profile,
+                    "U2 对象字段条件",
+                    format!("对象字段 \"{k}\" 不支持过滤条件（U2/D2）"),
+                );
             }
             ("object", true) if profile == Profile::Text2Query => {
                 // U3：standard 放行（JSON 列点号路径）；text2query 功能收缩
-                return Err(format!(
-                    "对象点号路径 \"{k}\" 不支持过滤条件（U3/D2：text2query 档功能收缩）"
-                ));
+                return forbid_t2q_shape(
+                    profile,
+                    "U3 对象点号路径条件",
+                    format!("对象点号路径 \"{k}\" 不支持过滤条件（U3/D2）"),
+                );
             }
             _ => {}
         }
@@ -254,9 +261,11 @@ pub fn validate_sort_shape(schema: &Schema, sort: &Value, profile: Profile) -> R
             continue;
         }
         if root_field_type(schema, k) == Some("object") && profile == Profile::Text2Query {
-            return Err(format!(
-                "对象点号路径 \"{k}\" 不支持排序（U4/D2：text2query 档功能收缩）"
-            ));
+            return forbid_t2q_shape(
+                profile,
+                "U4 对象点号路径排序",
+                format!("对象点号路径 \"{k}\" 不支持排序（U4/D2）"),
+            );
         }
     }
     Ok(())

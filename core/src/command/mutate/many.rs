@@ -7,6 +7,7 @@ use crate::command::write::build_insert_doc;
 use crate::command::{ensure_context, ERR_NO_BATCH_WRITE, ERR_NO_WRITE};
 use crate::computes::{apply_defaults_and_computes, FnRegistry};
 use crate::permission::{can_write_schema, Context};
+use crate::rbac::{ensure_write, merge_row_condition, WriteAction};
 use crate::schema::Registry;
 use crate::types::{validate_condition, validate_condition_shape};
 
@@ -37,6 +38,8 @@ pub fn plan_insert_many(
     if !can_write_schema(schema, ctx) {
         return Err(ERR_NO_WRITE.to_string());
     }
+    // RBAC 表级写判定（deny-wins，叠加于静态白名单之后）
+    ensure_write(registry, schema, ctx, WriteAction::Insert)?;
 
     let mut ids = IdCursor::new(new_ids);
     let mut processed = Vec::with_capacity(docs.len());
@@ -47,7 +50,7 @@ pub fn plan_insert_many(
         } else {
             ""
         };
-        let doc = build_insert_doc(schema, ctx, data, now, new_id)?;
+        let doc = build_insert_doc(registry, schema, ctx, data, now, new_id)?;
         processed.push(Value::Object(doc));
     }
     let returns = processed
@@ -90,11 +93,17 @@ pub fn plan_update_many(
             return Err(ERR_NO_BATCH_WRITE.to_string());
         }
     }
+    // RBAC 表级写判定（deny-wins）+ 行级条件合并（updateMany 无探针通道，
+    // ownerOnly / condition 并入 filter——匹配不到即 0 行，与读路径语义一致）
+    ensure_write(registry, schema, ctx, WriteAction::Update)?;
+    let eff_condition =
+        merge_row_condition(registry, schema, ctx, "update", Some(condition.clone()))
+            .unwrap_or_else(|| json!({}));
 
     let update_doc = if has_raw_operators(data) {
-        build_raw_update(schema, ctx, data, now)
+        build_raw_update(registry, schema, ctx, data, now)
     } else {
-        let mut set_data = build_set_data(schema, ctx, data);
+        let mut set_data = build_set_data(registry, schema, ctx, data);
         if schema.timestamps {
             set_data.insert("updatedAt".to_string(), json!(now));
         }
@@ -110,7 +119,7 @@ pub fn plan_update_many(
         .map(|m| m.keys().any(|k| schema.relations.contains_key(k)))
         .unwrap_or(false)
     {
-        let pre = plan_rel_pred_mutation(schema, registry, ctx, condition)?;
+        let pre = plan_rel_pred_mutation(schema, registry, ctx, &eff_condition)?;
         let rewritten = pre.condition;
         let mut command = cmd_update_many(schema, &rewritten, &update_doc);
         if let Some(obj) = command.as_object_mut() {
@@ -119,6 +128,6 @@ pub fn plan_update_many(
         return Ok(json!({ "command": command }));
     }
 
-    let command = cmd_update_many(schema, condition, &update_doc);
+    let command = cmd_update_many(schema, &eff_condition, &update_doc);
     Ok(json!({ "command": command }))
 }

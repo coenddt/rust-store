@@ -139,6 +139,24 @@ pub fn forbid_t2q(registry: &Registry, feature: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// text2query 档功能收缩 Err（无 `Registry` 场景：仅持 `Profile` 的形状校验函数用）。
+///
+/// 与 [`forbid_t2q`] 同构、文案形态单点收敛：
+///
+/// - 以 [`ERR_TEXT2QUERY`] 前缀开头（Host 按前缀映射 ProfileViolation 并 emit
+///   `profile_blocked`，不匹配中文文案）；
+/// - `[<feature>]` 方括号包裹门禁项名（Host 正则 `` \[(.+?)\] `` 提取为告警
+///   `feature` 字段，缺括号即 feature 留白）；
+/// - `detail` 携带原语义句与收缩编号（U1~U4 / 8c-2），供测试与 SKILL 文档子串断言。
+pub fn forbid_t2q_shape(profile: Profile, feature: &str, detail: String) -> Result<(), String> {
+    if profile == Profile::Text2Query {
+        return Err(format!(
+            "{ERR_TEXT2QUERY}text2query 档功能收缩 [{feature}]：{detail}"
+        ));
+    }
+    Ok(())
+}
+
 /// text2query 档禁止携带 `route_override`（受信来源门禁）。
 ///
 /// `route_override`（`{source, namespace}`）是多租户路由覆盖的**受信服务端参数**，

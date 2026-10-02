@@ -9,7 +9,8 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::permission::{filter_writable_data, Context};
+use crate::permission::Context;
+use crate::rbac::filter_writable_data_overlay;
 use crate::schema::{Registry, Schema};
 use crate::types::is_truthy;
 
@@ -165,11 +166,18 @@ fn find_one_and_update_options(options: &Value) -> Value {
 }
 
 /// update/updateMany 共用：原生操作符模式（`$` 开头的 key 透传 $inc/$unset/$addToSet 等）
-fn build_raw_update(schema: &Schema, ctx: Option<&Context>, data: &Value, now: i64) -> Value {
+fn build_raw_update(
+    registry: &Registry,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    data: &Value,
+    now: i64,
+) -> Value {
     let mut data = data.clone();
     if ctx.is_some() {
         if let Some(set_part) = data.get("$set").filter(|v| !v.is_null()).cloned() {
-            let filtered = filter_writable_data(schema, ctx, &set_part);
+            // RBAC 感知版：静态 writable ∩ RBAC writeFields（无策略时直通静态过滤）
+            let filtered = filter_writable_data_overlay(registry, schema, ctx, &set_part);
             data["$set"] = remove_undefined(&filtered);
         }
     }
@@ -184,9 +192,15 @@ fn build_raw_update(schema: &Schema, ctx: Option<&Context>, data: &Value, now: i
 
 /// update/updateMany 共用：$set 模式数据（过滤 + 去 null + 去 _id；
 /// 时间戳与空字段检查的先后顺序两种路径不同，由调用方处理）
-fn build_set_data(schema: &Schema, ctx: Option<&Context>, data: &Value) -> Map<String, Value> {
+fn build_set_data(
+    registry: &Registry,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    data: &Value,
+) -> Map<String, Value> {
     let src = match ctx {
-        Some(_) => filter_writable_data(schema, ctx, data),
+        // RBAC 感知版：静态 writable ∩ RBAC writeFields（无策略时直通静态过滤）
+        Some(_) => filter_writable_data_overlay(registry, schema, ctx, data),
         None => data.clone(),
     };
     let mut set_data = object_of(&remove_undefined(&src));

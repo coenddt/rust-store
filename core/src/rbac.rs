@@ -536,6 +536,66 @@ pub fn filter_writable_data_overlay(
     Value::Object(result)
 }
 
+/// 单字段可读判定（RBAC 感知版）：静态 `is_field_readable` ∧ RBAC readFields。
+/// 点号路径按 root 字段判定（与静态语义一致）；`ctx=None` / internal / RBAC 未生效 → 放行。
+pub fn is_field_readable_overlay(
+    registry: &Registry,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    field: &str,
+) -> bool {
+    if !crate::permission::is_field_readable(schema, ctx, field) {
+        return false;
+    }
+    let Some(p) = registry.rbac() else { return true };
+    let Some(c) = ctx else { return true };
+    if c.internal {
+        return true;
+    }
+    let Some(d) = decide(p, Some(c), &schema.name) else { return true };
+    match &d.read_fields {
+        None => true,
+        Some(rf) => rf.contains(field.split('.').next().unwrap_or(field)),
+    }
+}
+
+/// 探针命令需额外投影的字段（单条 update/remove 的 RBAC 行级判定依赖）：
+/// 各 grant condition 的字段键（ownerOnly 的 `createdBy` 由调用方静态并入）。
+/// 无 RBAC 行级限制 → 空表（调用方维持既有 `{_id, createdBy}` 投影）。
+pub fn probe_condition_fields(
+    registry: &Registry,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    action: &str,
+) -> Vec<String> {
+    let Some(p) = registry.rbac() else { return Vec::new() };
+    let Some(c) = ctx else { return Vec::new() };
+    if c.internal {
+        return Vec::new();
+    }
+    if decide(p, Some(c), &schema.name).is_none() {
+        return Vec::new();
+    }
+    let roles = effective_roles(c);
+    let mut fields = Vec::new();
+    for g in p.grants.iter().filter(|g| {
+        g.actions.iter().any(|a| a == action)
+            && (g.model == schema.name || g.model == "*")
+            && roles.iter().any(|r| r == &g.role)
+    }) {
+        if let Some(cond) = &g.condition {
+            if let Some(obj) = cond.as_object() {
+                for k in obj.keys() {
+                    if !fields.iter().any(|x: &String| x == k) {
+                        fields.push(k.clone());
+                    }
+                }
+            }
+        }
+    }
+    fields
+}
+
 // ─── 内部工具 ────────────────────────────────────────────────
 
 /// 单 grant 的行限制：`None` = 无限制；`ownerOnly` → `{createdBy: userId}`；

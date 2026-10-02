@@ -256,16 +256,29 @@ fn compute_keep(
     keep
 }
 
-/// 从 keep 中移除用户不可读的字段 / 计算列 / 关系（读权限，不含 Owner 级）
+/// 从 keep 中移除用户不可读的字段 / 计算列 / 关系（读权限，不含 Owner 级）。
+/// 字段 / 计算列维度叠加 RBAC readFields 交集（deny-wins）；关系维度沿用静态
+/// `relation.read`（RBAC grant 不覆盖关系维度）。
 fn apply_readable_prune(
     fields: &[String],
     relations: &[(String, RelAst)],
     schema: &Schema,
     ctx: Option<&Context>,
+    registry: &Registry,
     keep: &mut HashSet<String>,
 ) {
-    let readable_fields = get_readable_fields(schema, ctx);
-    let readable_computes = get_readable_computes(schema, ctx);
+    let readable_fields = crate::rbac::overlay_readable_fields(
+        registry.rbac(),
+        &schema.name,
+        ctx,
+        get_readable_fields(schema, ctx),
+    );
+    let readable_computes = crate::rbac::overlay_readable_fields(
+        registry.rbac(),
+        &schema.name,
+        ctx,
+        get_readable_computes(schema, ctx),
+    );
     let readable_relations = get_readable_relations(schema, ctx);
 
     for key in fields {
@@ -402,9 +415,9 @@ pub fn process_node(
     // ⑥ 计算 keep（GQL 字段 + 关系名 + 点号根字段 + _id）
     let mut keep = compute_keep(fields, relations, &dot_fields);
 
-    // ⑦ 权限裁剪（读权限 + Owner 级 read 校验）
+    // ⑦ 权限裁剪（读权限 + Owner 级 read 校验；字段/计算列维度叠加 RBAC 交集）
     if ctx.is_some() {
-        apply_readable_prune(fields, relations, schema, ctx, &mut keep);
+        apply_readable_prune(fields, relations, schema, ctx, registry, &mut keep);
         apply_owner_read_prune(doc, fields, relations, schema, ctx, &mut keep);
     }
 

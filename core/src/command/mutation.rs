@@ -13,7 +13,8 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::permission::{can_write_schema, evaluate, filter_writable_data, Context, Doc};
+use crate::permission::{can_write_schema, evaluate, Context, Doc};
+use crate::rbac::{ensure_write, filter_writable_data_overlay, WriteAction};
 use crate::schema::Registry;
 
 use super::cmd::{cmd_find_one_and_update, cmd_insert_one};
@@ -64,6 +65,8 @@ fn plan_mutation_node(
     if !can_write_schema(schema, ctx) {
         return Err(ERR_NO_WRITE.to_string());
     }
+    // RBAC 表级写判定（mutation 步骤按 Insert 判，deny-wins；子模型递归同样受限）
+    ensure_write(registry, schema, ctx, WriteAction::Insert)?;
     let Some(obj) = data.as_object() else {
         return Err("mutation 数据必须是对象".to_string());
     };
@@ -101,7 +104,8 @@ fn plan_mutation_node(
     }
 
     let filtered_field = match ctx {
-        Some(_) => filter_writable_data(schema, ctx, &Value::Object(field_data)),
+        // RBAC 感知版：静态 writable ∩ RBAC writeFields（无策略时直通静态过滤）
+        Some(_) => filter_writable_data_overlay(registry, schema, ctx, &Value::Object(field_data)),
         None => Value::Object(field_data),
     };
 
@@ -116,7 +120,7 @@ fn plan_mutation_node(
         } else {
             ""
         };
-        let doc = build_insert_doc(schema, ctx, &filtered_field, now, new_id)?;
+        let doc = build_insert_doc(registry, schema, ctx, &filtered_field, now, new_id)?;
         cmd_insert_one(schema, &Value::Object(doc))
     } else {
         // Upsert 路径（JS `_buildUpsertUpdate` 仅在无 _id 时才 `_generateId`）
@@ -156,11 +160,16 @@ fn plan_mutation_node(
             if !can_write_schema(rel_schema, ctx) {
                 return Err(ERR_NO_WRITE.to_string());
             }
+            // RBAC 表级写判定（one 子步骤同样叠加，deny-wins）
+            ensure_write(registry, rel_schema, ctx, WriteAction::Insert)?;
             let mut child = object_of(rel_val);
             child.insert(rel_def.foreign_field.clone(), json!(parent_ph));
             // 注入外键后再过滤（与 many 路径 plan_mutation_node 的过滤时机一致）
             let child_val = match ctx {
-                Some(_) => filter_writable_data(rel_schema, ctx, &Value::Object(child)),
+                // RBAC 感知版：静态 writable ∩ RBAC writeFields
+                Some(_) => {
+                    filter_writable_data_overlay(registry, rel_schema, ctx, &Value::Object(child))
+                }
                 None => Value::Object(child),
             };
             // JS `_upsertOne`：仅无 _id 时才 `_generateId`

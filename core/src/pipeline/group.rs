@@ -206,12 +206,14 @@ pub fn parse(schema: &Schema, group_v: &Value, registry: &Registry) -> Result<Gr
     Ok(GroupSpec { by, agg })
 }
 
-/// F2：`$group` 的 `by` 键 / `agg` 引用字段必须过所属 schema 的 `field.read`。
+/// F2：`$group` 的 `by` 键 / `agg` 引用字段必须过所属 schema 的 `field.read` ∧
+/// RBAC readFields（deny-wins）。
 ///
 /// `$having` 仅可引用 `by` 键 / `agg` 别名（[`validate_having`]），其背后的引用字段即
 /// `by` 键与 `agg` 字段本身，故由本函数一并覆盖。越权 → `Err(ERR_PERMISSION)`；
 /// `ctx = None` 放行（fail-open）。
 pub fn validate_read_permission(
+    registry: &Registry,
     schema: &Schema,
     ctx: Option<&Context>,
     spec: &GroupSpec,
@@ -220,13 +222,17 @@ pub fn validate_read_permission(
         return Ok(());
     }
     for key in &spec.by {
-        if !is_field_readable(schema, ctx, key) {
+        if !is_field_readable(schema, ctx, key)
+            || !crate::rbac::is_field_readable_overlay(registry, schema, ctx, key)
+        {
             return Err(ERR_PERMISSION.to_string());
         }
     }
     for (_, def) in &spec.agg {
         if let Some(field) = &def.field {
-            if !is_field_readable(schema, ctx, field) {
+            if !is_field_readable(schema, ctx, field)
+                || !crate::rbac::is_field_readable_overlay(registry, schema, ctx, field)
+            {
                 return Err(ERR_PERMISSION.to_string());
             }
         }

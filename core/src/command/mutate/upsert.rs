@@ -5,7 +5,8 @@ use serde_json::{json, Map, Value};
 use crate::command::cmd::cmd_find_one_and_update;
 use crate::command::write::has_creator_permission;
 use crate::command::{ensure_context, ERR_NO_WRITE};
-use crate::permission::{can_write_schema, filter_writable_data, Context};
+use crate::permission::{can_write_schema, Context};
+use crate::rbac::{ensure_write, filter_writable_data_overlay, WriteAction};
 use crate::schema::{Registry, Schema};
 use crate::types::{is_truthy, validate_condition, validate_condition_shape};
 
@@ -161,9 +162,12 @@ pub fn plan_upsert(
     if !can_write_schema(schema, ctx) {
         return Err(ERR_NO_WRITE.to_string());
     }
+    // RBAC 表级写判定（upsert 按 Insert 动作判，deny-wins）
+    ensure_write(registry, schema, ctx, WriteAction::Insert)?;
 
     let filtered_data = match ctx {
-        Some(_) => filter_writable_data(schema, ctx, data),
+        // RBAC 感知版：静态 writable ∩ RBAC writeFields（无策略时直通静态过滤）
+        Some(_) => filter_writable_data_overlay(registry, schema, ctx, data),
         None => data.clone(),
     };
 

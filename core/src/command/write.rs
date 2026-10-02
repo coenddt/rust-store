@@ -4,7 +4,11 @@ use serde_json::{json, Map, Value};
 
 use crate::computes::{apply_defaults_and_computes, FnRegistry};
 use crate::permission::{
-    can_write_schema, evaluate, filter_writable_data, merge_owner_condition, Context, Doc,
+    can_write_schema, evaluate, merge_owner_condition, Context, Doc,
+};
+use crate::rbac::{
+    ensure_write, ensure_write_on_doc, filter_writable_data_overlay, merge_row_condition,
+    probe_condition_fields, WriteAction,
 };
 use crate::schema::{Registry, Schema};
 use crate::types::{
@@ -32,8 +36,10 @@ pub fn plan_insert(
     if !can_write_schema(schema, ctx) {
         return Err(ERR_NO_WRITE.to_string());
     }
+    // RBAC 表级写判定（deny-wins，叠加于静态白名单之后）
+    ensure_write(registry, schema, ctx, WriteAction::Insert)?;
 
-    let doc = build_insert_doc(schema, ctx, data, now, new_id)?;
+    let doc = build_insert_doc(registry, schema, ctx, data, now, new_id)?;
     let doc = Value::Object(doc);
     Ok(json!({
         "command": cmd_insert_one(schema, &doc),
@@ -44,6 +50,7 @@ pub fn plan_insert(
 /// insert 文档规范化（对应 JS `insert` 主体）：
 /// 权限过滤 → 保留显式 null → 自动 _id / createdBy / 时间戳
 pub(super) fn build_insert_doc(
+    registry: &Registry,
     schema: &Schema,
     ctx: Option<&Context>,
     data: &Value,
@@ -51,7 +58,8 @@ pub(super) fn build_insert_doc(
     new_id: &str,
 ) -> Result<Map<String, Value>, String> {
     let filtered = match ctx {
-        Some(c) => filter_writable_data(schema, Some(c), data),
+        // RBAC 感知版：静态 writable ∩ RBAC writeFields（无策略时直通静态过滤）
+        Some(_) => filter_writable_data_overlay(registry, schema, ctx, data),
         None => data.clone(),
     };
 
@@ -148,7 +156,10 @@ pub fn plan_count(
         None | Some(Value::Null) => json!({}),
         Some(v) => v.clone(),
     };
-    let filter = merge_owner_condition(schema, ctx, Some(base)).unwrap_or_else(|| json!({}));
+    // 静态 owner 条件叠加 RBAC 行条件（两引擎 $and，deny-wins）
+    let owner_merged = merge_owner_condition(schema, ctx, Some(base));
+    let filter = merge_row_condition(registry, schema, ctx, "read", owner_merged)
+        .unwrap_or_else(|| json!({}));
     Ok(cmd_count_documents(schema, &filter))
 }
 
@@ -177,14 +188,24 @@ pub enum Probe<'a> {
 /// Schema 级写权限检查（对应 JS `_checkWritePerm`）：
 /// guest 直接拒绝；非写授权时仅 creator 命中才放行（需 Host 先执行探针命令）。
 ///
+/// RBAC 叠加（deny-wins）：
+/// - 表级：`ensure_write(action)` 在 guest 检查后判定，deny 即拒；
+/// - 行级：`row_condition` 非空（ownerOnly / condition）时**同样需要探针**——
+///   静态放行的路径也要先取 `{_id, createdBy, condition 键}` 再重入判定
+///   （[`ensure_write_on_doc`]），杜绝 ownerOnly 单条更新静默命中他人文档；
+/// - 探针重入（`Probe::Found`）时静态 `evaluate` 与 RBAC 行级判定都过才放行。
+///
 /// 返回：`Ok(None)` = 放行；`Ok(Some(cmd))` = Host 先执行该 findOne 探针后携
 /// [`Probe::Found`] / [`Probe::NoResult`] 重入；`Err` = 拒绝（Host 映射 PermissionError）。
+#[allow(clippy::too_many_arguments)]
 pub fn check_write_perm(
+    registry: &Registry,
     schema: &Schema,
     ctx: Option<&Context>,
     condition: &Value,
     deny_msg: &str,
     probe: Probe,
+    action: WriteAction,
 ) -> Result<Option<Value>, String> {
     // JS：`if (ctx)` 才做检查 —— 无上下文（内部调用）不设防
     let Some(c) = ctx else {
@@ -198,7 +219,38 @@ pub fn check_write_perm(
     {
         return Err(deny_msg.to_string());
     }
+    // RBAC 表级写判定（deny-wins；拒绝文案自带 RBAC 标识，不走入参 deny_msg）
+    ensure_write(registry, schema, Some(c), action)?;
+    // RBAC 行级限制是否存在（存在则探针投影需并入 condition 字段键）
+    let rbac_row_restricted =
+        crate::rbac::row_condition(registry, schema, Some(c), action.as_str()).is_some();
+
+    let probe_projection = |extra: &[String]| -> Value {
+        let mut m = Map::new();
+        m.insert("_id".to_string(), json!(1));
+        m.insert("createdBy".to_string(), json!(1));
+        for f in extra {
+            m.insert(f.clone(), json!(1));
+        }
+        Value::Object(m)
+    };
+    let rbac_fields = probe_condition_fields(registry, schema, Some(c), action.as_str());
+
     if can_write_schema(schema, Some(c)) {
+        // 静态放行：RBAC 行级受限时仍需探针（否则静默放行越权行更新/删除）
+        if rbac_row_restricted && is_truthy(condition) {
+            return match probe {
+                Probe::NotProbed => Ok(Some(cmd_find_one(
+                    schema,
+                    condition,
+                    Some(&probe_projection(&rbac_fields)),
+                ))),
+                Probe::NoResult => Err(deny_msg.to_string()),
+                Probe::Found(doc) => {
+                    ensure_write_on_doc(registry, schema, Some(c), action, doc).map(|_| None)
+                }
+            };
+        }
         return Ok(None);
     }
     let creator_only = schema
@@ -207,20 +259,27 @@ pub fn check_write_perm(
         .map(|w| w.iter().any(|r| r == "creator"))
         .unwrap_or(false);
     if creator_only && is_truthy(condition) {
+        let needs_row_check = rbac_row_restricted;
         return match probe {
             Probe::NotProbed => Ok(Some(cmd_find_one(
                 schema,
                 condition,
-                Some(&json!({ "_id": 1, "createdBy": 1 })),
+                Some(&probe_projection(&rbac_fields)),
             ))),
             Probe::NoResult => Err(deny_msg.to_string()),
-            Probe::Found(doc) => {
-                if evaluate(Some(c), schema.write.as_deref(), Doc::Doc(doc)) {
-                    Ok(None)
-                } else {
-                    Err(deny_msg.to_string())
+                Probe::Found(doc) => {
+                    if evaluate(Some(c), schema.write.as_deref(), Doc::Doc(doc)) {
+                        if needs_row_check {
+                            // 静态 creator 过 → RBAC 行级再判（两引擎都过才放行）
+                            ensure_write_on_doc(registry, schema, Some(c), action, doc)
+                                .map(|_| None)
+                        } else {
+                            Ok(None)
+                        }
+                    } else {
+                        Err(deny_msg.to_string())
+                    }
                 }
-            }
         };
     }
     Err(deny_msg.to_string())

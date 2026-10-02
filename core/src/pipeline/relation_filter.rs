@@ -18,10 +18,11 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::command::ERR_PERMISSION;
+use crate::command::{forbid_t2q_shape, ERR_PERMISSION};
 use crate::permission::{
     get_readable_relations, is_field_readable, merge_owner_condition, Context,
 };
+use crate::rbac::{is_field_readable_overlay, row_condition};
 use crate::schema::{Profile, Registry, Schema};
 use crate::types::{validate_condition, AGG_OPS};
 
@@ -127,7 +128,7 @@ pub fn plan(
         for p in &preds {
             let rel_schema = registry.get(&p.model)?;
             if let Some(filter) = &p.filter {
-                check_filter_readable(rel_schema, ctx, filter)?;
+                check_filter_readable(registry, rel_schema, ctx, filter)?;
             }
             // 8c-2：嵌套关系下钻 —— 嵌套关系本身（R6）与其字段（F3）都要过读权限
             for n in &p.nested {
@@ -137,15 +138,19 @@ pub fn plan(
                     }
                 }
                 let nested_schema = registry.get(&n.model)?;
-                check_filter_readable(nested_schema, ctx, &n.filter)?;
+                check_filter_readable(registry, nested_schema, ctx, &n.filter)?;
             }
             for (_, def) in &p.agg {
                 if let Some(field) = &def.field {
-                    if !is_field_readable(rel_schema, ctx, field) {
+                    if !is_field_readable(rel_schema, ctx, field)
+                        || !is_field_readable_overlay(registry, rel_schema, ctx, field)
+                    {
                         return Err(ERR_PERMISSION.to_string());
                     }
                 }
             }
+            // RBAC 表级读判定（关系目标模型同样叠加，deny-wins）
+            crate::rbac::ensure_read(registry, rel_schema, ctx)?;
         }
     }
 
@@ -581,9 +586,11 @@ fn cond_obj(alias: &str, op: &str, val: &Value) -> Value {
 
 /// F3：递归校验关系聚合谓词 `filter` 引用的子字段可读性。
 ///
-/// 逻辑组（`$and/$or/$nor`）递归；标量键过子模型 `field.read`（关系/数组/对象等形态
-/// 已在 [`validate_scalar_filter`] 处拒绝）。越权 → `Err(ERR_PERMISSION)`。
+/// 逻辑组（`$and/$or/$nor`）递归；标量键过子模型 `field.read` ∧ RBAC readFields
+/// （关系/数组/对象等形态已在 [`validate_scalar_filter`] 处拒绝）。越权 →
+/// `Err(ERR_PERMISSION)`。
 fn check_filter_readable(
+    registry: &Registry,
     rel_schema: &Schema,
     ctx: Option<&Context>,
     filter: &Value,
@@ -595,7 +602,7 @@ fn check_filter_readable(
         if matches!(k.as_str(), "$and" | "$or" | "$nor") {
             if let Some(arr) = v.as_array() {
                 for it in arr {
-                    check_filter_readable(rel_schema, ctx, it)?;
+                    check_filter_readable(registry, rel_schema, ctx, it)?;
                 }
             }
             continue;
@@ -603,7 +610,9 @@ fn check_filter_readable(
         if k.starts_with('$') {
             continue;
         }
-        if !is_field_readable(rel_schema, ctx, k) {
+        if !is_field_readable(rel_schema, ctx, k)
+            || !is_field_readable_overlay(registry, rel_schema, ctx, k)
+        {
             return Err(ERR_PERMISSION.to_string());
         }
     }
@@ -661,10 +670,13 @@ fn parse_pred_filter(
         };
         // ── 嵌套关系下钻（8c-2）：仅支持 `关系.字段`，仅一层，且不得出现在 `$or`/`$nor` 内 ──
         if profile == Profile::Text2Query {
-            return Err(format!(
-                "关系聚合谓词 \"{rel_name}\" 字段 \"{k}\" 是嵌套关系路径\
-                 （8c-2：text2query 档功能收缩）"
-            ));
+            // 命中即 Err（guard 已保证 profile），map 仅对齐本函数的 `Result<Value, _>` 签名
+            return forbid_t2q_shape(
+                profile,
+                "8c-2 嵌套关系路径",
+                format!("关系聚合谓词 \"{rel_name}\" 字段 \"{k}\" 是嵌套关系路径（8c-2）"),
+            )
+            .map(|()| Value::Null);
         }
         if in_or {
             return Err(format!(
@@ -786,15 +798,21 @@ fn validate_pred_field(
             "关系聚合谓词 \"{rel_name}\" 字段 \"{field}\" 是数组字段索引路径\
              （各后端数组索引语义不一致；请改用整值过滤或对象点号路径）"
         )),
-        ("array", false) if profile == Profile::Text2Query => Err(format!(
-            "关系聚合谓词 \"{rel_name}\" 字段 \"{field}\" 是数组字段（U1/D2：text2query 档功能收缩）"
-        )),
-        ("object", false) if profile == Profile::Text2Query => Err(format!(
-            "关系聚合谓词 \"{rel_name}\" 字段 \"{field}\" 是对象字段（U2/D2：text2query 档功能收缩）"
-        )),
-        ("object", true) if profile == Profile::Text2Query => Err(format!(
-            "关系聚合谓词 \"{rel_name}\" 字段 \"{field}\" 是对象点号路径（U3/D2：text2query 档功能收缩）"
-        )),
+        ("array", false) if profile == Profile::Text2Query => forbid_t2q_shape(
+            profile,
+            "U1 数组字段条件",
+            format!("关系聚合谓词 \"{rel_name}\" 字段 \"{field}\" 是数组字段（U1/D2）"),
+        ),
+        ("object", false) if profile == Profile::Text2Query => forbid_t2q_shape(
+            profile,
+            "U2 对象字段条件",
+            format!("关系聚合谓词 \"{rel_name}\" 字段 \"{field}\" 是对象字段（U2/D2）"),
+        ),
+        ("object", true) if profile == Profile::Text2Query => forbid_t2q_shape(
+            profile,
+            "U3 对象点号路径条件",
+            format!("关系聚合谓词 \"{rel_name}\" 字段 \"{field}\" 是对象点号路径（U3/D2）"),
+        ),
         _ => Ok(()),
     }
 }
@@ -850,9 +868,12 @@ fn build_lookup_stage(
         let n_is_array = is_array_local_field(rel_schema, &n.local_field);
         let n_let = format!("nrel_{}", n.local_field);
         let mut n_match: Vec<Value> = vec![rel_match_expr(&n.foreign_field, &n_let, n_is_array)];
-        // 孙行越权防护（F3：与子行 owner 注入同源）
+        // 孙行越权防护（F3：与子行 owner 注入同源）+ RBAC 行条件叠加
         if let Some(owner) = merge_owner_condition(n_schema, ctx, None) {
             n_match.push(owner);
+        }
+        if let Some(rbac_cond) = row_condition(registry, n_schema, ctx, "read") {
+            n_match.push(rbac_cond);
         }
         let n_match_doc = if n_match.len() == 1 {
             n_match.remove(0)
@@ -875,6 +896,10 @@ fn build_lookup_stage(
     }
     if let Some(owner) = merge_owner_condition(rel_schema, ctx, None) {
         ands.push(owner);
+    }
+    // RBAC 行条件叠加（两引擎同层 $and，deny-wins）
+    if let Some(rbac_cond) = row_condition(registry, rel_schema, ctx, "read") {
+        ands.push(rbac_cond);
     }
     let match_doc = if ands.len() == 1 {
         ands.remove(0)

@@ -5,14 +5,23 @@ use std::collections::HashSet;
 use serde_json::{json, Map, Value};
 
 use crate::permission::{get_readable_fields, Context};
+use crate::rbac::{overlay_readable_fields, RbacPolicy};
 use crate::schema::{ComputeDef, Schema};
 
 use super::ast::Ast;
 
-/// 从投影中移除当前用户不可读的字段
-fn apply_permission_prune(proj: &mut Map<String, Value>, schema: &Schema, ctx: Option<&Context>) {
+/// 从投影中移除当前用户不可读的字段（静态 field.read ∧ RBAC readFields）
+fn apply_permission_prune(
+    proj: &mut Map<String, Value>,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    rbac: Option<&RbacPolicy>,
+) {
     let Some(c) = ctx else { return };
-    let Some(readable) = get_readable_fields(schema, Some(c)) else {
+    let readable = get_readable_fields(schema, Some(c));
+    // RBAC 字段交集（deny-wins）：无策略 / 未介入时直通静态集合
+    let readable = overlay_readable_fields(rbac, &schema.name, Some(c), readable);
+    let Some(readable) = readable else {
         return;
     };
     let keys: Vec<String> = proj.keys().cloned().collect();
@@ -148,7 +157,14 @@ pub fn build_pipeline_projection(ast: &Ast, schema: &Schema) -> Option<Value> {
 }
 
 /// 从 GQL 根字段列表 + schema computes 计算投影；无有效字段时返回 None
-pub fn build_projection(ast: &Ast, schema: &Schema, ctx: Option<&Context>) -> Option<Value> {
+///
+/// `rbac` 为当前 RBAC 策略（`registry.rbac()`；None = 未启用，权限裁剪直通静态）。
+pub fn build_projection(
+    ast: &Ast,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    rbac: Option<&RbacPolicy>,
+) -> Option<Value> {
     if ast.fields.is_empty() {
         return None;
     }
@@ -192,8 +208,8 @@ pub fn build_projection(ast: &Ast, schema: &Schema, ctx: Option<&Context>) -> Op
         }
     }
 
-    // 权限裁剪：从投影中移除当前用户不可读的字段
-    apply_permission_prune(&mut proj, schema, ctx);
+    // 权限裁剪：从投影中移除当前用户不可读的字段（静态 ∧ RBAC 交集）
+    apply_permission_prune(&mut proj, schema, ctx, rbac);
 
     Some(Value::Object(proj))
 }

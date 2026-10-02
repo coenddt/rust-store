@@ -4,6 +4,7 @@ use serde_json::{json, Map, Value};
 
 use crate::permission::{merge_owner_condition, Context};
 use crate::pipeline::{param, parse_gql};
+use crate::rbac::merge_row_condition;
 use crate::schema::Registry;
 use crate::types::{has_relation_predicate, is_truthy};
 
@@ -89,8 +90,10 @@ pub fn plan_query_with_count(
         .and_then(|r| param(&params, Some(r)).cloned())
         .filter(is_truthy)
         .unwrap_or_else(|| json!({}));
-    let count_filter =
-        merge_owner_condition(schema, ctx, Some(count_filter)).unwrap_or_else(|| json!({}));
+    // 静态 owner 条件叠加 RBAC 行条件（两引擎 $and，deny-wins）
+    let owner_merged = merge_owner_condition(schema, ctx, Some(count_filter));
+    let count_filter = merge_row_condition(registry, schema, ctx, "read", owner_merged)
+        .unwrap_or_else(|| json!({}));
 
     // §9.6 关系聚合谓词（`$condition` 中以**关系名**作键）无法用标量 `countDocuments` 表达：
     // Mongo 会把它当成「字段等于该对象」、SQL 无对应列 → total 与 items 静默不一致。

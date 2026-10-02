@@ -22,7 +22,7 @@ impl Parser {
         let tk = match self.peek() {
             None => {
                 return Err(format!(
-                    "期望 {}({}) 但已到达末尾",
+                    "ERR_GQL_PARSE:期望 {}({}) 但已到达末尾",
                     kind,
                     value.unwrap_or("undefined")
                 ))
@@ -31,7 +31,7 @@ impl Parser {
         };
         if tk.kind != kind || value.map(|v| tk.value != v).unwrap_or(false) {
             return Err(format!(
-                "期望 {}({}) 实际 {}({}) 位置 {}",
+                "ERR_GQL_PARSE:期望 {}({}) 实际 {}({}) 位置 {}",
                 kind,
                 value.unwrap_or("undefined"),
                 tk.kind,
@@ -109,7 +109,7 @@ impl Parser {
             // 否则该参数会被静默丢弃（与「绝不静默」冲突）。
             if prm.contains_key("pipeline") {
                 return Err(format!(
-                    "关系 \"{name}\" 的参数不支持 $pipeline（$pipeline 直通仅限根级 GQL）"
+                    "ERR_GQL_PARSE:关系 \"{name}\" 的参数不支持 $pipeline（$pipeline 直通仅限根级 GQL）"
                 ));
             }
             let has_brace = matches!(self.peek(), Some(t) if t.kind == "p" && t.value == "{");

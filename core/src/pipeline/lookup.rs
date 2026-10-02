@@ -9,12 +9,35 @@ use crate::permission::{
     can_read_schema, get_readable_computes, is_field_readable, is_relation_readable,
     merge_owner_condition, Context,
 };
+use crate::rbac::{ensure_read, overlay_readable_fields, row_condition};
 use crate::schema::{Profile, Registry, RelationDef, Schema};
 use crate::types::{validate_condition, validate_condition_shape, validate_sort_shape};
 
 use super::ast::RelAst;
 use super::util::{append_order, clamp_t2q_limit, is_nullish, non_nullish, param};
 use super::{MAX_DEPTH, MAX_PAGINATED_DEPTH};
+
+/// 关系目标行条件注入（静态 owner ∨ RBAC 行条件，供 `$lookup` 内 `$match` 使用）：
+/// 静态 owner 条件与 RBAC 行条件各自独立追加进 `ands`（同层 $and 语义 = 两引擎 deny-wins）
+fn push_row_conditions(ands: &mut Vec<Value>, rel_schema: &Schema, registry: &Registry, ctx: Option<&Context>) {
+    if let Some(owner) = merge_owner_condition(rel_schema, ctx, None) {
+        ands.push(owner);
+    }
+    if let Some(rbac_cond) = row_condition(registry, rel_schema, ctx, "read") {
+        ands.push(rbac_cond);
+    }
+}
+
+/// 计算列可读集（静态 compute.read ∧ RBAC readFields；RBAC readFields 同时约束
+/// 普通字段与计算列——对调用者而言都是「返回的列」）
+fn readable_computes_overlay(
+    schema: &Schema,
+    registry: &Registry,
+    ctx: Option<&Context>,
+) -> Option<HashSet<String>> {
+    let base = get_readable_computes(schema, ctx);
+    overlay_readable_fields(registry.rbac(), &schema.name, ctx, base)
+}
 
 /// 外键匹配表达式：数组字段用 $in，否则 $eq
 pub(crate) fn rel_match_expr(foreign_key: &str, let_var: &str, is_array_field: bool) -> Value {
@@ -200,9 +223,7 @@ pub fn build_lookup(
         validate_condition_shape(rel_schema, cond, registry.profile())?;
         ands.push(cond.clone());
     }
-    if let Some(owner) = merge_owner_condition(rel_schema, ctx, None) {
-        ands.push(owner);
-    }
+    push_row_conditions(&mut ands, rel_schema, registry, ctx);
     let match_doc = if ands.len() == 1 {
         ands.remove(0)
     } else {
@@ -285,7 +306,7 @@ pub fn build_agg_stages(
     requested: &HashSet<String>,
 ) -> Result<Vec<Value>, String> {
     let readable = if ctx.is_some() {
-        get_readable_computes(schema, ctx)
+        readable_computes_overlay(schema, registry, ctx)
     } else {
         None
     };
@@ -324,7 +345,10 @@ pub fn build_agg_stages(
         if ctx.is_some() {
             let field_unreadable = field
                 .as_deref()
-                .map(|f| !is_field_readable(rel_schema, ctx, f))
+                .map(|f| {
+                    !is_field_readable(rel_schema, ctx, f)
+                        || !crate::rbac::is_field_readable_overlay(registry, rel_schema, ctx, f)
+                })
                 .unwrap_or(false);
             if !is_relation_readable(schema, ctx, &rel_name)
                 || !can_read_schema(rel_schema, ctx)
@@ -332,6 +356,8 @@ pub fn build_agg_stages(
             {
                 return Err(ERR_PERMISSION.to_string());
             }
+            // RBAC 表级读判定（关系目标模型同样叠加，deny-wins）
+            ensure_read(registry, rel_schema, ctx)?;
         }
         let as_name = format!("_{}", key);
 
@@ -344,9 +370,7 @@ pub fn build_agg_stages(
             rel_let_expr(&rel_def.local_field, is_array),
         );
         let mut ands: Vec<Value> = vec![rel_match_expr(&rel_def.foreign_field, let_var, is_array)];
-        if let Some(owner) = merge_owner_condition(rel_schema, ctx, None) {
-            ands.push(owner);
-        }
+        push_row_conditions(&mut ands, rel_schema, registry, ctx);
         let match_doc = if ands.len() == 1 {
             ands.remove(0)
         } else {

@@ -198,8 +198,8 @@ pub fn build_pipeline(
             );
         }
         let spec = group::parse(schema, group_v, registry)?;
-        // F2：by 键 / agg 引用字段必须过 field.read（含 $having 背后的引用字段）
-        group::validate_read_permission(schema, ctx, &spec)?;
+        // F2：by 键 / agg 引用字段必须过 field.read ∧ RBAC readFields（含 $having 背后的引用字段）
+        group::validate_read_permission(registry, schema, ctx, &spec)?;
         let stages = group::build_stages(
             &spec,
             &ast.fields,

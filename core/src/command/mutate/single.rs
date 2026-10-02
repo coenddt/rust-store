@@ -6,6 +6,7 @@ use crate::command::cmd::{cmd_delete_many, cmd_find, cmd_find_one_and_update, cm
 use crate::command::write::{check_write_perm, Probe};
 use crate::command::{ensure_context, ERR_NO_BATCH_WRITE, ERR_NO_DELETE, ERR_NO_WRITE};
 use crate::permission::Context;
+use crate::rbac::WriteAction;
 use crate::schema::Registry;
 use crate::types::{validate_condition, validate_condition_shape};
 
@@ -38,14 +39,22 @@ pub fn plan_update(
     validate_condition(condition)?;
     // §11.4（D2）：写路径条件与读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
     validate_condition_shape(schema, condition, registry.profile())?;
-    if let Some(cmd) = check_write_perm(schema, ctx, condition, ERR_NO_WRITE, probe)? {
+    if let Some(cmd) = check_write_perm(
+        registry,
+        schema,
+        ctx,
+        condition,
+        ERR_NO_WRITE,
+        probe,
+        WriteAction::Update,
+    )? {
         return Ok(json!({ "needsProbe": cmd }));
     }
 
     let update_doc = if has_raw_operators(data) {
-        build_raw_update(schema, ctx, data, now)
+        build_raw_update(registry, schema, ctx, data, now)
     } else {
-        let mut set_data = build_set_data(schema, ctx, data);
+        let mut set_data = build_set_data(registry, schema, ctx, data);
         // JS：空字段检查在追加时间戳之前
         if set_data.is_empty() {
             return Err("没有提供要更新的字段".to_string());
@@ -84,7 +93,15 @@ pub fn plan_remove(
     if is_blank_condition(condition) {
         return Err(ERR_NO_BATCH_WRITE.to_string());
     }
-    if let Some(cmd) = check_write_perm(schema, ctx, condition, ERR_NO_DELETE, probe)? {
+    if let Some(cmd) = check_write_perm(
+        registry,
+        schema,
+        ctx,
+        condition,
+        ERR_NO_DELETE,
+        probe,
+        WriteAction::Remove,
+    )? {
         return Ok(json!({ "needsProbe": cmd }));
     }
 
