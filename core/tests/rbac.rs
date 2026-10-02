@@ -150,9 +150,11 @@ fn parse_rejects_operator_condition_and_non_scalar() {
 #[test]
 fn parse_rejects_enforce_without_roles_and_accepts_write_shorthand() {
     let mut reg = registry_with(&[post_schema()]);
-    assert!(reg
-        .set_rbac(Some(&policy(json!({ "mode": "enforce", "grants": [] }))))
-        .is_err(), "enforce 无受管角色应 Err");
+    assert!(
+        reg.set_rbac(Some(&policy(json!({ "mode": "enforce", "grants": [] }))))
+            .is_err(),
+        "enforce 无受管角色应 Err"
+    );
     // "write" 速记合法（展开为 insert/update/remove）
     reg.set_rbac(Some(&policy(json!({
         "roles": { "r1": {} },
@@ -297,12 +299,23 @@ fn readfields_intersect_prunes_projection() {
     }))))
     .unwrap();
     let v = ctx_of("u1", &["viewer"]);
-    let plan = plan_query("Post{ title body secret }", &params_of(json!({})), &reg, Some(&v))
-        .expect("granted read 应放行");
+    let plan = plan_query(
+        "Post{ title body secret }",
+        &params_of(json!({})),
+        &reg,
+        Some(&v),
+    )
+    .expect("granted read 应放行");
     let proj = projection_of(&plan);
     let proj = proj.as_object().expect("应有投影");
-    assert!(proj.contains_key("title") && proj.contains_key("body"), "可读字段应保留");
-    assert!(!proj.contains_key("secret"), "readFields 之外应被裁剪: {proj:?}");
+    assert!(
+        proj.contains_key("title") && proj.contains_key("body"),
+        "可读字段应保留"
+    );
+    assert!(
+        !proj.contains_key("secret"),
+        "readFields 之外应被裁剪: {proj:?}"
+    );
     assert!(proj.contains_key("_id"), "_id 豁免应保留");
 }
 
@@ -327,7 +340,10 @@ fn writefields_intersect_filters_insert_data() {
     .expect("granted insert 应放行");
     let doc = &plan["command"]["doc"];
     assert_eq!(doc["title"], json!("t"), "可写字段应保留");
-    assert!(doc.get("secret").is_none(), "writeFields 之外应被过滤: {doc}");
+    assert!(
+        doc.get("secret").is_none(),
+        "writeFields 之外应被过滤: {doc}"
+    );
 }
 
 // ─── 行级（ownerOnly / condition / 两引擎叠加） ──────────────
@@ -369,7 +385,10 @@ fn static_condition_merges_with_rbac_row_condition() {
     let plan = plan_query("Post{ title }", &params_of(json!({})), &reg, Some(&r))
         .expect("两引擎都过应放行");
     let s = plan.commands[0].to_string();
-    assert!(s.contains("createdBy"), "静态 creator owner 条件不得被 RBAC 放大: {s}");
+    assert!(
+        s.contains("createdBy"),
+        "静态 creator owner 条件不得被 RBAC 放大: {s}"
+    );
 }
 
 #[test]
@@ -468,9 +487,18 @@ fn owner_only_remove_probes_like_static_creator() {
     }))))
     .unwrap();
     let e = ctx_of("u1", &["editor"]);
-    let first = plan_remove("Post", &reg, Some(&e), &json!({ "_id": "p1" }), Probe::NotProbed)
-        .expect("首入应返回探针");
-    assert!(first.get("needsProbe").is_some(), "remove ownerOnly 应走探针: {first}");
+    let first = plan_remove(
+        "Post",
+        &reg,
+        Some(&e),
+        &json!({ "_id": "p1" }),
+        Probe::NotProbed,
+    )
+    .expect("首入应返回探针");
+    assert!(
+        first.get("needsProbe").is_some(),
+        "remove ownerOnly 应走探针: {first}"
+    );
     let err = plan_remove(
         "Post",
         &reg,
@@ -569,7 +597,10 @@ fn decide_unit_semantics() {
     let d = rbac::decide(policy, &[], Some(&both), "Post").expect("应有判决");
     assert!(d.allowed_actions.contains("read"));
     assert!(d.allowed_actions.contains("insert") && d.allowed_actions.contains("remove"));
-    assert!(d.read_fields.is_none(), "任一 read grant 未声明字段 = 不收紧");
+    assert!(
+        d.read_fields.is_none(),
+        "任一 read grant 未声明字段 = 不收紧"
+    );
 
     // 单 viewer：只读 + 字段收紧
     let viewer = ctx_of("u2", &["viewer"]);
@@ -674,7 +705,10 @@ fn deny_write_roles_configurable() {
     let schema = reg.get("Post").unwrap();
     let g = ctx_of("u1", &["guest"]);
     // 默认（拒写清单空）：guest 写放行（原 guest 硬编码写拒已清单化移除）
-    assert!(can_write_schema(reg.role_rules(), schema, Some(&g)), "guest 写不再必拒");
+    assert!(
+        can_write_schema(reg.role_rules(), schema, Some(&g)),
+        "guest 写不再必拒"
+    );
     assert!(
         can_read_schema(reg.role_rules(), schema, Some(&g)),
         "read 未配 → Open 姿态放行"
@@ -682,7 +716,10 @@ fn deny_write_roles_configurable() {
     // 显式注入拒写清单：写拒，读不受影响
     reg.set_deny_write_roles(vec!["guest".to_string()]);
     let schema = reg.get("Post").unwrap();
-    assert!(!can_write_schema(reg.role_rules(), schema, Some(&g)), "拒写清单命中应拒绝");
+    assert!(
+        !can_write_schema(reg.role_rules(), schema, Some(&g)),
+        "拒写清单命中应拒绝"
+    );
     assert!(
         can_read_schema(reg.role_rules(), schema, Some(&g)),
         "拒写只影响写路径，读不受影响"
@@ -709,12 +746,24 @@ fn unconfigured_closed_fails_secure() {
     reg.set_unconfigured_policy(UnconfiguredPolicy::Closed);
     let schema = reg.get("Post").unwrap();
     let g = ctx_of("u1", &["guest"]);
-    assert!(!can_read_schema(reg.role_rules(), schema, Some(&g)), "Closed 读拒");
-    assert!(!can_write_schema(reg.role_rules(), schema, Some(&g)), "Closed 写拒");
+    assert!(
+        !can_read_schema(reg.role_rules(), schema, Some(&g)),
+        "Closed 读拒"
+    );
+    assert!(
+        !can_write_schema(reg.role_rules(), schema, Some(&g)),
+        "Closed 写拒"
+    );
     // internal / ctx=None 直通不受姿态影响
     let sys = Context::system();
-    assert!(can_read_schema(reg.role_rules(), schema, Some(&sys)), "internal 不受姿态影响");
-    assert!(can_read_schema(reg.role_rules(), schema, None), "ctx=None 不受姿态影响");
+    assert!(
+        can_read_schema(reg.role_rules(), schema, Some(&sys)),
+        "internal 不受姿态影响"
+    );
+    assert!(
+        can_read_schema(reg.role_rules(), schema, None),
+        "ctx=None 不受姿态影响"
+    );
     // 豁免直通先于未配置姿态（显式信任声明，姿态管不住它）
     reg.set_exempt_roles(vec!["admin".to_string()]);
     let schema = reg.get("Post").unwrap();

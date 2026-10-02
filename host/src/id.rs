@@ -40,7 +40,12 @@ fn rand8(state: &mut u64) -> String {
 
 /// 生成一个 schema ID（`idPrefix` + 毫秒36大写 + 8位随机36）
 pub fn generate_id(prefix: &str, state: &mut u64) -> String {
-    format!("{}{}{}", prefix, to_base36(now_ms() as u64).to_uppercase(), rand8(state))
+    format!(
+        "{}{}{}",
+        prefix,
+        to_base36(now_ms() as u64).to_uppercase(),
+        rand8(state)
+    )
 }
 
 /// 当前时间戳毫秒（语义名，供写路径取 `now`）

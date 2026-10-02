@@ -8,7 +8,10 @@ use rust_store::Store;
 use serde_json::{json, Map, Value};
 
 fn params(pairs: &[(&str, Value)]) -> Map<String, Value> {
-    pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect()
 }
 
 fn mysql_uri() -> String {
@@ -40,7 +43,10 @@ async fn run_e2e(store: &Store, backend_label: &str) {
         .await
         .expect("insert 失败");
     let uid = doc["_id"].as_str().expect("_id").to_string();
-    assert!(uid.starts_with('u'), "{backend_label} idPrefix 应生效: {uid}");
+    assert!(
+        uid.starts_with('u'),
+        "{backend_label} idPrefix 应生效: {uid}"
+    );
 
     let doc2 = store
         .insert("user", &json!({ "name": "bob", "age": null }), None)
@@ -61,11 +67,18 @@ async fn run_e2e(store: &Store, backend_label: &str) {
 
     // 显式 null 读回三态：age=null 是「显式 null」不是缺失（H-01）
     let one = store
-        .query_one("user($condition: @c0) { name, age }", &params(&[("c0", json!({ "_id": uid2 }))]), None)
+        .query_one(
+            "user($condition: @c0) { name, age }",
+            &params(&[("c0", json!({ "_id": uid2 }))]),
+            None,
+        )
         .await
         .expect("query_one 失败")
         .expect("bob 应命中");
-    assert!(one.get("age").map(|v| v.is_null()).unwrap_or(false), "{backend_label} 显式 null 应读回 null 键");
+    assert!(
+        one.get("age").map(|v| v.is_null()).unwrap_or(false),
+        "{backend_label} 显式 null 应读回 null 键"
+    );
 
     // update（探针重入 + RETURNING / MySQL 写后回读）
     let updated = store
@@ -91,7 +104,10 @@ async fn run_e2e(store: &Store, backend_label: &str) {
     assert_eq!(out2["deletedCount"], 0, "{backend_label}");
 
     // 清理（下轮运行幂等）
-    store.remove("user", &json!({ "_id": uid2 }), None).await.ok();
+    store
+        .remove("user", &json!({ "_id": uid2 }), None)
+        .await
+        .ok();
 }
 
 #[tokio::test]
@@ -119,7 +135,9 @@ async fn pg_e2e() {
         eprintln!("跳过 PostgreSQL e2e（未设置 RUST_STORE_REAL_DB=1）");
         return;
     }
-    let store = Store::connect(&pg_uri()).await.expect("PostgreSQL 连接失败");
+    let store = Store::connect(&pg_uri())
+        .await
+        .expect("PostgreSQL 连接失败");
     store
         .execute_ddl(&[
             "DROP TABLE IF EXISTS \"user\"",

@@ -38,29 +38,38 @@ macro_rules! run_remove_tx {
         async fn $fn_name(
             conn: &mut $conn_ty,
             find: Option<&exec::Translated>,
-            make_archive: &mut (dyn FnMut(&[Value]) -> Result<Option<exec::Translated>, String> + Send),
+            make_archive: &mut (dyn FnMut(&[Value]) -> Result<Option<exec::Translated>, String>
+                      + Send),
             delete: &exec::Translated,
         ) -> Result<(u64, u64), String> {
             use sqlx::Connection as _;
-            let mut tx = conn.begin().await.map_err(|e| format!("开启事务失败: {e}"))?;
+            let mut tx = conn
+                .begin()
+                .await
+                .map_err(|e| format!("开启事务失败: {e}"))?;
             let seq = async {
                 let mut archived: u64 = 0;
                 if let Some(t) = find {
                     let outcome = exec::exec_translated(exec::Conn::$variant(&mut *tx), t).await?;
                     if !outcome.docs.is_empty() {
                         if let Some(arch) = make_archive(&outcome.docs)? {
-                            let a = exec::exec_translated(exec::Conn::$variant(&mut *tx), &arch).await?;
+                            let a = exec::exec_translated(exec::Conn::$variant(&mut *tx), &arch)
+                                .await?;
                             archived = a.changes;
                         }
                     }
                 }
-                let deleted = exec::exec_translated(exec::Conn::$variant(&mut *tx), delete).await?.changes;
+                let deleted = exec::exec_translated(exec::Conn::$variant(&mut *tx), delete)
+                    .await?
+                    .changes;
                 Ok((deleted, archived))
             }
             .await;
             match seq {
                 Ok(v) => {
-                    tx.commit().await.map_err(|e| format!("事务提交失败: {e}"))?;
+                    tx.commit()
+                        .await
+                        .map_err(|e| format!("事务提交失败: {e}"))?;
                     Ok(v)
                 }
                 Err(e) => {
@@ -352,7 +361,9 @@ impl Store {
         ctx: Option<&Context>,
     ) -> Result<Option<Value>, String> {
         let now = id::now();
-        let command = self.plan_update_with_probe(schema_name, condition, data, ctx, now).await?;
+        let command = self
+            .plan_update_with_probe(schema_name, condition, data, ctx, now)
+            .await?;
         let mut conn = self.pool.acquire().await.map_err(|e| e.to_string())?;
         let translated = exec::translate_command(self.backend, &command, &self.registry)?;
         let outcome = exec::exec_translated(conn.conn(), &translated).await?;
@@ -371,7 +382,8 @@ impl Store {
         schema_name: &'a str,
         condition: &'a Value,
         ctx: Option<&'a Context>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send + 'a>>
+    {
         Box::pin(self.remove_inner(schema_name, condition, ctx))
     }
 
@@ -423,13 +435,17 @@ impl Store {
             Some(cmd) => Some(exec::translate_command(self.backend, &cmd, &self.registry)?),
             None => None,
         };
-        let delete_translated = exec::translate_command(self.backend, &delete_command, &self.registry)?;
+        let delete_translated =
+            exec::translate_command(self.backend, &delete_command, &self.registry)?;
         let (backend, registry) = (&self.backend, &self.registry);
         let mut make_archive = move |docs: &[Value]| -> Result<Option<exec::Translated>, String> {
-            let archive_plan =
-                exec::with_registry(registry, |reg| plan_archive_docs(schema_name, reg, docs, id::now()))?;
+            let archive_plan = exec::with_registry(registry, |reg| {
+                plan_archive_docs(schema_name, reg, docs, id::now())
+            })?;
             match archive_plan.get("command").cloned() {
-                Some(cmd) if !cmd.is_null() => exec::translate_command(*backend, &cmd, registry).map(Some),
+                Some(cmd) if !cmd.is_null() => {
+                    exec::translate_command(*backend, &cmd, registry).map(Some)
+                }
                 _ => Ok(None),
             }
         };
@@ -437,15 +453,33 @@ impl Store {
         let (deleted_count, archived_count) = match &self.pool {
             Pool::Sqlite(p) => {
                 let mut conn = p.acquire().await.map_err(|e| e.to_string())?;
-                run_remove_tx_sqlite(&mut *conn, find_translated.as_ref(), &mut make_archive, &delete_translated).await
+                run_remove_tx_sqlite(
+                    &mut *conn,
+                    find_translated.as_ref(),
+                    &mut make_archive,
+                    &delete_translated,
+                )
+                .await
             }
             Pool::Mysql(p) => {
                 let mut conn = p.acquire().await.map_err(|e| e.to_string())?;
-                run_remove_tx_mysql(&mut *conn, find_translated.as_ref(), &mut make_archive, &delete_translated).await
+                run_remove_tx_mysql(
+                    &mut *conn,
+                    find_translated.as_ref(),
+                    &mut make_archive,
+                    &delete_translated,
+                )
+                .await
             }
             Pool::Postgres(p) => {
                 let mut conn = p.acquire().await.map_err(|e| e.to_string())?;
-                run_remove_tx_pg(&mut *conn, find_translated.as_ref(), &mut make_archive, &delete_translated).await
+                run_remove_tx_pg(
+                    &mut *conn,
+                    find_translated.as_ref(),
+                    &mut make_archive,
+                    &delete_translated,
+                )
+                .await
             }
         }?;
 
@@ -468,10 +502,7 @@ impl Store {
             let reg = self.read_reg()?;
             reg.get(schema_name)?.id_prefix.clone()
         };
-        let mut rng = self
-            .rng
-            .write()
-            .map_err(|_| "rng 锁中毒".to_string())?;
+        let mut rng = self.rng.write().map_err(|_| "rng 锁中毒".to_string())?;
         Ok(id::generate_id(&prefix, &mut rng))
     }
 
@@ -500,20 +531,48 @@ impl Store {
     ) -> Result<Value, String> {
         let first = {
             let reg = self.read_reg()?;
-            plan_update(schema_name, &reg, ctx, condition, data, &json!({}), now, Probe::NotProbed)?
+            plan_update(
+                schema_name,
+                &reg,
+                ctx,
+                condition,
+                data,
+                &json!({}),
+                now,
+                Probe::NotProbed,
+            )?
         };
         match first.get("needsProbe").cloned() {
             Some(probe_cmd) => {
                 let found = self.run_probe(&probe_cmd).await?;
                 let reg = self.read_reg()?;
                 match &found {
-                    Some(doc) => {
-                        plan_update(schema_name, &reg, ctx, condition, data, &json!({}), now, Probe::Found(doc))
-                    }
-                    None => plan_update(schema_name, &reg, ctx, condition, data, &json!({}), now, Probe::NoResult),
+                    Some(doc) => plan_update(
+                        schema_name,
+                        &reg,
+                        ctx,
+                        condition,
+                        data,
+                        &json!({}),
+                        now,
+                        Probe::Found(doc),
+                    ),
+                    None => plan_update(
+                        schema_name,
+                        &reg,
+                        ctx,
+                        condition,
+                        data,
+                        &json!({}),
+                        now,
+                        Probe::NoResult,
+                    ),
                 }
             }
-            None => Ok(first.get("command").cloned().ok_or_else(|| "plan_update 缺少 command".to_string())?),
+            None => Ok(first
+                .get("command")
+                .cloned()
+                .ok_or_else(|| "plan_update 缺少 command".to_string())?),
         }
     }
 

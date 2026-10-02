@@ -6,11 +6,16 @@ use rust_store_core::permission::Context;
 use serde_json::{json, Map, Value};
 
 fn params(pairs: &[(&str, Value)]) -> Map<String, Value> {
-    pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect()
 }
 
 async fn fresh_store() -> Store {
-    let store = Store::connect_sqlite("sqlite::memory:").await.expect("连接失败");
+    let store = Store::connect_sqlite("sqlite::memory:")
+        .await
+        .expect("连接失败");
     store
         .register(&json!({
             "name": "user",
@@ -65,14 +70,23 @@ async fn insert_query_update_remove_e2e() {
 
     // query_one：命中
     let one = store
-        .query_one("user($condition: @c0) { name, age }", &params(&[("c0", json!({ "_id": uid.clone() }))]), None)
+        .query_one(
+            "user($condition: @c0) { name, age }",
+            &params(&[("c0", json!({ "_id": uid.clone() }))]),
+            None,
+        )
         .await
         .expect("query_one 失败");
     assert!(one.is_some());
 
     // update（探针重入路径）
     let updated = store
-        .update("user", &json!({ "_id": uid.clone() }), &json!({ "age": 31 }), None)
+        .update(
+            "user",
+            &json!({ "_id": uid.clone() }),
+            &json!({ "age": 31 }),
+            None,
+        )
         .await
         .expect("update 失败");
     assert_eq!(updated.expect("update 应命中")["age"].as_f64(), Some(31.0));
@@ -85,7 +99,12 @@ async fn insert_query_update_remove_e2e() {
         internal: false,
     };
     let denied = store
-        .update("user", &json!({ "_id": uid }), &json!({ "age": 1 }), Some(&guest))
+        .update(
+            "user",
+            &json!({ "_id": uid }),
+            &json!({ "age": 1 }),
+            Some(&guest),
+        )
         .await;
     assert!(denied.is_err(), "guest 写入应被拒绝");
     assert!(denied.unwrap_err().starts_with("ERR_PERMISSION"));
@@ -100,7 +119,11 @@ async fn insert_query_update_remove_e2e() {
 
     // 删除后查不到
     let after = store
-        .query_one("user($condition: @c0) { name, age }", &params(&[("c0", json!({ "_id": uid }))]), None)
+        .query_one(
+            "user($condition: @c0) { name, age }",
+            &params(&[("c0", json!({ "_id": uid }))]),
+            None,
+        )
         .await
         .expect("query 失败");
     assert!(after.is_none());

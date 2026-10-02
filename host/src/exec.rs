@@ -51,9 +51,15 @@ pub enum PoolConn {
 impl Pool {
     pub async fn acquire(&self) -> Result<PoolConn, String> {
         Ok(match self {
-            Pool::Sqlite(p) => PoolConn::Sqlite(Box::new(p.acquire().await.map_err(|e| e.to_string())?)),
-            Pool::Mysql(p) => PoolConn::Mysql(Box::new(p.acquire().await.map_err(|e| e.to_string())?)),
-            Pool::Postgres(p) => PoolConn::Postgres(Box::new(p.acquire().await.map_err(|e| e.to_string())?)),
+            Pool::Sqlite(p) => {
+                PoolConn::Sqlite(Box::new(p.acquire().await.map_err(|e| e.to_string())?))
+            }
+            Pool::Mysql(p) => {
+                PoolConn::Mysql(Box::new(p.acquire().await.map_err(|e| e.to_string())?))
+            }
+            Pool::Postgres(p) => {
+                PoolConn::Postgres(Box::new(p.acquire().await.map_err(|e| e.to_string())?))
+            }
         })
     }
 }
@@ -96,7 +102,11 @@ pub fn translate_command(
 ) -> Result<Translated, String> {
     with_registry(registry, |reg| {
         let out = translate(backend, cmd, reg)?;
-        let unsupported = out.get("unsupported").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let unsupported = out
+            .get("unsupported")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
         if !unsupported.is_empty() {
             return Err(format!(
                 "命令包含无法安全下推的组合（unsupported = {}）：拒绝执行，请改写查询或换用 MongoDB 源",
@@ -109,14 +119,26 @@ pub fn translate_command(
             .ok_or_else(|| "translate 结果缺少 stmts".to_string())?
             .iter()
             .map(|s| SqlStmtJson {
-                text: s.get("text").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                params: s.get("params").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
+                text: s
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                params: s
+                    .get("params")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default(),
                 is_write: s.get("isWrite").and_then(|v| v.as_bool()).unwrap_or(false),
                 row_shape: s.get("rowShape").cloned().unwrap_or(Value::Null),
                 returning: s
                     .get("returning")
                     .and_then(|v| v.as_array())
-                    .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
                     .unwrap_or_default(),
             })
             .collect();
@@ -132,7 +154,10 @@ pub struct ExecOutcome {
 
 /// 在给定连接上执行一组翻译后的语句。
 /// 取数规则：最后一条产出行的语句为主结果（SELECT 带 rowShape 还原；写语句带 RETURNING 直取列）。
-pub async fn exec_translated(conn: Conn<'_>, translated: &Translated) -> Result<ExecOutcome, String> {
+pub async fn exec_translated(
+    conn: Conn<'_>,
+    translated: &Translated,
+) -> Result<ExecOutcome, String> {
     match conn {
         Conn::Sqlite(c) => exec_sqlite(c, translated).await,
         Conn::Mysql(c) => exec_mysql(c, translated).await,
@@ -175,7 +200,10 @@ fn inline_pg_nulls(stmt: &SqlStmtJson) -> Result<SqlStmtJson, String> {
                     .parse()
                     .map_err(|e| format!("PG 占位符解析失败: {e}"))?;
                 let v = stmt.params.get(idx - 1).ok_or_else(|| {
-                    format!("PG 占位符 ${idx} 超出 params 范围（{} 个）", stmt.params.len())
+                    format!(
+                        "PG 占位符 ${idx} 超出 params 范围（{} 个）",
+                        stmt.params.len()
+                    )
                 })?;
                 if v.is_null() {
                     out.push_str("NULL");
@@ -215,12 +243,17 @@ macro_rules! exec_backend {
                     q = $bind(q, p);
                 }
                 if stmt.is_write && stmt.row_shape.is_null() && stmt.returning.is_empty() {
-                    let r = q.execute(&mut *conn).await.map_err(|e| format!("SQL 执行失败: {e}"))?;
+                    let r = q
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(|e| format!("SQL 执行失败: {e}"))?;
                     changes += r.rows_affected();
                     docs.clear();
                 } else {
-                    let rows: Vec<$row_ty> =
-                        q.fetch_all(&mut *conn).await.map_err(|e| format!("SQL 执行失败: {e}"))?;
+                    let rows: Vec<$row_ty> = q
+                        .fetch_all(&mut *conn)
+                        .await
+                        .map_err(|e| format!("SQL 执行失败: {e}"))?;
                     docs = restore_docs(&stmt.row_shape, &rows, $decode)?;
                     changes += docs.len() as u64;
                 }
@@ -230,8 +263,20 @@ macro_rules! exec_backend {
     };
 }
 
-exec_backend!(exec_sqlite, SqliteConnection, SqliteRow, bind_sqlite, decode_sqlite);
-exec_backend!(exec_mysql, MySqlConnection, MySqlRow, bind_mysql, decode_mysql);
+exec_backend!(
+    exec_sqlite,
+    SqliteConnection,
+    SqliteRow,
+    bind_sqlite,
+    decode_sqlite
+);
+exec_backend!(
+    exec_mysql,
+    MySqlConnection,
+    MySqlRow,
+    bind_mysql,
+    decode_mysql
+);
 exec_backend!(exec_pg, PgConnection, PgRow, bind_pg, decode_pg);
 
 /// 取数语句的行处理：有 rowShape → core 还原嵌套文档；否则直接取列
@@ -282,7 +327,9 @@ bind_impl!(bind_pg, sqlx::Postgres, PgArguments);
 
 /// 提取文档数组的 `_id` 列表（两阶段 / preCommand 共用）
 pub fn extract_ids(docs: &[Value]) -> Vec<Value> {
-    docs.iter().map(|d| d.get("_id").cloned().unwrap_or(Value::Null)).collect()
+    docs.iter()
+        .map(|d| d.get("_id").cloned().unwrap_or(Value::Null))
+        .collect()
 }
 
 /// 递归替换运行期占位符（@c0 类命名参数 core 规划期已消费，宿主只处理这两类字符串）：
@@ -319,9 +366,18 @@ fn decode_sqlite(row: &SqliteRow) -> Result<Value, String> {
             .to_string();
         let v = match ti.as_str() {
             "NULL" => Value::Null,
-            "INTEGER" => row.try_get::<i64, _>(i).map(Value::from).map_err(|e| e.to_string())?,
-            "REAL" => row.try_get::<f64, _>(i).map(Value::from).map_err(|e| e.to_string())?,
-            "TEXT" => row.try_get::<String, _>(i).map(Value::from).map_err(|e| e.to_string())?,
+            "INTEGER" => row
+                .try_get::<i64, _>(i)
+                .map(Value::from)
+                .map_err(|e| e.to_string())?,
+            "REAL" => row
+                .try_get::<f64, _>(i)
+                .map(Value::from)
+                .map_err(|e| e.to_string())?,
+            "TEXT" => row
+                .try_get::<String, _>(i)
+                .map(Value::from)
+                .map_err(|e| e.to_string())?,
             "BLOB" => {
                 let b: Vec<u8> = row.try_get(i).map_err(|e| e.to_string())?;
                 Value::String(String::from_utf8_lossy(&b).into_owned())
@@ -354,8 +410,18 @@ macro_rules! decode_impl {
     };
 }
 
-decode_impl!(decode_mysql, MySqlRow, chain_mysql, "MySQL 列 {0} 解码失败：全部候选类型不匹配");
-decode_impl!(decode_pg, PgRow, chain_pg, "PostgreSQL 列 {0} 解码失败：全部候选类型不匹配");
+decode_impl!(
+    decode_mysql,
+    MySqlRow,
+    chain_mysql,
+    "MySQL 列 {0} 解码失败：全部候选类型不匹配"
+);
+decode_impl!(
+    decode_pg,
+    PgRow,
+    chain_pg,
+    "PostgreSQL 列 {0} 解码失败：全部候选类型不匹配"
+);
 
 // 候选类型链必须按后端宏生成：sqlx 的 Type/Decode 逐库实现，
 // 泛型 <R: Row> 上 try_get::<i64> 无对应 trait 约束
