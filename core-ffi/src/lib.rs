@@ -380,6 +380,72 @@ pub unsafe extern "C" fn rcore_rbac_enabled(handle: u64) -> *mut c_char {
     })
 }
 
+/// 豁免角色清单：`roles` 为 JSON 字符串数组（如 `["super_admin","admin"]`）。
+/// 命中者在一切判决环节直接放行；非法形态以 `{"ok":false,"error":...}` 显式浮出。
+#[no_mangle]
+pub unsafe extern "C" fn rcore_registry_set_exempt_roles(
+    handle: u64,
+    roles: *const c_char,
+) -> *mut c_char {
+    guard(|| {
+        let v = unsafe { json_arg(roles) }?;
+        let list: Vec<String> = serde_json::from_value(v)
+            .map_err(|e| format!("exempt_roles 必须是字符串数组: {e}"))?;
+        with_registries(|map| {
+            let reg = map
+                .get_mut(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            reg.set_exempt_roles(list);
+            Ok(())
+        })?;
+        Ok(json!(null))
+    })
+}
+
+/// 拒写角色清单：`roles` 为 JSON 字符串数组。命中者一切写路径拒绝（读不受影响）。
+#[no_mangle]
+pub unsafe extern "C" fn rcore_registry_set_deny_write_roles(
+    handle: u64,
+    roles: *const c_char,
+) -> *mut c_char {
+    guard(|| {
+        let v = unsafe { json_arg(roles) }?;
+        let list: Vec<String> = serde_json::from_value(v)
+            .map_err(|e| format!("deny_write_roles 必须是字符串数组: {e}"))?;
+        with_registries(|map| {
+            let reg = map
+                .get_mut(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            reg.set_deny_write_roles(list);
+            Ok(())
+        })?;
+        Ok(json!(null))
+    })
+}
+
+/// 未配置姿态：`policy` 为 JSON 字符串 `"open"` / `"closed"`；未知值显式报错（fail-fast）
+#[no_mangle]
+pub unsafe extern "C" fn rcore_registry_set_unconfigured_policy(
+    handle: u64,
+    policy: *const c_char,
+) -> *mut c_char {
+    guard(|| {
+        let v = unsafe { json_arg(policy) }?;
+        let s = v
+            .as_str()
+            .ok_or_else(|| "unconfigured_policy 必须是字符串".to_string())?;
+        let p = rust_store_core::permission::UnconfiguredPolicy::from_str_or_err(s)?;
+        with_registries(|map| {
+            let reg = map
+                .get_mut(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            reg.set_unconfigured_policy(p);
+            Ok(())
+        })?;
+        Ok(json!(null))
+    })
+}
+
 /// RBAC 动作判决：`action ∈ {read, insert, update, remove}`（data: true/false）。
 /// 策略未注入 / RBAC 不介入 → true（与 plan 链路的实际拦截结果一致）。
 #[no_mangle]
@@ -427,9 +493,10 @@ pub unsafe extern "C" fn rcore_rbac_readable_fields(
                 .get(&(handle as usize))
                 .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
             let schema = reg.get(&model)?;
-            let base = rust_store_core::permission::get_readable_fields(schema, ctx.as_ref());
+            let base =
+                rust_store_core::permission::get_readable_fields(reg.role_rules(), schema, ctx.as_ref());
             Ok(rust_store_core::rbac::overlay_readable_fields(
-                reg.rbac(),
+                reg,
                 &model,
                 ctx.as_ref(),
                 base,
@@ -462,9 +529,10 @@ pub unsafe extern "C" fn rcore_rbac_writable_fields(
                 .get(&(handle as usize))
                 .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
             let schema = reg.get(&model)?;
-            let base = rust_store_core::permission::get_writable_fields(schema, ctx.as_ref());
+            let base =
+                rust_store_core::permission::get_writable_fields(reg.role_rules(), schema, ctx.as_ref());
             Ok(rust_store_core::rbac::overlay_writable_fields(
-                reg.rbac(),
+                reg,
                 &model,
                 ctx.as_ref(),
                 base,
