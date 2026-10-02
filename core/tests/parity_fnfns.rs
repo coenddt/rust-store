@@ -85,7 +85,13 @@ fn run_async_fns_case(fx: &Value) -> Result<Value, String> {
         .cloned()
         .unwrap_or_default();
 
-    run_async_fns(&mut items, schema, ctx.as_ref(), Some(&TestFnRegistry))?;
+    run_async_fns(
+        &mut items,
+        &rust_store_core::permission::RoleRules::default(),
+        schema,
+        ctx.as_ref(),
+        Some(&TestFnRegistry),
+    )?;
     Ok(json!({ "items": items }))
 }
 

@@ -1142,11 +1142,6 @@
     }
   },
   {
-    "name": "upd-guest",
-    "kind": "update",
-    "error": true
-  },
-  {
     "name": "upd-with-options",
     "kind": "update",
     "result": {
@@ -1197,11 +1192,6 @@
         "modifiedCount": 3
       }
     }
-  },
-  {
-    "name": "updm-guest",
-    "kind": "update_many",
-    "error": true
   },
   {
     "name": "rm-archive",
@@ -1311,11 +1301,6 @@
         "archivedCount": 0
       }
     }
-  },
-  {
-    "name": "rm-guest",
-    "kind": "remove",
-    "error": true
   },
   {
     "name": "ups-new-id",

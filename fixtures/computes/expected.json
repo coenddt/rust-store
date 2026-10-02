@@ -299,48 +299,6 @@
     }
   },
   {
-    "name": "perm-guest",
-    "kind": "permission",
-    "canRead": true,
-    "canWrite": false,
-    "shouldInjectOwner": false,
-    "condition": {
-      "title": "x"
-    },
-    "readableFields": [
-      "locked",
-      "note",
-      "title"
-    ],
-    "readableRelations": [],
-    "writableFields": [
-      "note"
-    ],
-    "filteredData": {
-      "note": "b"
-    }
-  },
-  {
-    "name": "perm-admin",
-    "kind": "permission",
-    "canRead": true,
-    "canWrite": true,
-    "shouldInjectOwner": false,
-    "condition": {
-      "a": 1
-    },
-    "readableFields": [
-      "title"
-    ],
-    "readableRelations": [],
-    "writableFields": [
-      "title"
-    ],
-    "filteredData": {
-      "title": "x"
-    }
-  },
-  {
     "name": "perm-null-ctx",
     "kind": "permission",
     "canRead": true,

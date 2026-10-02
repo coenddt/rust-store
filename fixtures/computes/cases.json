@@ -473,62 +473,6 @@
   },
   {
     "kind": "permission",
-    "name": "perm-guest",
-    "model": "Doc2",
-    "schemas": [
-      {
-        "name": "Doc2", "collection": "docs2", "timestamps": false,
-        "read": ["guest"], "write": ["guest"],
-        "fields": {
-          "title": { "type": "string" },
-          "note": { "type": "string", "write": ["guest"] },
-          "locked": { "type": "string", "write": ["admin"] }
-        },
-        "relations": {}
-      }
-    ],
-    "context": { "userId": "u9", "roles": ["guest"] },
-    "condition": { "title": "x" },
-    "data": { "title": "a", "note": "b", "locked": "c" },
-    "expect": {
-      "canRead": true,
-      "canWrite": false,
-      "shouldInjectOwner": false,
-      "condition": { "title": "x" },
-      "readableFields": ["locked", "note", "title"],
-      "readableRelations": [],
-      "writableFields": ["note"],
-      "filteredData": { "note": "b" }
-    }
-  },
-  {
-    "kind": "permission",
-    "name": "perm-admin",
-    "model": "Doc3",
-    "schemas": [
-      {
-        "name": "Doc3", "collection": "docs3", "timestamps": false,
-        "read": ["creator"], "write": ["creator"],
-        "fields": { "title": { "type": "string" } },
-        "relations": {}
-      }
-    ],
-    "context": { "userId": "u1", "roles": ["admin"] },
-    "condition": { "a": 1 },
-    "data": { "title": "x", "other": 2 },
-    "expect": {
-      "canRead": true,
-      "canWrite": true,
-      "shouldInjectOwner": false,
-      "condition": { "a": 1 },
-      "readableFields": ["title"],
-      "readableRelations": [],
-      "writableFields": ["title"],
-      "filteredData": { "title": "x" }
-    }
-  },
-  {
-    "kind": "permission",
     "name": "perm-null-ctx",
     "model": "Doc3",
     "schemas": [

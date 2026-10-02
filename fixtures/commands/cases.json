@@ -509,25 +509,6 @@
   },
   {
     "kind": "update",
-    "name": "upd-guest",
-    "schemas": [
-      {
-        "name": "PostW", "collection": "posts_w", "idPrefix": "P", "timestamps": false,
-        "write": ["creator"],
-        "fields": { "title": { "type": "string" }, "createdBy": { "type": "string" } },
-        "relations": {}
-      }
-    ],
-    "model": "PostW",
-    "condition": { "_id": "p1" },
-    "data": { "title": "new" },
-    "options": null,
-    "context": { "userId": "u2", "roles": ["guest"] },
-    "now": 1700000000000,
-    "expect_error": true
-  },
-  {
-    "kind": "update",
     "name": "upd-with-options",
     "schemas": [
       {
@@ -560,23 +541,6 @@
     "context": null,
     "now": 1700000000000,
     "modifiedCount": 3
-  },
-  {
-    "kind": "update_many",
-    "name": "updm-guest",
-    "schemas": [
-      {
-        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
-        "fields": { "title": { "type": "string" } },
-        "relations": {}
-      }
-    ],
-    "model": "Post",
-    "condition": { "title": "a" },
-    "data": { "views": 1 },
-    "context": { "userId": "u1", "roles": ["guest"] },
-    "now": 1700000000000,
-    "expect_error": true
   },
   {
     "kind": "remove",
@@ -633,22 +597,6 @@
     "context": { "userId": "u1", "roles": ["user"] },
     "now": 1700000000000,
     "deletedCount": 1
-  },
-  {
-    "kind": "remove",
-    "name": "rm-guest",
-    "schemas": [
-      {
-        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
-        "fields": { "title": { "type": "string" } },
-        "relations": {}
-      }
-    ],
-    "model": "Post",
-    "condition": { "_id": "p1" },
-    "context": { "userId": "u1", "roles": ["guest"] },
-    "now": 1700000000000,
-    "expect_error": true
   },
   {
     "kind": "upsert",

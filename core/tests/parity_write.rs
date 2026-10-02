@@ -14,6 +14,12 @@
 //!
 //! 黄金基准为**冻结快照**（原单体 JS 参考实现已随重构退役，快照无源可再生）。
 //! 复算校验：`node tools/verify-fixtures.js`。
+//!
+//! 退役记录（RBAC 内置角色清单化，2026-10-02）：`upd-guest` / `updm-guest` /
+//! `rm-guest` 三 case 断言的正是被 §11.5 废除的 guest 硬编码写拒语义（JS 参考
+//! 实现即旧语义源头），清单化后对拍不可能通过——三 case 自对拍集退役，拒写
+//! 清单的三写路径断言由 `core/tests/rbac.rs` 的 `deny_write_blocks_all_write_paths`
+//! 承载。
 
 use std::fs;
 use std::path::PathBuf;

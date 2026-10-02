@@ -59,7 +59,7 @@ fn run_case(fx: &Value) -> Result<(Value, Value, Value, Value), String> {
 
     let schema = registry.get(&ast.model)?;
     let pipeline = build_pipeline(&mut ast, &params, &registry, ctx.as_ref())?;
-    let projection = build_projection(&ast, schema, ctx.as_ref(), registry.rbac()).unwrap_or(Value::Null);
+    let projection = build_projection(&ast, schema, ctx.as_ref(), &registry).unwrap_or(Value::Null);
 
     Ok((tokens_value, ast_value, pipeline, projection))
 }

@@ -8,6 +8,12 @@
 //!
 //! 黄金基准为**冻结快照**（原单体 JS 参考实现已随重构退役，快照无源可再生）。
 //! 复算校验：`node tools/verify-fixtures.js`。
+//!
+//! 退役记录（RBAC 内置角色清单化，2026-10-02）：`perm-guest` / `perm-admin` 两 case
+//! 断言的正是被 §11.5 废除的旧语义（guest 硬编码写拒 / admin 隐形豁免），JS 参考
+//! 实现即旧语义源头，清单化后对拍不可能通过——两 case 自对拍集退役，其新语义
+//! 断言由 `core/tests/rbac.rs` 清单化测试组承载（deny_write_roles_configurable /
+//! exempt_roles_configurable_static / enforce_no_exception_default_deny）。
 
 use std::collections::HashSet;
 use std::fs;
@@ -115,20 +121,21 @@ fn run_permission(fx: &Value) -> Result<Value, String> {
     let model = fx.get("model").and_then(|v| v.as_str()).unwrap_or("");
     let schema = registry.get(model)?;
     let ctx = fx.get("context").and_then(context_from_value);
+    let rules = registry.role_rules();
 
     let condition = fx.get("condition").cloned();
-    let merged = merge_owner_condition(schema, ctx.as_ref(), condition);
+    let merged = merge_owner_condition(rules, schema, ctx.as_ref(), condition);
     let data = fx.get("data").cloned().unwrap_or(Value::Null);
 
     Ok(json!({
-        "canRead": can_read_schema(schema, ctx.as_ref()),
-        "canWrite": can_write_schema(schema, ctx.as_ref()),
-        "shouldInjectOwner": should_inject_owner_condition(schema, ctx.as_ref()),
+        "canRead": can_read_schema(rules, schema, ctx.as_ref()),
+        "canWrite": can_write_schema(rules, schema, ctx.as_ref()),
+        "shouldInjectOwner": should_inject_owner_condition(rules, schema, ctx.as_ref()),
         "condition": merged.unwrap_or(Value::Null),
-        "readableFields": sorted_set(get_readable_fields(schema, ctx.as_ref())),
-        "readableRelations": sorted_set(get_readable_relations(schema, ctx.as_ref())),
-        "writableFields": sorted_set(get_writable_fields(schema, ctx.as_ref())),
-        "filteredData": filter_writable_data(schema, ctx.as_ref(), &data),
+        "readableFields": sorted_set(get_readable_fields(rules, schema, ctx.as_ref())),
+        "readableRelations": sorted_set(get_readable_relations(rules, schema, ctx.as_ref())),
+        "writableFields": sorted_set(get_writable_fields(rules, schema, ctx.as_ref())),
+        "filteredData": filter_writable_data(rules, schema, ctx.as_ref(), &data),
     }))
 }
 

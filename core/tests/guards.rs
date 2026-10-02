@@ -109,7 +109,9 @@ fn permission_errors_carry_stable_prefix() {
     use rust_store_core::command::{ERR_NO_WRITE, ERR_PERM_PREFIX};
 
     // guest 角色写 schema → 权限错误；断言稳定前缀（Host 按前缀映射 PermissionError）
-    let reg = registry_with(base_schema(json!(true)));
+    // 拒写语义已清单化：guest 写拒由显式 set_deny_write_roles 承载（原硬编码随清单化移除）
+    let mut reg = registry_with(base_schema(json!(true)));
+    reg.set_deny_write_roles(vec!["guest".to_string()]);
     let ctx = Context {
         roles: Some(vec!["guest".to_string()]),
         ..Default::default()

@@ -463,7 +463,7 @@ pub fn overlay_readable_fields(
     ctx: Option<&Context>,
     base: Option<HashSet<String>>,
 ) -> Option<HashSet<String>> {
-    let p = registry.rbac()?;
+    let Some(p) = registry.rbac() else { return base };
     let Some(d) = decide(p, &registry.role_rules().exempt_roles, ctx, model) else { return base };
     let Some(rf) = &d.read_fields else { return base };
     match base {
@@ -490,7 +490,7 @@ pub fn overlay_writable_fields(
     ctx: Option<&Context>,
     base: Option<HashSet<String>>,
 ) -> Option<HashSet<String>> {
-    let p = registry.rbac()?;
+    let Some(p) = registry.rbac() else { return base };
     let Some(d) = decide(p, &registry.role_rules().exempt_roles, ctx, model) else { return base };
     let Some(wf) = &d.write_fields else { return base };
     match base {
