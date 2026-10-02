@@ -53,6 +53,8 @@ pub struct Registry {
     profile: Profile,
     /// RBAC 动态策略（`None` = 未启用，判决原语直通、行为与现状一致）。见 [`crate::rbac`]
     rbac: Option<crate::rbac::RbacPolicy>,
+    /// 角色清单与未配置姿态（豁免 / 拒写 / Open|Closed，默认 []/[]/Open）。见 [`crate::permission::RoleRules`]
+    role_rules: crate::permission::RoleRules,
 }
 
 impl Registry {
@@ -107,9 +109,9 @@ impl Registry {
 
     /// 清空 schema 注册表（`schemas` + `order`），对应绑定层的测试隔离 / 动态重建场景。
     ///
-    /// 只清 schema，**不动**配置开关（`require_context` / `profile` / `rbac`）与
-    /// 回调表（`clear_fns` 对称：各清各的）——开关生命周期属 Registry 配置面，
-    /// 不随 schema 集合重建而丢。
+    /// 只清 schema，**不动**配置开关（`require_context` / `profile` / `rbac` /
+    /// `role_rules`）与回调表（`clear_fns` 对称：各清各的）——开关生命周期属
+    /// Registry 配置面，不随 schema 集合重建而丢。
     pub fn clear(&mut self) {
         self.schemas.clear();
         self.order.clear();
@@ -138,6 +140,26 @@ impl Registry {
     /// 当前查询档位
     pub fn profile(&self) -> Profile {
         self.profile
+    }
+
+    /// 豁免角色清单：命中者在一切判决环节（静态 + RBAC）直接放行。默认空——无豁免。
+    pub fn set_exempt_roles(&mut self, roles: Vec<String>) {
+        self.role_rules.exempt_roles = roles;
+    }
+
+    /// 拒写角色清单：命中者一切写路径拒绝（读不受影响）。默认空——无拒写。
+    pub fn set_deny_write_roles(&mut self, roles: Vec<String>) {
+        self.role_rules.deny_write_roles = roles;
+    }
+
+    /// schema 白名单缺失/为空时的默认姿态。默认 Open（保持现状语义）。
+    pub fn set_unconfigured_policy(&mut self, policy: crate::permission::UnconfiguredPolicy) {
+        self.role_rules.unconfigured = policy;
+    }
+
+    /// 当前角色规则（静态判决函数与 RBAC decide 的共用取参入口）
+    pub fn role_rules(&self) -> &crate::permission::RoleRules {
+        &self.role_rules
     }
 
     /// 注入/清除 RBAC 动态策略；`None` = 关闭（判决原语直通）。
