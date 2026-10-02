@@ -21,21 +21,33 @@ impl Registry {
     pub fn can_read(&self, model: String, ctx: Option<Value>) -> Result<bool> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        Ok(can_read_schema(schema, context.as_ref()))
+        Ok(can_read_schema(
+            self.core.role_rules(),
+            schema,
+            context.as_ref(),
+        ))
     }
 
     #[napi]
     pub fn can_write(&self, model: String, ctx: Option<Value>) -> Result<bool> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        Ok(can_write_schema(schema, context.as_ref()))
+        Ok(can_write_schema(
+            self.core.role_rules(),
+            schema,
+            context.as_ref(),
+        ))
     }
 
     #[napi]
     pub fn should_inject_owner(&self, model: String, ctx: Option<Value>) -> Result<bool> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        Ok(should_inject_owner_condition(schema, context.as_ref()))
+        Ok(should_inject_owner_condition(
+            self.core.role_rules(),
+            schema,
+            context.as_ref(),
+        ))
     }
 
     /// 非 admin 用户只看自己数据时叠加 owner 条件；无上下文时原样返回
@@ -48,21 +60,35 @@ impl Registry {
     ) -> Result<Value> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        Ok(merge_owner_condition(schema, context.as_ref(), condition).unwrap_or(Value::Null))
+        Ok(merge_owner_condition(
+            self.core.role_rules(),
+            schema,
+            context.as_ref(),
+            condition,
+        )
+        .unwrap_or(Value::Null))
     }
 
     #[napi]
     pub fn readable_fields(&self, model: String, ctx: Option<Value>) -> Result<Value> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        Ok(sorted_set(get_readable_fields(schema, context.as_ref())))
+        Ok(sorted_set(get_readable_fields(
+            self.core.role_rules(),
+            schema,
+            context.as_ref(),
+        )))
     }
 
     #[napi]
     pub fn readable_relations(&self, model: String, ctx: Option<Value>) -> Result<Value> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        Ok(sorted_set(get_readable_relations(schema, context.as_ref())))
+        Ok(sorted_set(get_readable_relations(
+            self.core.role_rules(),
+            schema,
+            context.as_ref(),
+        )))
     }
 
     /// 可读计算列（read 白名单判决与 fields/relations 同构；`ctx=None` → None 不裁剪）
@@ -70,14 +96,22 @@ impl Registry {
     pub fn readable_computes(&self, model: String, ctx: Option<Value>) -> Result<Value> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        Ok(sorted_set(get_readable_computes(schema, context.as_ref())))
+        Ok(sorted_set(get_readable_computes(
+            self.core.role_rules(),
+            schema,
+            context.as_ref(),
+        )))
     }
 
     #[napi]
     pub fn writable_fields(&self, model: String, ctx: Option<Value>) -> Result<Value> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        Ok(sorted_set(get_writable_fields(schema, context.as_ref())))
+        Ok(sorted_set(get_writable_fields(
+            self.core.role_rules(),
+            schema,
+            context.as_ref(),
+        )))
     }
 
     #[napi]
@@ -89,7 +123,12 @@ impl Registry {
     ) -> Result<Value> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        Ok(filter_writable_data(schema, context.as_ref(), &data))
+        Ok(filter_writable_data(
+            self.core.role_rules(),
+            schema,
+            context.as_ref(),
+            &data,
+        ))
     }
 
     // ─── RBAC 查询面（判决唯一在 core；本层零判决逻辑，对齐 core-py 同名方法） ──
@@ -117,9 +156,9 @@ impl Registry {
     pub fn rbac_readable_fields(&self, model: String, ctx: Option<Value>) -> Result<Value> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        let base = get_readable_fields(schema, context.as_ref());
+        let base = get_readable_fields(self.core.role_rules(), schema, context.as_ref());
         Ok(sorted_set(rust_store_core::rbac::overlay_readable_fields(
-            self.core.rbac(),
+            &self.core,
             &model,
             context.as_ref(),
             base,
@@ -131,9 +170,9 @@ impl Registry {
     pub fn rbac_writable_fields(&self, model: String, ctx: Option<Value>) -> Result<Value> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        let base = get_writable_fields(schema, context.as_ref());
+        let base = get_writable_fields(self.core.role_rules(), schema, context.as_ref());
         Ok(sorted_set(rust_store_core::rbac::overlay_writable_fields(
-            self.core.rbac(),
+            &self.core,
             &model,
             context.as_ref(),
             base,

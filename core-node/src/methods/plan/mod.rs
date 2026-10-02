@@ -61,7 +61,7 @@ impl Registry {
         let schema = self.core.get(&ast.model).map_err(err)?;
         let pipeline =
             build_pipeline(&mut ast, &params, &self.core, context.as_ref()).map_err(err)?;
-        let projection = build_projection(&ast, schema, context.as_ref(), self.core.rbac())
+        let projection = build_projection(&ast, schema, context.as_ref(), &self.core)
             .unwrap_or(Value::Null);
 
         Ok(json!({

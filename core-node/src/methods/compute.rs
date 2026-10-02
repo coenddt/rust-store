@@ -55,7 +55,7 @@ impl Registry {
     pub fn async_fn_refs(&self, model: String, ctx: Option<Value>) -> Result<Vec<String>> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
-        Ok(select_async_fns(schema, context.as_ref())
+        Ok(select_async_fns(self.core.role_rules(), schema, context.as_ref())
             .into_iter()
             .map(|e| e.fn_ref)
             .collect())
