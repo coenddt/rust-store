@@ -51,6 +51,8 @@ pub struct Registry {
     require_context: bool,
     /// 查询档位（默认 [`Profile::Standard`]；text2query 由 AI 问数链路显式进入）。
     profile: Profile,
+    /// RBAC 动态策略（`None` = 未启用，判决原语直通、行为与现状一致）。见 [`crate::rbac`]
+    rbac: Option<crate::rbac::RbacPolicy>,
 }
 
 impl Registry {
@@ -126,6 +128,27 @@ impl Registry {
     /// 当前查询档位
     pub fn profile(&self) -> Profile {
         self.profile
+    }
+
+    /// 注入/清除 RBAC 动态策略；`None` = 关闭（判决原语直通）。
+    /// 解析失败 Err（fail-fast，禁静默吞配置错误），成功后判决链路即刻生效。
+    pub fn set_rbac(&mut self, policy: Option<&Value>) -> Result<(), String> {
+        match policy {
+            None => {
+                self.rbac = None;
+                Ok(())
+            }
+            Some(v) => {
+                let p = crate::rbac::RbacPolicy::from_json(v)?;
+                self.rbac = Some(p);
+                Ok(())
+            }
+        }
+    }
+
+    /// 当前 RBAC 策略（`None` = 未启用）
+    pub fn rbac(&self) -> Option<&crate::rbac::RbacPolicy> {
+        self.rbac.as_ref()
     }
 
     /// 按定位三元组精确获取 schema（命令路由的唯一定位入口）

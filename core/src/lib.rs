@@ -16,6 +16,7 @@ pub mod error;
 pub mod federation;
 pub mod permission;
 pub mod pipeline;
+pub mod rbac;
 pub mod schema;
 pub mod types;
 
