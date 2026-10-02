@@ -35,7 +35,7 @@ pub fn plan_insert_many(
         return Ok(json!({ "command": Value::Null, "returns": [] }));
     }
     let schema = registry.get(schema_name)?;
-    if !can_write_schema(schema, ctx) {
+    if !can_write_schema(registry.role_rules(), schema, ctx) {
         return Err(ERR_NO_WRITE.to_string());
     }
     // RBAC 表级写判定（deny-wins，叠加于静态白名单之后）
@@ -63,7 +63,7 @@ pub fn plan_insert_many(
     }))
 }
 
-/// 批量更新（对应 JS `updateMany`）。guest / 无写授权直接拒绝，不走 creator 探针。
+/// 批量更新（对应 JS `updateMany`）。拒写清单命中 / 无写授权直接拒绝，不走 creator 探针。
 pub fn plan_update_many(
     schema_name: &str,
     registry: &Registry,
@@ -83,13 +83,10 @@ pub fn plan_update_many(
         return Err(ERR_NO_BATCH_WRITE.to_string());
     }
     if let Some(c) = ctx {
-        let guest = c
-            .roles
-            .clone()
-            .unwrap_or_default()
-            .iter()
-            .any(|r| r == "guest");
-        if guest || !can_write_schema(schema, ctx) {
+        // 拒写清单（默认空——无拒写；原 guest 硬编码随清单化移除，设计 §11.4）
+        let deny_write =
+            crate::permission::has_any_role(c, &registry.role_rules().deny_write_roles);
+        if deny_write || !can_write_schema(registry.role_rules(), schema, ctx) {
             return Err(ERR_NO_BATCH_WRITE.to_string());
         }
     }

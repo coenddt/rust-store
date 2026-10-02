@@ -33,7 +33,7 @@ pub fn plan_insert(
     ensure_context(registry, ctx)?;
     let schema = registry.get(schema_name)?;
 
-    if !can_write_schema(schema, ctx) {
+    if !can_write_schema(registry.role_rules(), schema, ctx) {
         return Err(ERR_NO_WRITE.to_string());
     }
     // RBAC 表级写判定（deny-wins，叠加于静态白名单之后）
@@ -157,7 +157,7 @@ pub fn plan_count(
         Some(v) => v.clone(),
     };
     // 静态 owner 条件叠加 RBAC 行条件（两引擎 $and，deny-wins）
-    let owner_merged = merge_owner_condition(schema, ctx, Some(base));
+    let owner_merged = merge_owner_condition(registry.role_rules(), schema, ctx, Some(base));
     let filter = merge_row_condition(registry, schema, ctx, "read", owner_merged)
         .unwrap_or_else(|| json!({}));
     Ok(cmd_count_documents(schema, &filter))
@@ -186,7 +186,7 @@ pub enum Probe<'a> {
 }
 
 /// Schema 级写权限检查（对应 JS `_checkWritePerm`）：
-/// guest 直接拒绝；非写授权时仅 creator 命中才放行（需 Host 先执行探针命令）。
+/// 拒写清单命中直接拒绝；非写授权时仅 creator 命中才放行（需 Host 先执行探针命令）。
 ///
 /// RBAC 叠加（deny-wins）：
 /// - 表级：`ensure_write(action)` 在 guest 检查后判定，deny 即拒；
@@ -211,12 +211,9 @@ pub fn check_write_perm(
     let Some(c) = ctx else {
         return Ok(None);
     };
-    if c.roles
-        .clone()
-        .unwrap_or_default()
-        .iter()
-        .any(|r| r == "guest")
-    {
+    // 拒写清单（默认空——无拒写；原 guest 硬编码随清单化移除，设计 §11.4）
+    let rules = registry.role_rules();
+    if crate::permission::has_any_role(c, &rules.deny_write_roles) {
         return Err(deny_msg.to_string());
     }
     // RBAC 表级写判定（deny-wins；拒绝文案自带 RBAC 标识，不走入参 deny_msg）
@@ -236,7 +233,7 @@ pub fn check_write_perm(
     };
     let rbac_fields = probe_condition_fields(registry, schema, Some(c), action.as_str());
 
-    if can_write_schema(schema, Some(c)) {
+    if can_write_schema(registry.role_rules(), schema, Some(c)) {
         // 静态放行：RBAC 行级受限时仍需探针（否则静默放行越权行更新/删除）
         if rbac_row_restricted && is_truthy(condition) {
             return match probe {
@@ -268,7 +265,12 @@ pub fn check_write_perm(
             ))),
             Probe::NoResult => Err(deny_msg.to_string()),
                 Probe::Found(doc) => {
-                    if evaluate(Some(c), schema.write.as_deref(), Doc::Doc(doc)) {
+                    if evaluate(
+                        registry.role_rules(),
+                        Some(c),
+                        schema.write.as_deref(),
+                        Doc::Doc(doc),
+                    ) {
                         if needs_row_check {
                             // 静态 creator 过 → RBAC 行级再判（两引擎都过才放行）
                             ensure_write_on_doc(registry, schema, Some(c), action, doc)

@@ -10,7 +10,7 @@
 //! - 引擎之间（静态白名单 × RBAC）：**AND**（deny-wins）——收紧取交集。
 //!
 //! 行为契约（与 [`crate::permission`] 一致，勿破坏）：
-//! - `ctx: None` / `internal` / `super_admin` / `admin` → RBAC 不介入（直通）；
+//! - `ctx: None` / `internal` / 豁免清单（`exempt_roles`，默认空）命中 → RBAC 不介入（直通）；
 //! - 拒绝一律携带 `ERR_PERMISSION:` 稳定前缀（宿主按前缀映射 PermissionError），
 //!   二级标识 `RBAC:` 供日志与测试区分。
 
@@ -264,13 +264,18 @@ fn effective_roles(c: &Context) -> Vec<String> {
 /// 核心判决：`None` = RBAC 不介入（无 ctx / internal / 豁免角色 / overlay 未覆盖 /
 /// enforce 未受管）。enforce 受管但 matched 为空 → `Some`（全 deny），这是
 /// default deny 的承载点。
-pub fn decide(policy: &RbacPolicy, ctx: Option<&Context>, model: &str) -> Option<ModelDecision> {
+pub fn decide(
+    policy: &RbacPolicy,
+    exempt_roles: &[String],
+    ctx: Option<&Context>,
+    model: &str,
+) -> Option<ModelDecision> {
     let c = ctx?;
     if c.internal {
         return None;
     }
     let roles = effective_roles(c);
-    if roles.iter().any(|r| r == "super_admin" || r == "admin") {
+    if roles.iter().any(|r| exempt_roles.iter().any(|x| x == r)) {
         return None;
     }
 
@@ -333,7 +338,7 @@ pub fn ensure_read(
     ctx: Option<&Context>,
 ) -> Result<(), String> {
     let Some(p) = registry.rbac() else { return Ok(()) };
-    match decide(p, ctx, &schema.name) {
+    match decide(p, &registry.role_rules().exempt_roles, ctx, &schema.name) {
         None => Ok(()),
         Some(d) if d.allowed_actions.contains("read") => Ok(()),
         Some(_) => Err(deny_msg("read", &schema.name)),
@@ -348,7 +353,7 @@ pub fn ensure_write(
     action: WriteAction,
 ) -> Result<(), String> {
     let Some(p) = registry.rbac() else { return Ok(()) };
-    match decide(p, ctx, &schema.name) {
+    match decide(p, &registry.role_rules().exempt_roles, ctx, &schema.name) {
         None => Ok(()),
         Some(d) if d.allowed_actions.contains(action.as_str()) => Ok(()),
         Some(_) => Err(deny_msg(action.as_str(), &schema.name)),
@@ -371,7 +376,7 @@ pub fn ensure_write_on_doc(
     if c.internal {
         return Ok(());
     }
-    let Some(d) = decide(p, Some(c), &schema.name) else { return Ok(()) };
+    let Some(d) = decide(p, &registry.role_rules().exempt_roles, Some(c), &schema.name) else { return Ok(()) };
     if !d.allowed_actions.contains(action.as_str()) {
         return Err(deny_msg(action.as_str(), &schema.name));
     }
@@ -410,7 +415,7 @@ pub fn row_condition(
     if c.internal {
         return None;
     }
-    decide(p, Some(c), &schema.name)?;
+    decide(p, &registry.role_rules().exempt_roles, Some(c), &schema.name)?;
     let roles = effective_roles(c);
     let mut conds: Vec<Value> = Vec::new();
     for g in p.grants.iter().filter(|g| {
@@ -453,13 +458,13 @@ pub fn merge_row_condition(
 /// 字段读交集：`base`（静态 `get_readable_fields` 结果）与 RBAC readFields 取交。
 /// `_id` 随 base 保留（文档标识豁免，同 `filter_writable_data` 的 D-03 理由）。
 pub fn overlay_readable_fields(
-    p: Option<&RbacPolicy>,
+    registry: &Registry,
     model: &str,
     ctx: Option<&Context>,
     base: Option<HashSet<String>>,
 ) -> Option<HashSet<String>> {
-    let Some(p) = p else { return base };
-    let Some(d) = decide(p, ctx, model) else { return base };
+    let p = registry.rbac()?;
+    let Some(d) = decide(p, &registry.role_rules().exempt_roles, ctx, model) else { return base };
     let Some(rf) = &d.read_fields else { return base };
     match base {
         None => {
@@ -480,13 +485,13 @@ pub fn overlay_readable_fields(
 
 /// 字段写交集（语义同 [`overlay_readable_fields`]，作用于 writeFields）
 pub fn overlay_writable_fields(
-    p: Option<&RbacPolicy>,
+    registry: &Registry,
     model: &str,
     ctx: Option<&Context>,
     base: Option<HashSet<String>>,
 ) -> Option<HashSet<String>> {
-    let Some(p) = p else { return base };
-    let Some(d) = decide(p, ctx, model) else { return base };
+    let p = registry.rbac()?;
+    let Some(d) = decide(p, &registry.role_rules().exempt_roles, ctx, model) else { return base };
     let Some(wf) = &d.write_fields else { return base };
     match base {
         None => {
@@ -516,10 +521,10 @@ pub fn filter_writable_data_overlay(
     data: &Value,
 ) -> Value {
     let Some(p) = registry.rbac() else {
-        return crate::permission::filter_writable_data(schema, ctx, data);
+        return crate::permission::filter_writable_data(registry.role_rules(), schema, ctx, data);
     };
-    let base = get_writable_fields(schema, ctx);
-    let writable = overlay_writable_fields(Some(p), &schema.name, ctx, base);
+    let base = get_writable_fields(registry.role_rules(), schema, ctx);
+    let writable = overlay_writable_fields(registry, &schema.name, ctx, base);
     let Some(writable) = writable else {
         return data.clone();
     };
@@ -544,7 +549,7 @@ pub fn is_field_readable_overlay(
     ctx: Option<&Context>,
     field: &str,
 ) -> bool {
-    if !crate::permission::is_field_readable(schema, ctx, field) {
+    if !crate::permission::is_field_readable(registry.role_rules(), schema, ctx, field) {
         return false;
     }
     let Some(p) = registry.rbac() else { return true };
@@ -552,7 +557,7 @@ pub fn is_field_readable_overlay(
     if c.internal {
         return true;
     }
-    let Some(d) = decide(p, Some(c), &schema.name) else { return true };
+    let Some(d) = decide(p, &registry.role_rules().exempt_roles, Some(c), &schema.name) else { return true };
     match &d.read_fields {
         None => true,
         Some(rf) => rf.contains(field.split('.').next().unwrap_or(field)),
@@ -573,7 +578,7 @@ pub fn probe_condition_fields(
     if c.internal {
         return Vec::new();
     }
-    if decide(p, Some(c), &schema.name).is_none() {
+    if decide(p, &registry.role_rules().exempt_roles, Some(c), &schema.name).is_none() {
         return Vec::new();
     }
     let roles = effective_roles(c);
