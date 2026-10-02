@@ -346,6 +346,171 @@ pub unsafe extern "C" fn rcore_registry_list(handle: u64) -> *mut c_char {
     })
 }
 
+// ── RBAC 配置注入与查询面（判决唯一在 core；本层零判决逻辑） ──
+
+/// 注入/清除 RBAC 策略：`policy` 为 null = 清除；否则为策略 JSON。
+/// 解析失败以 `{"ok":false,"error":...}` 显式浮出（fail-fast）。
+#[no_mangle]
+pub unsafe extern "C" fn rcore_registry_set_rbac(handle: u64, policy: *const c_char) -> *mut c_char {
+    guard(|| {
+        let policy = unsafe { json_arg(policy) }?;
+        // JSON "null" / 缺失 → None（清除）；否则 Some
+        let policy_opt = if policy.is_null() { None } else { Some(&policy) };
+        with_registries(|map| {
+            let reg = map
+                .get_mut(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            reg.set_rbac(policy_opt)
+        })?;
+        Ok(json!(null))
+    })
+}
+
+/// RBAC 策略是否已注入（data: true/false）
+#[no_mangle]
+pub unsafe extern "C" fn rcore_rbac_enabled(handle: u64) -> *mut c_char {
+    guard(|| {
+        let enabled = with_registries(|map| {
+            let reg = map
+                .get(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            Ok(reg.rbac().is_some())
+        })?;
+        Ok(json!(enabled))
+    })
+}
+
+/// RBAC 动作判决：`action ∈ {read, insert, update, remove}`（data: true/false）。
+/// 策略未注入 / RBAC 不介入 → true（与 plan 链路的实际拦截结果一致）。
+#[no_mangle]
+pub unsafe extern "C" fn rcore_rbac_can(
+    handle: u64,
+    model: *const c_char,
+    action: *const c_char,
+    ctx: *const c_char,
+) -> *mut c_char {
+    guard(|| {
+        let model = unsafe { cstr(model) }?.to_string();
+        let action = unsafe { cstr(action) }?.to_string();
+        let ctx = unsafe { json_arg(ctx) }?;
+        let ctx = value_to_ctx(&ctx)?;
+        let allowed = with_registries(|map| {
+            let reg = map
+                .get(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            let schema = reg.get(&model)?;
+            Ok(match action.as_str() {
+                "read" => rust_store_core::rbac::ensure_read(reg, schema, ctx.as_ref()).is_ok(),
+                a => {
+                    let wa = rust_store_core::rbac::write_action_from_str(a)?;
+                    rust_store_core::rbac::ensure_write(reg, schema, ctx.as_ref(), wa).is_ok()
+                }
+            })
+        })?;
+        Ok(json!(allowed))
+    })
+}
+
+/// RBAC 叠加后的可读字段集（静态 ∩ readFields；data: 排序数组或 null）
+#[no_mangle]
+pub unsafe extern "C" fn rcore_rbac_readable_fields(
+    handle: u64,
+    model: *const c_char,
+    ctx: *const c_char,
+) -> *mut c_char {
+    guard(|| {
+        let model = unsafe { cstr(model) }?.to_string();
+        let ctx = unsafe { json_arg(ctx) }?;
+        let ctx = value_to_ctx(&ctx)?;
+        let fields = with_registries(|map| {
+            let reg = map
+                .get(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            let schema = reg.get(&model)?;
+            let base = rust_store_core::permission::get_readable_fields(schema, ctx.as_ref());
+            Ok(rust_store_core::rbac::overlay_readable_fields(
+                reg.rbac(),
+                &model,
+                ctx.as_ref(),
+                base,
+            ))
+        })?;
+        Ok(match fields {
+            None => json!(null),
+            Some(mut s) => {
+                let mut v: Vec<String> = s.drain().collect();
+                v.sort();
+                json!(v)
+            }
+        })
+    })
+}
+
+/// RBAC 叠加后的可写字段集（静态 ∩ writeFields；data: 排序数组或 null）
+#[no_mangle]
+pub unsafe extern "C" fn rcore_rbac_writable_fields(
+    handle: u64,
+    model: *const c_char,
+    ctx: *const c_char,
+) -> *mut c_char {
+    guard(|| {
+        let model = unsafe { cstr(model) }?.to_string();
+        let ctx = unsafe { json_arg(ctx) }?;
+        let ctx = value_to_ctx(&ctx)?;
+        let fields = with_registries(|map| {
+            let reg = map
+                .get(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            let schema = reg.get(&model)?;
+            let base = rust_store_core::permission::get_writable_fields(schema, ctx.as_ref());
+            Ok(rust_store_core::rbac::overlay_writable_fields(
+                reg.rbac(),
+                &model,
+                ctx.as_ref(),
+                base,
+            ))
+        })?;
+        Ok(match fields {
+            None => json!(null),
+            Some(mut s) => {
+                let mut v: Vec<String> = s.drain().collect();
+                v.sort();
+                json!(v)
+            }
+        })
+    })
+}
+
+/// RBAC 行级条件（ownerOnly / condition 的 OR 合并体；data: 对象或 null）。
+/// `action ∈ {read, update, remove}`（insert 无行级语义）。
+#[no_mangle]
+pub unsafe extern "C" fn rcore_rbac_row_condition(
+    handle: u64,
+    model: *const c_char,
+    action: *const c_char,
+    ctx: *const c_char,
+) -> *mut c_char {
+    guard(|| {
+        let model = unsafe { cstr(model) }?.to_string();
+        let action = unsafe { cstr(action) }?.to_string();
+        let ctx = unsafe { json_arg(ctx) }?;
+        let ctx = value_to_ctx(&ctx)?;
+        if !matches!(action.as_str(), "read" | "update" | "remove") {
+            return Err(format!(
+                "RBAC row_condition 的 action \"{action}\" 非法（仅支持 read / update / remove）"
+            ));
+        }
+        let cond = with_registries(|map| {
+            let reg = map
+                .get(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            let schema = reg.get(&model)?;
+            Ok(rust_store_core::rbac::row_condition(reg, schema, ctx.as_ref(), &action))
+        })?;
+        Ok(cond.unwrap_or(Value::Null))
+    })
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn rcore_plan_query(
     handle: u64,

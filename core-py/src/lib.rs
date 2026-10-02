@@ -61,6 +61,11 @@ impl Registry {
         self.core.list()
     }
 
+    /// 清空 schema 注册表（测试隔离 / 动态重建；不动 require_context / profile 配置开关）
+    fn clear_schemas(&mut self) {
+        self.core.clear();
+    }
+
     /// 注册同步计算列回调（schema 里 `fn: true` 的 `fnRef`，缺省为计算列名）
     fn set_fn(&mut self, fn_ref: String, callback: Py<PyAny>) {
         self.sync_fns.insert(fn_ref, callback);
@@ -94,6 +99,22 @@ impl Registry {
     /// 当前查询档位字符串（`'standard'` / `'text2query'`）
     fn profile(&self) -> String {
         self.core.profile().as_str().to_string()
+    }
+
+    /// 注入/清除 RBAC 动态策略（dict 或 None）；解析失败抛错（fail-fast）。
+    /// 判决唯一在 core：宿主仅透传配置与查询面，plan 链路拦截自动生效。
+    fn set_rbac(&mut self, policy: &Bound<'_, PyAny>) -> PyResult<()> {
+        if policy.is_none() {
+            self.core.set_rbac(None).map_err(err)
+        } else {
+            let json = py_to_json(policy)?;
+            self.core.set_rbac(Some(&json)).map_err(err)
+        }
+    }
+
+    /// RBAC 策略是否已注入
+    fn rbac_enabled(&self) -> bool {
+        self.core.rbac().is_some()
     }
 }
 

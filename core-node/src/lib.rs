@@ -85,6 +85,12 @@ impl Registry {
         self.core.list()
     }
 
+    /// 清空 schema 注册表（测试隔离 / 动态重建；不动 requireContext / profile 配置开关）
+    #[napi]
+    pub fn clear_schemas(&mut self) {
+        self.core.clear();
+    }
+
     /// 注册同步计算列回调（schema 里 `fn: true` 的 `fnRef`，缺省为计算列名）
     #[napi]
     pub fn set_fn(&mut self, fn_ref: String, callback: FunctionRef<Value, Value>) {
@@ -123,6 +129,19 @@ impl Registry {
     #[napi]
     pub fn profile(&self) -> String {
         self.core.profile().as_str().to_string()
+    }
+
+    /// 注入/清除 RBAC 动态策略（object 或 null）；解析失败抛错（fail-fast）。
+    /// 判决唯一在 core：宿主仅透传配置与查询面，plan 链路拦截自动生效。
+    #[napi]
+    pub fn set_rbac(&mut self, policy: Option<Value>) -> Result<()> {
+        self.core.set_rbac(policy.as_ref()).map_err(napi::Error::from_reason)
+    }
+
+    /// RBAC 策略是否已注入
+    #[napi]
+    pub fn rbac_enabled(&self) -> bool {
+        self.core.rbac().is_some()
     }
 }
 

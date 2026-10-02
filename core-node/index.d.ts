@@ -61,6 +61,8 @@ export declare class Registry {
   mergeOwnerCondition(model: string, ctx?: any | undefined | null, condition?: any | undefined | null): any
   readableFields(model: string, ctx?: any | undefined | null): any
   readableRelations(model: string, ctx?: any | undefined | null): any
+  /** 可读计算列（read 白名单判决与 fields/relations 同构；`ctx=None` → None 不裁剪） */
+  readableComputes(model: string, ctx?: any | undefined | null): any
   writableFields(model: string, ctx?: any | undefined | null): any
   filterWritableData(model: string, ctx: any | undefined | null, data: any): any
   /**
@@ -127,6 +129,8 @@ export declare class Registry {
   register(defn: any): void
   has(name: string): boolean
   list(): Array<string>
+  /** 清空 schema 注册表（测试隔离 / 动态重建；不动 requireContext / profile 配置开关） */
+  clearSchemas(): void
   /** 注册同步计算列回调（schema 里 `fn: true` 的 `fnRef`，缺省为计算列名） */
   setFn(fnRef: string, callback: (arg: any) => any): void
   clearFns(): void
