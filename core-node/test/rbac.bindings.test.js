@@ -10,6 +10,8 @@
  *   4. planQuery 产命令在 viewer ctx 下投影被裁（判决在 plan 链路生效）；
  *   5. ownerOnly grant 的 query 命令 filter 含 createdBy = userId；
  *   6. setRbac(null) 后全部恢复直通。
+ *   7. 豁免清单（清单化语义）：默认空清单 admin 受管即拒；setExemptRoles 后直通；清除恢复；
+ *   8. 拒写清单 / 未配置姿态透传：denyWriteRoles 拒写不拒读；unconfiguredPolicy=closed 全拒。
  *
  * 运行：node --test test/rbac.bindings.test.js
  * （前置：npx napi build --platform 产出绑定 .node）
@@ -128,4 +130,51 @@ test('clear policy restores passthrough', () => {
 test('invalid action rejected explicitly', () => {
   const reg = makeRegistry();
   assert.throws(() => reg.rbacCan('Post', 'drop', CTX_EDITOR), /drop/);
+});
+
+// ─── 7. 豁免清单组（清单化语义——设计 §11.3/§11.5） ─────────────────
+
+const EXEMPT_POLICY = {
+  mode: 'enforce',
+  roles: { admin: {} }, // admin 显式受管 → 默认无豁免时吃 default deny
+  grants: [],
+};
+
+test('exempt roles configurable (default deny, inject, clear)', () => {
+  const reg = makeRegistry(EXEMPT_POLICY);
+  const ctxAdmin = { userId: 'boss', roles: ['admin'] };
+  // 默认空清单：受管角色 + 无 grant → 无例外 default deny（rbacCan=false、plan 链路拒）
+  assert.strictEqual(reg.rbacCan('Post', 'read', ctxAdmin), false);
+  assert.throws(() => reg.planQuery('Post{ title }', {}, ctxAdmin));
+  // setExemptRoles 注入 → 直通（静态白名单与 RBAC 判决双直通）
+  reg.setExemptRoles(['admin']);
+  assert.strictEqual(reg.rbacCan('Post', 'read', ctxAdmin), true);
+  reg.planQuery('Post{ title }', {}, ctxAdmin);
+  // 清空恢复 deny
+  reg.setExemptRoles([]);
+  assert.strictEqual(reg.rbacCan('Post', 'read', ctxAdmin), false);
+});
+
+// ─── 8. 拒写清单 / 未配置姿态透传组 ─────────────────────────────────
+
+test('deny write roles and unconfigured policy passthrough', () => {
+  const reg = makeRegistry(POLICY); // 复用文件头既有 enforce 策略（viewer/editor 受管）
+  const ctxViewer = { userId: 'u2', roles: ['viewer'] };
+  const ctxStranger = { userId: 'u9', roles: ['stranger'] };
+  // 拒写清单（canWrite 走静态 can_write_schema——denyWriteRoles 的判决落点）：
+  // 默认空清单 → 写放行；注入后拒写不拒读（读不受影响语义）
+  assert.strictEqual(reg.canWrite('Post', ctxViewer), true);
+  reg.setDenyWriteRoles(['viewer']);
+  assert.strictEqual(reg.canWrite('Post', ctxViewer), false);
+  assert.strictEqual(reg.canRead('Post', ctxViewer), true); // 读不受影响
+  reg.setDenyWriteRoles([]);
+  assert.strictEqual(reg.canWrite('Post', ctxViewer), true);
+  // 未配置姿态 closed：stranger（未受管、无豁免）对未配置 model（User）读拒（fail-secure）
+  reg.setUnconfiguredPolicy('closed');
+  assert.throws(() => reg.planQuery('User{ name }', {}, ctxStranger));
+  // 豁免直通先于姿态（设计 §11.3「一切判决环节直通」）：豁免 ctx 在 closed 下仍放行
+  reg.setExemptRoles(['stranger']);
+  reg.planQuery('User{ name }', {}, ctxStranger);
+  reg.setUnconfiguredPolicy('open');
+  reg.planQuery('User{ name }', {}, { userId: 'u8', roles: ['wanderer'] });
 });

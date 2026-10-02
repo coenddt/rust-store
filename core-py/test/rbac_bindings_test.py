@@ -7,6 +7,8 @@
   4. plan_query 产命令在 viewer ctx 下投影被裁（判决在 plan 链路生效）；
   5. ownerOnly grant 的 query 命令 filter 含 createdBy = userId；
   6. set_rbac(None) 后全部恢复直通。
+  7. 豁免清单（清单化语义）：默认空清单 admin 受管即拒；set_exempt_roles 后直通；清除恢复；
+  8. 拒写清单 / 未配置姿态透传：deny_write_roles 拒写不拒读；unconfigured_policy=closed 全拒。
 
 运行：python -m pytest core-py/test/rbac_bindings_test.py -q
 （前置：maturin build --manifest-path core-py/Cargo.toml --out dist 产出 dist/rust_store_py.pyd）
@@ -136,3 +138,59 @@ def test_invalid_action_rejected():
         raise AssertionError("非法 action 应显式报错")
     except Exception as e:  # noqa: BLE001 —— PyO3 抛 RuntimeError/ValueError
         assert "drop" in str(e), f"错误信息应指名非法 action: {e}"
+
+
+# ─── 7. 豁免清单组（清单化语义——设计 §11.3/§11.5） ─────────────────
+
+_EXEMPT_POLICY = {
+    "mode": "enforce",
+    "roles": {"admin": {}},  # admin 显式受管 → 默认无豁免时吃 default deny
+    "grants": [],
+}
+
+
+def test_exempt_roles_configurable():
+    reg = _registry(_EXEMPT_POLICY)
+    ctx_admin = {"userId": "boss", "roles": ["admin"]}
+    # 默认空清单：受管角色 + 无 grant → 无例外 default deny（rbac_can=False、plan 链路拒）
+    assert reg.rbac_can("Post", "read", ctx_admin) is False
+    try:
+        reg.plan_query("Post{ title }", {}, ctx=ctx_admin)
+        raise AssertionError("豁免清单空时 admin 应 default deny")
+    except Exception:  # noqa: BLE001
+        pass
+    # set_exempt_roles 注入 → 直通（静态白名单与 RBAC 判决双直通）
+    reg.set_exempt_roles(["admin"])
+    assert reg.rbac_can("Post", "read", ctx_admin) is True
+    reg.plan_query("Post{ title }", {}, ctx=ctx_admin)
+    # 清空恢复 deny
+    reg.set_exempt_roles([])
+    assert reg.rbac_can("Post", "read", ctx_admin) is False
+
+
+# ─── 8. 拒写清单 / 未配置姿态透传组 ─────────────────────────────────
+
+def test_deny_write_and_unconfigured_policy():
+    reg = _registry(_POLICY)  # 复用文件头既有 enforce 策略（viewer/editor 受管）
+    ctx_viewer = {"userId": "u2", "roles": ["viewer"]}
+    ctx_stranger = {"userId": "u9", "roles": ["stranger"]}
+    # 拒写清单（can_write 走静态 can_write_schema——deny_write_roles 的判决落点）：
+    # 默认空清单 → 写放行；注入后拒写不拒读（读不受影响语义）
+    assert reg.can_write("Post", ctx_viewer) is True
+    reg.set_deny_write_roles(["viewer"])
+    assert reg.can_write("Post", ctx_viewer) is False
+    assert reg.can_read("Post", ctx_viewer) is True  # 读不受影响
+    reg.set_deny_write_roles([])
+    assert reg.can_write("Post", ctx_viewer) is True
+    # 未配置姿态 closed：stranger（未受管、无豁免）对未配置 model（User）读拒（fail-secure）
+    reg.set_unconfigured_policy("closed")
+    try:
+        reg.plan_query("User{ name }", {}, ctx=ctx_stranger)
+        raise AssertionError("closed 姿态下未配置 model 应拒绝")
+    except Exception:  # noqa: BLE001
+        pass
+    # 豁免直通先于姿态（设计 §11.3「一切判决环节直通」）：豁免 ctx 在 closed 下仍放行
+    reg.set_exempt_roles(["stranger"])
+    reg.plan_query("User{ name }", {}, ctx=ctx_stranger)
+    reg.set_unconfigured_policy("open")
+    reg.plan_query("User{ name }", {}, ctx={"userId": "u8", "roles": ["wanderer"]})
