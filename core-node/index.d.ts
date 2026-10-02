@@ -66,6 +66,20 @@ export declare class Registry {
   writableFields(model: string, ctx?: any | undefined | null): any
   filterWritableData(model: string, ctx: any | undefined | null, data: any): any
   /**
+   * RBAC 动作判决：`action ∈ {read, insert, update, remove}`。
+   * 策略未注入 / RBAC 不介入 → true（与 plan 链路的实际拦截结果一致）。
+   */
+  rbacCan(model: string, action: string, ctx?: any | undefined | null): boolean
+  /** RBAC 叠加后的可读字段集（静态 ∩ readFields）；`ctx=null` → null 不裁剪 */
+  rbacReadableFields(model: string, ctx?: any | undefined | null): any
+  /** RBAC 叠加后的可写字段集（静态 ∩ writeFields）；`ctx=null` → null 不裁剪 */
+  rbacWritableFields(model: string, ctx?: any | undefined | null): any
+  /**
+   * RBAC 行级条件（ownerOnly / condition 的 OR 合并体）；null = 无行级收紧。
+   * `action ∈ {read, update, remove}`（insert 无行级语义）。
+   */
+  rbacRowCondition(model: string, action: string, ctx?: any | undefined | null): any
+  /**
    * 生成插入命令；`now` / `newId` 由 Host 提供（core 无时钟与随机源）
    *
    * 参数与 JS store API 一一对应（跨语言 parity 优先于参数个数），保持位置参数。
@@ -149,4 +163,11 @@ export declare class Registry {
   setProfile(profile: string): void
   /** 当前查询档位字符串（`"standard"` / `"text2query"`） */
   profile(): string
+  /**
+   * 注入/清除 RBAC 动态策略（object 或 null）；解析失败抛错（fail-fast）。
+   * 判决唯一在 core：宿主仅透传配置与查询面，plan 链路拦截自动生效。
+   */
+  setRbac(policy?: any | undefined | null): void
+  /** RBAC 策略是否已注入 */
+  rbacEnabled(): boolean
 }

@@ -378,3 +378,36 @@ fn route_override_gate_follows_profile() {
         "文案应指名 route_override: {err}"
     );
 }
+
+// ─── 注册表生命周期：clear（测试隔离 / 动态重建） ──────────────
+
+#[test]
+fn registry_clear_schemas_but_keeps_switches() {
+    let mut reg = post_registry();
+    assert!(reg.has("Post"), "前置：Post 已注册（含自动派生归档表）");
+
+    reg.set_profile(Profile::Text2Query);
+    reg.set_require_context(true);
+
+    reg.clear();
+    assert!(!reg.has("Post"), "clear 应清空 schema");
+    assert!(
+        reg.list().is_empty(),
+        "clear 应清空注册顺序（含自动派生的 PostDeleted）: {:?}",
+        reg.list()
+    );
+    // 配置开关不随 schema 集合重建丢失（与 clear_fns「各清各的」对称）
+    assert_eq!(reg.profile(), Profile::Text2Query);
+    assert!(reg.require_context());
+
+    // 清空后可重新注册（重建语义）
+    reg.register(&json!({
+        "name": "Post",
+        "collection": "posts",
+        "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {},
+    }))
+    .expect("清空后重新注册应成功");
+    assert!(reg.has("Post"));
+}

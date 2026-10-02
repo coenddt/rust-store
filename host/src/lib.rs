@@ -146,6 +146,21 @@ impl Store {
         }
     }
 
+    /// 注入/清除 RBAC 动态策略（`None` = 关闭）；解析失败显式报错（fail-fast）。
+    /// 判决唯一在 core：本方法仅配置注入，plan 链路拦截自动生效。
+    pub fn set_rbac(&self, policy: Option<&Value>) -> Result<(), String> {
+        let mut w = self
+            .registry
+            .write()
+            .map_err(|_| "registry 写锁中毒".to_string())?;
+        w.set_rbac(policy)
+    }
+
+    /// RBAC 策略是否已注入
+    pub fn rbac_enabled(&self) -> bool {
+        self.read_reg().map(|r| r.rbac().is_some()).unwrap_or(false)
+    }
+
     /// 底层连接池（DDL / 维护脚本逃生口；日常读写走 Store API）
     pub fn pool(&self) -> &Pool {
         &self.pool

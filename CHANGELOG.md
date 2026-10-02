@@ -4,6 +4,23 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 2.7.0 (2026-10-02)
+
+### Added
+
+- **RBAC 动态策略（三绑定透传）**：`core` 判决 + `core-node` / `core-py` / `core-ffi`
+  导出 `setRbac`（注入/清除，解析失败显式报错）与查询面 `rbacCan` / `rbacReadableFields` /
+  `rbacWritableFields` / `rbacRowCondition`；plan 链路拦截自动生效，host 层 `Store::set_rbac`
+  同步注入。
+- **`readableComputes` 角色判决导出**（core-node napi + core-py pyo3）：宿主描述面
+  （describeForAi / describe_for_ai）可按角色收放计算列；`clearSchemas` 一并导出。
+- **`ERR_TEXT2QUERY` 档位哨兵前缀**：text2query 档 U1~U4 等收缩判决携带稳定前缀，
+  宿主可据此把 `planError` 归类为 `profileBlocked`（nodejs-store ask 回喂已接入）。
+
+### 证据
+
+workspace 全量测试回归全绿（含 `core/tests/guards.rs` / `profile.rs` 新增的前缀断言）。
+
 ## 2.6.0 (2026-09-30)
 
 ### Added

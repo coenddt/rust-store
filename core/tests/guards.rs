@@ -433,6 +433,7 @@ fn u1_array_field_filter_rejected_in_text2query() {
         Some(&Context::system()),
     )
     .expect_err("text2query 档 U1 必须显式报错");
+    assert!(err.starts_with(ERR_TEXT2QUERY), "应携带档位哨兵前缀: {err}");
     assert!(err.contains("U1"), "应报 U1：{err}");
 }
 
@@ -459,6 +460,7 @@ fn u2_object_deep_equality_rejected_in_text2query() {
         Some(&Context::system()),
     )
     .expect_err("text2query 档 U2 必须显式报错");
+    assert!(err.starts_with(ERR_TEXT2QUERY), "应携带档位哨兵前缀: {err}");
     assert!(err.contains("U2"), "应报 U2：{err}");
 }
 
@@ -486,6 +488,7 @@ fn u3_object_dotted_filter_rejected_in_text2query() {
         Some(&Context::system()),
     )
     .expect_err("text2query 档 U3 必须显式报错");
+    assert!(err.starts_with(ERR_TEXT2QUERY), "应携带档位哨兵前缀: {err}");
     assert!(err.contains("U3"), "应报 U3：{err}");
 }
 
@@ -508,6 +511,7 @@ fn u4_object_dotted_sort_rejected_in_text2query() {
         Some(&Context::system()),
     )
     .expect_err("text2query 档 U4 必须显式报错");
+    assert!(err.starts_with(ERR_TEXT2QUERY), "应携带档位哨兵前缀: {err}");
     assert!(err.contains("U4"), "应报 U4：{err}");
 }
 
@@ -523,6 +527,7 @@ fn u1_u4_apply_to_relation_level_too() {
         Some(&Context::system()),
     )
     .expect_err("关系级数组过滤在 text2query 档应报 U1");
+    assert!(err.starts_with(ERR_TEXT2QUERY), "应携带档位哨兵前缀: {err}");
     assert!(err.contains("U1"), "关系级数组过滤应报 U1：{err}");
 }
 
@@ -621,6 +626,10 @@ fn rel_pred_filter_shape_rejected_in_text2query() {
             Some(&Context::system()),
         )
         .expect_err("text2query 档关系谓词 filter 必须显式报错");
+        assert!(
+            err.starts_with(ERR_TEXT2QUERY),
+            "应携带档位哨兵前缀: {err}"
+        );
         assert!(err.contains(code), "应报 {code}：{err}");
     }
 }
@@ -735,6 +744,7 @@ fn nested_relation_filter_rejected_in_text2query() {
         Some(&Context::system()),
     )
     .expect_err("text2query 档嵌套关系下钻必须显式报错");
+    assert!(err.starts_with(ERR_TEXT2QUERY), "应携带档位哨兵前缀: {err}");
     assert!(err.contains("功能收缩"), "应报功能收缩：{err}");
 }
 
@@ -1462,4 +1472,63 @@ fn unreadable_relation_write_is_degraded_not_silent() {
             .any(|d| d.get("code").and_then(|c| c.as_str()) == Some("relationSkipped")),
         "应包含 relationSkipped 降级事件: {plan}"
     );
+}
+
+// ─── 档位收缩 Err 的稳定前缀统一（Host 按前缀映射 profile_blocked） ──
+
+#[test]
+fn t2q_shape_errors_carry_stable_prefix_and_feature_tag() {
+    // U1~U4 / 8c-2 收缩 Err 与 `$pipeline` 直通 / 深度超限（见各自用例）同一哨兵前缀
+    // `ERR_TEXT2QUERY:`，且带 `[feature]` 方括号标签（Host 正则 `\[(.+?)\]` 提取为
+    // `profile_blocked` 告警的 feature 字段，缺括号即 feature 留白）——形锁在此。
+    let ctx = Context::system();
+    let mut t2q_shape = shape_registry();
+    t2q_shape.set_profile(Profile::Text2Query);
+    let mut t2q_nested = nested_registry();
+    t2q_nested.set_profile(Profile::Text2Query);
+
+    for (gql, params, reg, feature) in [
+        (
+            "Course($condition:@c0){ _id }",
+            params_of(json!({ "c0": { "tags": "python" } })),
+            &t2q_shape,
+            "[U1 数组字段条件]",
+        ),
+        (
+            "Course($condition:@c0){ _id }",
+            params_of(json!({ "c0": { "meta": { "level": "beginner" } } })),
+            &t2q_shape,
+            "[U2 对象字段条件]",
+        ),
+        (
+            "Course($condition:@c0){ _id }",
+            params_of(json!({ "c0": { "meta.seo.title": "看Rust" } })),
+            &t2q_shape,
+            "[U3 对象点号路径条件]",
+        ),
+        (
+            "Course($sort:@s0){ _id }",
+            params_of(json!({ "s0": { "meta.level": 1 } })),
+            &t2q_shape,
+            "[U4 对象点号路径排序]",
+        ),
+        (
+            REL_PRED_GQL,
+            nested_pred(json!({ "parts.price": { "$gt": 10 } })),
+            &t2q_nested,
+            "[8c-2 嵌套关系路径]",
+        ),
+    ] {
+        let err = plan_query(gql, &params, reg, Some(&ctx))
+            .expect_err("text2query 档收缩必须显式 Err");
+        assert!(
+            err.starts_with(ERR_TEXT2QUERY),
+            "收缩 Err 应以哨兵前缀开头: {err}"
+        );
+        assert!(
+            err.contains(feature),
+            "应含 [{feature}] 门禁项标签（Host 正则提取依赖）: {err}"
+        );
+        assert!(err.contains("功能收缩"), "应报功能收缩: {err}");
+    }
 }
