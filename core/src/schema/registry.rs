@@ -105,6 +105,16 @@ impl Registry {
         self.schemas.contains_key(name)
     }
 
+    /// 清空 schema 注册表（`schemas` + `order`），对应绑定层的测试隔离 / 动态重建场景。
+    ///
+    /// 只清 schema，**不动**配置开关（`require_context` / `profile` / `rbac`）与
+    /// 回调表（`clear_fns` 对称：各清各的）——开关生命周期属 Registry 配置面，
+    /// 不随 schema 集合重建而丢。
+    pub fn clear(&mut self) {
+        self.schemas.clear();
+        self.order.clear();
+    }
+
     /// 开关「上下文强制」（默认关闭 = fail-open，保持 JS parity）。
     /// 开启后：plan 入口遇 `ctx: None` 报 `ERR_NO_CONTEXT`（fail-secure）。
     /// 内部调用须显式传系统上下文（`{"internal": true}`）。
