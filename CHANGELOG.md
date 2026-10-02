@@ -4,6 +4,18 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 3.0.0 (2026-10-02)
+
+### Breaking（RBAC 内置角色清单化，设计 §11）
+
+- `super_admin`/`admin` 不再默认放行：豁免改为 `set_exempt_roles` 清单（默认空）；
+- `guest` 不再默认拒写：拒写改为 `set_deny_write_roles` 清单（默认空）；
+- `guest` 无白名单读拒在默认 Open 姿态下不再保留：未配置姿态显式化为
+  `set_unconfigured_policy`（默认 `open`；`closed` = 未配置模型读写全拒）；
+- RBAC enforce 模式升级为无例外 default deny（豁免清单为空时无后门）；
+- 新增绑定/宿主透传：core-py/core-node/core-ffi/host/py-store/nodejs-store/go-store
+  各 3 个配置方法；creator 伪角色、internal、策略 JSON、错误前缀契约不变。
+
 ## 2.7.0 (2026-10-02)
 
 ### Added
