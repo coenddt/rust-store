@@ -18,21 +18,33 @@ impl Registry {
     fn can_read(&self, model: String, ctx: Option<&Bound<'_, PyAny>>) -> PyResult<bool> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx_from(ctx)?;
-        Ok(can_read_schema(schema, context.as_ref()))
+        Ok(can_read_schema(
+            self.core.role_rules(),
+            schema,
+            context.as_ref(),
+        ))
     }
 
     #[pyo3(signature = (model, ctx=None))]
     fn can_write(&self, model: String, ctx: Option<&Bound<'_, PyAny>>) -> PyResult<bool> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx_from(ctx)?;
-        Ok(can_write_schema(schema, context.as_ref()))
+        Ok(can_write_schema(
+            self.core.role_rules(),
+            schema,
+            context.as_ref(),
+        ))
     }
 
     #[pyo3(signature = (model, ctx=None))]
     fn should_inject_owner(&self, model: String, ctx: Option<&Bound<'_, PyAny>>) -> PyResult<bool> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx_from(ctx)?;
-        Ok(should_inject_owner_condition(schema, context.as_ref()))
+        Ok(should_inject_owner_condition(
+            self.core.role_rules(),
+            schema,
+            context.as_ref(),
+        ))
     }
 
     /// 非 admin 用户只看自己数据时叠加 owner 条件；无上下文时原样返回
@@ -50,7 +62,9 @@ impl Registry {
             Some(v) if !v.is_none() => Some(py_to_json(v)?),
             _ => None,
         };
-        let out = merge_owner_condition(schema, context.as_ref(), condition).unwrap_or(Value::Null);
+        let out =
+            merge_owner_condition(self.core.role_rules(), schema, context.as_ref(), condition)
+                .unwrap_or(Value::Null);
         to_py(py, out)
     }
 
@@ -65,7 +79,11 @@ impl Registry {
         let context = ctx_from(ctx)?;
         to_py(
             py,
-            sorted_set(get_readable_fields(schema, context.as_ref())),
+            sorted_set(get_readable_fields(
+                self.core.role_rules(),
+                schema,
+                context.as_ref(),
+            )),
         )
     }
 
@@ -80,7 +98,11 @@ impl Registry {
         let context = ctx_from(ctx)?;
         to_py(
             py,
-            sorted_set(get_readable_relations(schema, context.as_ref())),
+            sorted_set(get_readable_relations(
+                self.core.role_rules(),
+                schema,
+                context.as_ref(),
+            )),
         )
     }
 
@@ -96,7 +118,11 @@ impl Registry {
         let context = ctx_from(ctx)?;
         to_py(
             py,
-            sorted_set(get_readable_computes(schema, context.as_ref())),
+            sorted_set(get_readable_computes(
+                self.core.role_rules(),
+                schema,
+                context.as_ref(),
+            )),
         )
     }
 
@@ -111,7 +137,11 @@ impl Registry {
         let context = ctx_from(ctx)?;
         to_py(
             py,
-            sorted_set(get_writable_fields(schema, context.as_ref())),
+            sorted_set(get_writable_fields(
+                self.core.role_rules(),
+                schema,
+                context.as_ref(),
+            )),
         )
     }
 
@@ -129,7 +159,10 @@ impl Registry {
             Some(v) => py_to_json(v)?,
             None => Value::Null,
         };
-        to_py(py, filter_writable_data(schema, context.as_ref(), &data))
+        to_py(
+            py,
+            filter_writable_data(self.core.role_rules(), schema, context.as_ref(), &data),
+        )
     }
 
     // ─── RBAC 查询面（判决唯一在 core；本层零判决逻辑） ────────
@@ -167,11 +200,11 @@ impl Registry {
     ) -> PyResult<Py<PyAny>> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx_from(ctx)?;
-        let base = get_readable_fields(schema, context.as_ref());
+        let base = get_readable_fields(self.core.role_rules(), schema, context.as_ref());
         to_py(
             py,
             sorted_set(rust_store_core::rbac::overlay_readable_fields(
-                self.core.rbac(),
+                &self.core,
                 &model,
                 context.as_ref(),
                 base,
@@ -189,11 +222,11 @@ impl Registry {
     ) -> PyResult<Py<PyAny>> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx_from(ctx)?;
-        let base = get_writable_fields(schema, context.as_ref());
+        let base = get_writable_fields(self.core.role_rules(), schema, context.as_ref());
         to_py(
             py,
             sorted_set(rust_store_core::rbac::overlay_writable_fields(
-                self.core.rbac(),
+                &self.core,
                 &model,
                 context.as_ref(),
                 base,

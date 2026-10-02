@@ -116,6 +116,24 @@ impl Registry {
     fn rbac_enabled(&self) -> bool {
         self.core.rbac().is_some()
     }
+
+    /// 豁免角色清单（命中者在一切判决环节直接放行）。判决唯一在 core：本层零判决。
+    fn set_exempt_roles(&mut self, roles: Vec<String>) {
+        self.core.set_exempt_roles(roles);
+    }
+
+    /// 拒写角色清单（命中者一切写路径拒绝，读不受影响）
+    fn set_deny_write_roles(&mut self, roles: Vec<String>) {
+        self.core.set_deny_write_roles(roles);
+    }
+
+    /// 未配置姿态（"open" / "closed"）；未知值抛错（fail-fast，对齐 set_rbac）
+    fn set_unconfigured_policy(&mut self, policy: &str) -> PyResult<()> {
+        let p = rust_store_core::permission::UnconfiguredPolicy::from_str_or_err(policy)
+            .map_err(err)?;
+        self.core.set_unconfigured_policy(p);
+        Ok(())
+    }
 }
 
 /// 系统内部调用上下文工厂：`{"internal": true}` —— 权限引擎全放行、不注入 owner

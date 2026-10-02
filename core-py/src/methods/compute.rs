@@ -60,7 +60,7 @@ impl Registry {
     ) -> PyResult<Vec<String>> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx_from(ctx)?;
-        Ok(select_async_fns(schema, context.as_ref())
+        Ok(select_async_fns(self.core.role_rules(), schema, context.as_ref())
             .into_iter()
             .map(|e| e.fn_ref)
             .collect())
