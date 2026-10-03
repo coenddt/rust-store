@@ -156,6 +156,16 @@ impl Registry {
             .register_with_ctx(&py_to_json(defn)?, context.as_ref())
             .map_err(err)
     }
+
+    /// 只读定义层判决（`workflow` 宿主面复用；判决唯一在 core）。`ctx=None` = 无上下文。
+    fn can_register(&self, ctx: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let context = if ctx.is_none() {
+            None
+        } else {
+            rust_store_core::permission::context_from_value(&py_to_json(ctx)?)
+        };
+        Ok(self.core.can_register(context.as_ref()))
+    }
 }
 
 /// 系统内部调用上下文工厂：`{"internal": true}` —— 权限引擎全放行、不注入 owner
