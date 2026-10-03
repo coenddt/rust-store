@@ -200,6 +200,15 @@ impl Registry {
         &self.meta_policy
     }
 
+    /// 只读定义层判决（`workflow` 等宿主侧定义面复用同一门禁；判决唯一在 core）。
+    ///
+    /// 不改变任何注册状态：Open 全放行；Closed 仅 `internal` 或 `roles` 白名单角色。
+    /// 语义与 [`Self::register_with_ctx`] 的门禁判据**完全一致**（同一
+    /// [`can_register`](crate::permission::can_register)），仅作只读暴露。
+    pub fn can_register(&self, ctx: Option<&crate::permission::Context>) -> bool {
+        crate::permission::can_register(&self.meta_policy, ctx)
+    }
+
     /// 注入/清除 RBAC 动态策略；`None` = 关闭（判决原语直通）。
     /// 解析失败 Err（fail-fast，禁静默吞配置错误），成功后判决链路即刻生效。
     pub fn set_rbac(&mut self, policy: Option<&Value>) -> Result<(), String> {
