@@ -176,4 +176,16 @@ export declare class Registry {
   setDenyWriteRoles(roles: Array<string>): void
   /** 未配置姿态（"open" / "closed"）；未知值抛错（fail-fast，对齐 setRbac） */
   setUnconfiguredPolicy(policy: string): void
+  /**
+   * 定义层门禁策略（`closed=true` 时仅 internal 或 `roles` 白名单可注册/覆盖）。
+   * 判决唯一在 core；默认 Open（全放行，保持既有 parity）。
+   */
+  setMetaPolicy(closed: boolean, roles: Array<string>): void
+  /**
+   * 带 ctx 的 schema 注册：定义层门禁按当前 metaPolicy 判决；`ctx` 缺省 = 无上下文。
+   * 拒绝抛 `ERR_PERMISSION:` 前缀错误（定义不变）。
+   */
+  registerWithCtx(defn: any, ctx?: any | undefined | null): void
+  /** 只读定义层判决（`workflow` 宿主面复用；判决唯一在 core）。`ctx` 缺省 = 无上下文。 */
+  canRegister(ctx?: any | undefined | null): boolean
 }
