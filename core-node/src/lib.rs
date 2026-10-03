@@ -166,6 +166,25 @@ impl Registry {
         self.core.set_unconfigured_policy(p);
         Ok(())
     }
+
+    /// 定义层门禁策略（`closed=true` 时仅 internal 或 `roles` 白名单可注册/覆盖）。
+    /// 判决唯一在 core；默认 Open（全放行，保持既有 parity）。
+    #[napi]
+    pub fn set_meta_policy(&mut self, closed: bool, roles: Vec<String>) {
+        self.core.set_meta_policy(closed, roles);
+    }
+
+    /// 带 ctx 的 schema 注册：定义层门禁按当前 metaPolicy 判决；`ctx` 缺省 = 无上下文。
+    /// 拒绝抛 `ERR_PERMISSION:` 前缀错误（定义不变）。
+    #[napi]
+    pub fn register_with_ctx(&mut self, defn: Value, ctx: Option<Value>) -> Result<()> {
+        let context = ctx
+            .as_ref()
+            .and_then(rust_store_core::permission::context_from_value);
+        self.core
+            .register_with_ctx(&defn, context.as_ref())
+            .map_err(convert::err)
+    }
 }
 
 /// 系统内部调用上下文工厂：`{ internal: true }` —— 权限引擎全放行、不注入 owner
