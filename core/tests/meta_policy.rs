@@ -70,3 +70,23 @@ fn can_register_unit() {
     assert!(!can_register(&closed, None));
     assert!(can_register(&closed, Some(&Context::system())));
 }
+
+#[test]
+fn registry_can_register_readonly() {
+    let mut reg = Registry::new();
+    // Open（默认）：无 ctx 放行
+    assert!(reg.can_register(None));
+
+    reg.set_meta_policy(true, vec![]);
+    // Closed：无 ctx 拒
+    assert!(!reg.can_register(None));
+    // Closed：internal 放行
+    let sys = Context::system();
+    assert!(reg.can_register(Some(&sys)));
+    // Closed：白名单角色放行
+    reg.set_meta_policy(true, vec!["meta_admin".to_string()]);
+    let insider = context_from_value(&json!({ "roles": ["meta_admin"] })).unwrap();
+    assert!(reg.can_register(Some(&insider)));
+    // 只读性：判决调用不改变注册表
+    assert!(!reg.has("X"));
+}
