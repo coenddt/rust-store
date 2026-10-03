@@ -66,7 +66,10 @@ fn closed_empty_roles_only_internal() {
 fn can_register_unit() {
     let open = MetaPolicy::default();
     assert!(can_register(&open, None));
-    let closed = MetaPolicy { closed: true, roles: vec![] };
+    let closed = MetaPolicy {
+        closed: true,
+        roles: vec![],
+    };
     assert!(!can_register(&closed, None));
     assert!(can_register(&closed, Some(&Context::system())));
 }
