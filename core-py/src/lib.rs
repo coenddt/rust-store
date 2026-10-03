@@ -134,6 +134,28 @@ impl Registry {
         self.core.set_unconfigured_policy(p);
         Ok(())
     }
+
+    /// 定义层门禁策略（`closed=True` 时仅 internal 或 `roles` 白名单可注册/覆盖）。
+    /// 判决唯一在 core；默认 Open（全放行，保持既有 parity）。
+    fn set_meta_policy(&mut self, closed: bool, roles: Vec<String>) {
+        self.core.set_meta_policy(closed, roles);
+    }
+
+    /// 带 ctx 的 schema 注册（`ctx=None` = 无上下文）；拒绝抛 `ERR_PERMISSION:` 前缀错误。
+    fn register_with_ctx(
+        &mut self,
+        defn: &Bound<'_, PyAny>,
+        ctx: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let context = if ctx.is_none() {
+            None
+        } else {
+            rust_store_core::permission::context_from_value(&py_to_json(ctx)?)
+        };
+        self.core
+            .register_with_ctx(&py_to_json(defn)?, context.as_ref())
+            .map_err(err)
+    }
 }
 
 /// 系统内部调用上下文工厂：`{"internal": true}` —— 权限引擎全放行、不注入 owner
