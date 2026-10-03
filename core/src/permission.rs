@@ -107,6 +107,32 @@ pub struct RoleRules {
     pub unconfigured: UnconfiguredPolicy,
 }
 
+/// 定义层（register / 覆盖）门禁策略（分步 03）。
+///
+/// - `closed = false`（缺省）：**Open** —— 全放行，保持既有 parity（harness / 测试零变更）；
+/// - `closed = true`：**Closed** —— 仅 `internal` 或 `roles` 白名单命中者可注册/覆盖。
+#[derive(Debug, Clone, Default)]
+pub struct MetaPolicy {
+    /// 是否启用门禁（false = Open，缺省）。
+    pub closed: bool,
+    /// Closed 时的授权角色白名单（空 = 仅 internal 可注册）。
+    pub roles: Vec<String>,
+}
+
+/// 定义层判决：Open 全放行；Closed 仅 `internal` 或白名单角色（有效角色集，与清单语义一致）。
+///
+/// `ctx = None` 在 Closed 下**拒绝**（fail-secure）；拒绝由调用点（`register_with_ctx`）
+/// 转为显式 `ERR_PERMISSION:` 错误，不静默放行。
+pub fn can_register(policy: &MetaPolicy, ctx: Option<&Context>) -> bool {
+    if !policy.closed {
+        return true;
+    }
+    match ctx {
+        None => false,
+        Some(c) => c.internal || has_any(c, &policy.roles),
+    }
+}
+
 /// 评估当前用户是否满足指定角色白名单。
 ///
 /// 判决输入全部来自 `rules`（用户配置，默认 []/[]/Open），无任何内置角色硬编码：
