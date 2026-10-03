@@ -424,7 +424,7 @@ pub(super) fn translate_group(
         cols_sql.join(", "),
         tname(backend, schema),
         " t",
-        &join_sql,
+        join_sql,
         where_sql,
         group_sql,
         having_sql,

@@ -454,7 +454,7 @@ impl Store {
             Pool::Sqlite(p) => {
                 let mut conn = p.acquire().await.map_err(|e| e.to_string())?;
                 run_remove_tx_sqlite(
-                    &mut *conn,
+                    &mut conn,
                     find_translated.as_ref(),
                     &mut make_archive,
                     &delete_translated,
@@ -464,7 +464,7 @@ impl Store {
             Pool::Mysql(p) => {
                 let mut conn = p.acquire().await.map_err(|e| e.to_string())?;
                 run_remove_tx_mysql(
-                    &mut *conn,
+                    &mut conn,
                     find_translated.as_ref(),
                     &mut make_archive,
                     &delete_translated,
@@ -474,7 +474,7 @@ impl Store {
             Pool::Postgres(p) => {
                 let mut conn = p.acquire().await.map_err(|e| e.to_string())?;
                 run_remove_tx_pg(
-                    &mut *conn,
+                    &mut conn,
                     find_translated.as_ref(),
                     &mut make_archive,
                     &delete_translated,

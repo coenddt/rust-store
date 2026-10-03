@@ -468,10 +468,8 @@ pub fn row_condition(
             && (g.model == schema.name || g.model == "*")
             && roles.iter().any(|r| r == &g.role)
     }) {
-        match grant_row_restriction(g, c) {
-            None => return None, // 任一 grant 无行限制 → 无限制
-            Some(v) => conds.push(v),
-        }
+        let v = grant_row_restriction(g, c)?;
+        conds.push(v);
     }
     match conds.len() {
         0 => None,

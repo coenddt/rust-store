@@ -277,8 +277,11 @@ pub extern "C" fn rcore_api_version() -> *const c_char {
 }
 
 /// 释放本 crate 返回的字符串（调用方义务）
+///
+/// # Safety
+/// `ptr` 必须是本 crate 先前经 `rcore_*` 返回且尚未释放的指针（或 null）。
 #[no_mangle]
-pub extern "C" fn rcore_free(ptr: *mut c_char) {
+pub unsafe extern "C" fn rcore_free(ptr: *mut c_char) {
     if !ptr.is_null() {
         unsafe { drop(CString::from_raw(ptr)) };
     }
@@ -320,6 +323,10 @@ pub extern "C" fn rcore_registry_drop(handle: u64) {
     });
 }
 
+/// 注册模型定义（`defn` 为模型 JSON）。
+///
+/// # Safety
+/// `defn` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_registry_register(handle: u64, defn: *const c_char) -> *mut c_char {
     guard(|| {
@@ -334,6 +341,10 @@ pub unsafe extern "C" fn rcore_registry_register(handle: u64, defn: *const c_cha
     })
 }
 
+/// 列出已注册模型（data: 名称数组）。
+///
+/// # Safety
+/// `handle` 必须是本 crate 先前经 `rcore_registry_new` 返回且未释放的句柄。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_registry_list(handle: u64) -> *mut c_char {
     guard(|| {
@@ -351,6 +362,9 @@ pub unsafe extern "C" fn rcore_registry_list(handle: u64) -> *mut c_char {
 
 /// 注入/清除 RBAC 策略：`policy` 为 null = 清除；否则为策略 JSON。
 /// 解析失败以 `{"ok":false,"error":...}` 显式浮出（fail-fast）。
+///
+/// # Safety
+/// `policy` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_registry_set_rbac(
     handle: u64,
@@ -375,6 +389,9 @@ pub unsafe extern "C" fn rcore_registry_set_rbac(
 }
 
 /// RBAC 策略是否已注入（data: true/false）
+///
+/// # Safety
+/// `handle` 必须是本 crate 先前经 `rcore_registry_new` 返回且未释放的句柄。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_rbac_enabled(handle: u64) -> *mut c_char {
     guard(|| {
@@ -390,6 +407,9 @@ pub unsafe extern "C" fn rcore_rbac_enabled(handle: u64) -> *mut c_char {
 
 /// 豁免角色清单：`roles` 为 JSON 字符串数组（如 `["super_admin","admin"]`）。
 /// 命中者在一切判决环节直接放行；非法形态以 `{"ok":false,"error":...}` 显式浮出。
+///
+/// # Safety
+/// `roles` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_registry_set_exempt_roles(
     handle: u64,
@@ -411,6 +431,9 @@ pub unsafe extern "C" fn rcore_registry_set_exempt_roles(
 }
 
 /// 拒写角色清单：`roles` 为 JSON 字符串数组。命中者一切写路径拒绝（读不受影响）。
+///
+/// # Safety
+/// `roles` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_registry_set_deny_write_roles(
     handle: u64,
@@ -432,6 +455,9 @@ pub unsafe extern "C" fn rcore_registry_set_deny_write_roles(
 }
 
 /// 未配置姿态：`policy` 为 JSON 字符串 `"open"` / `"closed"`；未知值显式报错（fail-fast）
+///
+/// # Safety
+/// `policy` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_registry_set_unconfigured_policy(
     handle: u64,
@@ -456,6 +482,9 @@ pub unsafe extern "C" fn rcore_registry_set_unconfigured_policy(
 
 /// RBAC 动作判决：`action ∈ {read, insert, update, remove}`（data: true/false）。
 /// 策略未注入 / RBAC 不介入 → true（与 plan 链路的实际拦截结果一致）。
+///
+/// # Safety
+/// `model` / `action` / `ctx` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_rbac_can(
     handle: u64,
@@ -486,6 +515,9 @@ pub unsafe extern "C" fn rcore_rbac_can(
 }
 
 /// RBAC 叠加后的可读字段集（静态 ∩ readFields；data: 排序数组或 null）
+///
+/// # Safety
+/// `model` / `ctx` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_rbac_readable_fields(
     handle: u64,
@@ -525,6 +557,9 @@ pub unsafe extern "C" fn rcore_rbac_readable_fields(
 }
 
 /// RBAC 叠加后的可写字段集（静态 ∩ writeFields；data: 排序数组或 null）
+///
+/// # Safety
+/// `model` / `ctx` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_rbac_writable_fields(
     handle: u64,
@@ -565,6 +600,9 @@ pub unsafe extern "C" fn rcore_rbac_writable_fields(
 
 /// RBAC 行级条件（ownerOnly / condition 的 OR 合并体；data: 对象或 null）。
 /// `action ∈ {read, update, remove}`（insert 无行级语义）。
+///
+/// # Safety
+/// `model` / `action` / `ctx` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_rbac_row_condition(
     handle: u64,
@@ -598,6 +636,10 @@ pub unsafe extern "C" fn rcore_rbac_row_condition(
     })
 }
 
+/// 规划查询（返回 plan JSON）。
+///
+/// # Safety
+/// `gql` / `params` / `ctx` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_plan_query(
     handle: u64,
@@ -620,6 +662,10 @@ pub unsafe extern "C" fn rcore_plan_query(
     })
 }
 
+/// 规划单条查询（返回 plan JSON）。
+///
+/// # Safety
+/// `gql` / `params` / `ctx` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_plan_query_one(
     handle: u64,
@@ -642,6 +688,10 @@ pub unsafe extern "C" fn rcore_plan_query_one(
     })
 }
 
+/// 规划带总数查询（返回 plan JSON）。
+///
+/// # Safety
+/// `gql` / `params` / `ctx` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_plan_query_with_count(
     handle: u64,
@@ -669,6 +719,10 @@ pub unsafe extern "C" fn rcore_plan_query_with_count(
     })
 }
 
+/// 规划插入（返回 plan JSON）。
+///
+/// # Safety
+/// `schema_name` / `ctx` / `data` / `new_id` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_plan_insert(
     handle: u64,
@@ -703,6 +757,10 @@ pub unsafe extern "C" fn rcore_plan_insert(
     })
 }
 
+/// 规划更新（返回 plan JSON）。
+///
+/// # Safety
+/// `schema_name` / `ctx` / `condition` / `data` / `probe` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_plan_update(
     handle: u64,
@@ -740,6 +798,10 @@ pub unsafe extern "C" fn rcore_plan_update(
     })
 }
 
+/// 规划删除（返回 plan JSON）。
+///
+/// # Safety
+/// `schema_name` / `ctx` / `condition` / `probe` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_plan_remove(
     handle: u64,
@@ -765,6 +827,10 @@ pub unsafe extern "C" fn rcore_plan_remove(
     })
 }
 
+/// 规划归档文档（返回 plan JSON）。
+///
+/// # Safety
+/// `schema_name` / `docs` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_plan_archive_docs(
     handle: u64,
@@ -789,6 +855,9 @@ pub unsafe extern "C" fn rcore_plan_archive_docs(
 }
 
 /// backend 取 `"mysql" | "postgres" | "sqlite"`（core `Backend::parse` 语义，未知显式报错）
+///
+/// # Safety
+/// `backend` / `cmd` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_translate(
     handle: u64,
@@ -811,6 +880,9 @@ pub unsafe extern "C" fn rcore_translate(
 
 /// finalize 两段式第一段：同步 fn 内联执行，返回 `{"items":[...],"asyncFnRefs":[...]}`
 /// （items 已就地补默认值/同步 fn/权限裁剪；asyncFnRefs 交给宿主批量执行）
+///
+/// # Safety
+/// `postprocess` / `items` / `ctx` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_finalize_prepare(
     handle: u64,
@@ -844,7 +916,7 @@ pub unsafe extern "C" fn rcore_finalize_prepare(
 
 fn prepare_query_wrap(
     post: &Value,
-    items: &mut Vec<Value>,
+    items: &mut [Value],
     reg: &Registry,
     fn_registry: Option<&dyn FnRegistry>,
     ctx: Option<&Context>,
@@ -853,6 +925,9 @@ fn prepare_query_wrap(
 }
 
 /// finalize 第三段：剥离依赖注入字段（纯函数）
+///
+/// # Safety
+/// `postprocess` / `items` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_finalize_strip(
     postprocess: *const c_char,
@@ -869,6 +944,9 @@ pub unsafe extern "C" fn rcore_finalize_strip(
 }
 
 /// 两阶段排序还原（纯函数）
+///
+/// # Safety
+/// `items` / `ids` / `sort` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_restore_sort_order(
     items: *const c_char,
@@ -890,6 +968,9 @@ pub unsafe extern "C" fn rcore_restore_sort_order(
 }
 
 /// SQL 行数组按 rowShape 还原为嵌套文档（纯函数）
+///
+/// # Safety
+/// `row_shape` / `rows` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_restore_rows_json(
     row_shape: *const c_char,
@@ -905,6 +986,9 @@ pub unsafe extern "C" fn rcore_restore_rows_json(
 
 /// 便捷入口：一次性 finalize（core 内直跑 asyncFn；仅同步单机宿主建议使用，
 /// go-store 走两段式以保持与 py/node 宿主一致的回调语义）
+///
+/// # Safety
+/// `postprocess` / `items` / `ctx` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
 #[no_mangle]
 pub unsafe extern "C" fn rcore_finalize_query(
     handle: u64,

@@ -74,9 +74,9 @@ pub enum Conn<'a> {
 impl PoolConn {
     pub fn conn(&mut self) -> Conn<'_> {
         match self {
-            PoolConn::Sqlite(c) => Conn::Sqlite(&mut ***c),
-            PoolConn::Mysql(c) => Conn::Mysql(&mut ***c),
-            PoolConn::Postgres(c) => Conn::Postgres(&mut ***c),
+            PoolConn::Sqlite(c) => Conn::Sqlite(c),
+            PoolConn::Mysql(c) => Conn::Mysql(c),
+            PoolConn::Postgres(c) => Conn::Postgres(c),
         }
     }
 }

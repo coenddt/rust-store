@@ -311,20 +311,14 @@ pub fn can_write_schema(rules: &RoleRules, schema: &Schema, ctx: Option<&Context
         if has_any(c, &rules.deny_write_roles) {
             return false;
         }
-        if !c.internal && matches!(schema.write, Some(ref w) if w.is_empty()) {
-            if !has_any(c, &rules.exempt_roles) {
-                return false;
-            }
+        if !c.internal
+            && matches!(schema.write, Some(ref w) if w.is_empty())
+            && !has_any(c, &rules.exempt_roles)
+        {
+            return false;
         }
     }
     evaluate(rules, ctx, schema.write.as_deref(), Doc::Missing)
-}
-
-fn has_role(ctx: &Context, role: &str) -> bool {
-    ctx.roles
-        .as_ref()
-        .map(|r| r.iter().any(|x| x == role))
-        .unwrap_or(false)
 }
 
 /// 有效角色集：`roles` 非空用之，否则回落单 `role`——对齐 `rbac::effective_roles`
