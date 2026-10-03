@@ -55,6 +55,8 @@ pub struct Registry {
     rbac: Option<crate::rbac::RbacPolicy>,
     /// 角色清单与未配置姿态（豁免 / 拒写 / Open|Closed，默认 []/[]/Open）。见 [`crate::permission::RoleRules`]
     role_rules: crate::permission::RoleRules,
+    /// 定义层门禁策略（默认 Open —— 全放行，保持既有 parity）。见 [`crate::permission::MetaPolicy`]
+    meta_policy: crate::permission::MetaPolicy,
 }
 
 impl Registry {
@@ -62,8 +64,23 @@ impl Registry {
         Self::default()
     }
 
-    /// 注册一个 schema（含自动注册 `<Name>Deleted` 归档表），对应 JS `register`
+    /// 注册一个 schema（含自动注册 `<Name>Deleted` 归档表），对应 JS `register`。
+    ///
+    /// 兼容入口：定义层门禁按当前 [`MetaPolicy`](crate::permission::MetaPolicy) 判决
+    /// （默认 Open → 全放行）。需带 ctx 显式过门禁请用 [`Self::register_with_ctx`]。
     pub fn register(&mut self, defn: &Value) -> Result<(), String> {
+        self.register_with_ctx(defn, None)
+    }
+
+    /// 带 ctx 的注册：定义层门禁（[`can_register`](crate::permission::can_register)）
+    /// 判决**先于** `build_schema`（拒绝即返回，零副作用）。
+    ///
+    /// 归档附表 `<Name>Deleted` 的自动派生属内部动作，以系统上下文注册，不受业务 ctx 影响。
+    pub fn register_with_ctx(
+        &mut self,
+        defn: &Value,
+        ctx: Option<&crate::permission::Context>,
+    ) -> Result<(), String> {
         let obj = defn
             .as_object()
             .ok_or_else(|| "schema 定义必须是对象".to_string())?;
@@ -72,6 +89,12 @@ impl Registry {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "schema 缺少 name".to_string())?
             .to_string();
+
+        // 定义层门禁：判决先于 build_schema —— 拒绝即返回，绝不部分写入
+        if !crate::permission::can_register(&self.meta_policy, ctx) {
+            return Err(format!("ERR_PERMISSION: 无权注册或覆盖定义 {name}"));
+        }
+
         let collection = obj
             .get("collection")
             .and_then(|v| v.as_str())
@@ -89,8 +112,12 @@ impl Registry {
         self.order.push(name.clone());
 
         // 自动注册删除附表 schema —— 每个业务表对应一个 `<collection>_deleted` 归档表
+        // （内部动作，以系统上下文注册，不受业务门禁影响）
         if !is_archive && !name.ends_with("Deleted") {
-            self.register(&archive_defn(obj, &name, &collection))?;
+            self.register_with_ctx(
+                &archive_defn(obj, &name, &collection),
+                Some(&crate::permission::Context::system()),
+            )?;
         }
 
         Ok(())
@@ -160,6 +187,17 @@ impl Registry {
     /// 当前角色规则（静态判决函数与 RBAC decide 的共用取参入口）
     pub fn role_rules(&self) -> &crate::permission::RoleRules {
         &self.role_rules
+    }
+
+    /// 定义层门禁策略（`closed=true` 时仅 internal 或 `roles` 白名单可注册/覆盖）。
+    /// 默认 Open —— 全放行（保持既有 parity；须在首次业务注册前调用方生效于该次注册）。
+    pub fn set_meta_policy(&mut self, closed: bool, roles: Vec<String>) {
+        self.meta_policy = crate::permission::MetaPolicy { closed, roles };
+    }
+
+    /// 当前定义层门禁策略
+    pub fn meta_policy(&self) -> &crate::permission::MetaPolicy {
+        &self.meta_policy
     }
 
     /// 注入/清除 RBAC 动态策略；`None` = 关闭（判决原语直通）。
