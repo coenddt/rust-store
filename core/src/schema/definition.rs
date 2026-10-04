@@ -116,6 +116,17 @@ impl Schema {
         self.schema.as_deref().filter(|s| !s.is_empty())
     }
 
+    /// 主落点（由 `source`/`database`/`schema` 组装）。
+    ///
+    /// 等价于 `Registry::primary_location(name)` 的投影；链路缺失时的回落。
+    pub fn location(&self) -> Location {
+        Location {
+            source: self.source().to_string(),
+            database: self.database().map(String::from),
+            schema: self.schema().map(String::from),
+        }
+    }
+
     /// `_id` 是否声明 `strategy: "autoincrement"`（阶段2：数据库自增主键）
     pub fn id_is_autoincrement(&self) -> bool {
         self.fields.get("_id").and_then(|f| f.strategy.as_deref()) == Some("autoincrement")

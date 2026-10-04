@@ -14,6 +14,7 @@ use crate::types::{
 };
 
 use super::cmd::{cmd_count_documents, cmd_find_one, cmd_insert_one};
+use super::write_links::attach_write_links;
 use super::{ensure_context, ERR_NO_WRITE};
 
 /// 生成插入命令（对应 JS `insert`）
@@ -39,10 +40,12 @@ pub fn plan_insert(
 
     let doc = build_insert_doc(registry, schema, ctx, data, now, new_id)?;
     let doc = Value::Object(doc);
-    Ok(json!({
+    let plan = json!({
         "command": cmd_insert_one(schema, &doc),
         "returns": apply_defaults_and_computes(&doc, schema, fn_registry)?,
-    }))
+    });
+    // 写链路附接（多落点 schema 才追加 writeLinks；单落点原样返回）
+    attach_write_links(plan, registry, &[schema_name], registry.write_link_policy())
 }
 
 /// insert 文档规范化（对应 JS `insert` 主体）：

@@ -1,33 +1,14 @@
 //! 递归拆源：判定下推 / 剥离跨源关系 / 收集降级项。
 
+use std::collections::HashMap;
+
 use serde_json::{json, Map, Value};
 
-use crate::datasource::{DataSource, DataSourceConfig};
+use crate::datasource::DataSourceConfig;
 use crate::pipeline::{is_nullish, param, Ast, RelAst};
-use crate::schema::{Registry, Schema};
+use crate::schema::{Location, Registry};
 
-use super::{loc_of, EdgeSpec, UnitSpec};
-
-/// 同源下推判定：
-/// - 跨 source → 不下推（内存 join）；
-/// - 双方都是 SQL → 下推（同/跨 `database`/`schema` 都行，qualified 表名）；
-/// - 其余（Mongo，或 kind 未知）→ 仅同落点下推（`$lookup` 不能跨 db；
-///   kind 未知时保守不跨落点下推，宁拆勿错）。
-pub(super) fn can_pushdown(
-    parent: &Schema,
-    child: &Schema,
-    ds_cfg: &DataSourceConfig,
-) -> Result<bool, String> {
-    if parent.source() != child.source() {
-        return Ok(false);
-    }
-    let pds = ds_cfg.resolve(parent.source.as_deref()).ok();
-    let cds = ds_cfg.resolve(child.source.as_deref()).ok();
-    Ok(match (pds, cds) {
-        (Some(DataSource::Sql(_)), Some(DataSource::Sql(_))) => true,
-        _ => parent.database() == child.database() && parent.schema() == child.schema(),
-    })
-}
+use super::{select, EdgeSpec, UnitSpec};
 
 /// 确保 `field` 出现在请求字段里（跨源 join 的键必须取回才能内存 join）
 ///
@@ -50,6 +31,7 @@ fn ensure_field(fields: &mut Vec<String>, field: &str) {
 pub(super) fn walk(
     parent_model: &str,
     ds_cfg: &DataSourceConfig,
+    pinned: &HashMap<String, Location>,
     fields: &mut Vec<String>,
     relations: &mut Vec<(String, RelAst)>,
     path: &[String],
@@ -60,6 +42,11 @@ pub(super) fn walk(
     degraded: &mut Vec<Value>,
 ) -> Result<(), String> {
     let parent_schema = registry.get(parent_model)?.clone();
+    // 父落点取择优结果（pinned）；缺失时回落 schema 自身主落点
+    let parent_loc = pinned
+        .get(parent_model)
+        .cloned()
+        .unwrap_or_else(|| parent_schema.location());
 
     let mut i = 0usize;
     while i < relations.len() {
@@ -75,7 +62,11 @@ pub(super) fn walk(
         }
 
         let child_schema = registry.get(&rel_def.model)?.clone();
-        let child_loc = loc_of(&child_schema);
+        // 子落点取择优结果（pinned）；缺失时回落 schema 自身主落点
+        let child_loc = pinned
+            .get(&child_schema.name)
+            .cloned()
+            .unwrap_or_else(|| child_schema.location());
 
         // 先递归处理更深层：深层跨源关系会从本关系里剥离并各自成单元
         let mut child_path = path.to_vec();
@@ -85,6 +76,7 @@ pub(super) fn walk(
             walk(
                 &rel_def.model,
                 ds_cfg,
+                pinned,
                 &mut rel_ast.fields,
                 &mut rel_ast.relations,
                 &child_path,
@@ -96,7 +88,7 @@ pub(super) fn walk(
             )?;
         }
 
-        if can_pushdown(&parent_schema, &child_schema, ds_cfg)? {
+        if select::compatible(&parent_loc, &child_loc, ds_cfg) {
             // 同源（SQL 同源含跨 database/schema；Mongo 同源同库）：留在本层，由该源 $lookup / JOIN 下推
             i += 1;
             continue;

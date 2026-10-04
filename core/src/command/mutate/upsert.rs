@@ -4,6 +4,7 @@ use serde_json::{json, Map, Value};
 
 use crate::command::cmd::cmd_find_one_and_update;
 use crate::command::write::has_creator_permission;
+use crate::command::write_links::attach_write_links;
 use crate::command::{ensure_context, ERR_NO_WRITE};
 use crate::permission::{can_write_schema, Context};
 use crate::rbac::{ensure_write, filter_writable_data_overlay, WriteAction};
@@ -224,5 +225,10 @@ pub fn plan_upsert(
         "returnDocument": if return_new { "after" } else { "before" },
     });
     let command = cmd_find_one_and_update(schema, condition, &update_doc, &fu_options);
-    Ok(json!({ "command": command }))
+    attach_write_links(
+        json!({ "command": command }),
+        registry,
+        &[schema_name],
+        registry.write_link_policy(),
+    )
 }

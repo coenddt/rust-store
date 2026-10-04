@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 
 use crate::command::cmd::{cmd_insert_many, cmd_update_many};
 use crate::command::write::build_insert_doc;
+use crate::command::write_links::attach_write_links;
 use crate::command::{ensure_context, ERR_NO_BATCH_WRITE, ERR_NO_WRITE};
 use crate::computes::{apply_defaults_and_computes, FnRegistry};
 use crate::permission::{can_write_schema, Context};
@@ -57,10 +58,15 @@ pub fn plan_insert_many(
         .iter()
         .map(|d| apply_defaults_and_computes(d, schema, fn_registry))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(json!({
-        "command": cmd_insert_many(schema, &processed),
-        "returns": returns,
-    }))
+    attach_write_links(
+        json!({
+            "command": cmd_insert_many(schema, &processed),
+            "returns": returns,
+        }),
+        registry,
+        &[schema_name],
+        registry.write_link_policy(),
+    )
 }
 
 /// 批量更新（对应 JS `updateMany`）。拒写清单命中 / 无写授权直接拒绝，不走 creator 探针。
@@ -122,9 +128,19 @@ pub fn plan_update_many(
         if let Some(obj) = command.as_object_mut() {
             obj.insert("preCommand".to_string(), pre.lookup_command);
         }
-        return Ok(json!({ "command": command }));
+        return attach_write_links(
+            json!({ "command": command }),
+            registry,
+            &[schema_name],
+            registry.write_link_policy(),
+        );
     }
 
     let command = cmd_update_many(schema, &eff_condition, &update_doc);
-    Ok(json!({ "command": command }))
+    attach_write_links(
+        json!({ "command": command }),
+        registry,
+        &[schema_name],
+        registry.write_link_policy(),
+    )
 }

@@ -8,6 +8,8 @@ use crate::types::{is_truthy, str_list, AGG_OPS};
 
 use super::definition::{normalize_fields, ComputeDef, FieldDef, Location, RelationDef, Schema};
 
+use crate::command::WriteLinkPolicy;
+
 /// 查询档位：判决唯一在 core（照 [`Registry::require_context`] 既有范式）。
 ///
 /// - [`Profile::Standard`]（默认）：标准调用 —— 跨方言对齐的公共能力集；
@@ -67,6 +69,8 @@ pub struct Registry {
     role_rules: crate::permission::RoleRules,
     /// 定义层门禁策略（默认 Open —— 全放行，保持既有 parity）。见 [`crate::permission::MetaPolicy`]
     meta_policy: crate::permission::MetaPolicy,
+    /// 跨连接写策略（默认 [`WriteLinkPolicy::Reject`]）。见 [`crate::command::write_links`]
+    write_link_policy: WriteLinkPolicy,
 }
 
 impl Registry {
@@ -394,6 +398,19 @@ impl Registry {
     /// 当前定义层门禁策略
     pub fn meta_policy(&self) -> &crate::permission::MetaPolicy {
         &self.meta_policy
+    }
+
+    /// 设置跨连接写策略（默认 [`WriteLinkPolicy::Reject`]）。
+    ///
+    /// 判决唯一在 core（[`crate::command::write_links::resolve_write_links`]）；
+    /// 宿主仅需在初始化期把它透传到 registry。
+    pub fn set_write_link_policy(&mut self, policy: WriteLinkPolicy) {
+        self.write_link_policy = policy;
+    }
+
+    /// 当前跨连接写策略
+    pub fn write_link_policy(&self) -> WriteLinkPolicy {
+        self.write_link_policy
     }
 
     /// 只读定义层判决（`workflow` 等宿主侧定义面复用同一门禁；判决唯一在 core）。
@@ -759,4 +776,19 @@ fn archive_defn(obj: &Map<String, Value>, name: &str, collection: &str) -> Value
         "indexes": obj.get("indexes").cloned().unwrap_or_else(|| json!([])),
     });
     arch
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_link_policy_defaults_to_reject() {
+        let r = Registry::new();
+        assert_eq!(r.write_link_policy(), WriteLinkPolicy::Reject);
+        let mut r2 = Registry::new();
+        assert_eq!(r2.write_link_policy(), WriteLinkPolicy::Reject);
+        r2.set_write_link_policy(WriteLinkPolicy::PrimaryOnly);
+        assert_eq!(r2.write_link_policy(), WriteLinkPolicy::PrimaryOnly);
+    }
 }

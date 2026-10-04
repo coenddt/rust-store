@@ -23,6 +23,7 @@ use super::mutate::{
     IdCursor,
 };
 use super::write::build_insert_doc;
+use super::write_links::attach_write_links;
 use super::{ensure_context, step_id_placeholder, ERR_NO_WRITE};
 
 /// 规划一条 mutation（对应 JS `mutation` 的单条分支 `_mutationOne`）。
@@ -41,7 +42,26 @@ pub fn plan_mutation(
     let mut out = PlanOut::default();
     let mut ids = IdCursor::new(new_ids);
     plan_mutation_node(schema_name, registry, ctx, data, now, &mut ids, &mut out)?;
-    Ok(json!({ "steps": out.steps, "degraded": out.degraded }))
+    let plan = json!({ "steps": out.steps, "degraded": out.degraded });
+
+    // 写链路：各 step 的 model 去重（同一 mutation 可写多个 schema）
+    let models: Vec<String> = plan
+        .get("steps")
+        .and_then(|s| s.as_array())
+        .map(|steps| {
+            let mut v: Vec<String> = Vec::new();
+            for s in steps {
+                if let Some(m) = s.get("model").and_then(|x| x.as_str()) {
+                    if !v.iter().any(|x| x == m) {
+                        v.push(m.to_string());
+                    }
+                }
+            }
+            v
+        })
+        .unwrap_or_default();
+    let names: Vec<&str> = models.iter().map(String::as_str).collect();
+    attach_write_links(plan, registry, &names, registry.write_link_policy())
 }
 
 /// 规划期的可变累积器：有序步骤序列 + 降级声明（§11.4 静默点收口）。

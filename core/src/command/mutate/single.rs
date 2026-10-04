@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 
 use crate::command::cmd::{cmd_delete_many, cmd_find, cmd_find_one_and_update, cmd_insert_many};
 use crate::command::write::{check_write_perm, Probe};
+use crate::command::write_links::attach_write_links;
 use crate::command::{ensure_context, ERR_NO_BATCH_WRITE, ERR_NO_DELETE, ERR_NO_WRITE};
 use crate::permission::Context;
 use crate::rbac::WriteAction;
@@ -71,7 +72,13 @@ pub fn plan_update(
         &update_doc,
         &find_one_and_update_options(options),
     );
-    Ok(json!({ "command": command }))
+    // 写链路附接（仅 `{command}` 分支；`{needsProbe}` 分支尚未执行写，不接线）
+    attach_write_links(
+        json!({ "command": command }),
+        registry,
+        &[schema_name],
+        registry.write_link_policy(),
+    )
 }
 
 /// 删除计划（对应 JS `remove`）：
@@ -117,11 +124,16 @@ pub fn plan_remove(
         if let Some(obj) = delete_command.as_object_mut() {
             obj.insert("preCommand".to_string(), pre.lookup_command);
         }
-        return Ok(json!({
-            "archiveCollection": if registry.has(&archive_name_of(schema_name)) { json!(registry.get(&archive_name_of(schema_name))?.collection) } else { Value::Null },
-            "findCommand": cmd_find(schema, &pre.condition, None),
-            "deleteCommand": delete_command,
-        }));
+        return attach_write_links(
+            json!({
+                "archiveCollection": if registry.has(&archive_name_of(schema_name)) { json!(registry.get(&archive_name_of(schema_name))?.collection) } else { Value::Null },
+                "findCommand": cmd_find(schema, &pre.condition, None),
+                "deleteCommand": delete_command,
+            }),
+            registry,
+            &[schema_name],
+            registry.write_link_policy(),
+        );
     } else {
         condition
     };
@@ -137,11 +149,16 @@ pub fn plan_remove(
         (Value::Null, None)
     };
     let delete_command = cmd_delete_many(schema, eff_condition);
-    Ok(json!({
-        "archiveCollection": archive_collection,
-        "findCommand": find_command,
-        "deleteCommand": delete_command,
-    }))
+    attach_write_links(
+        json!({
+            "archiveCollection": archive_collection,
+            "findCommand": find_command,
+            "deleteCommand": delete_command,
+        }),
+        registry,
+        &[schema_name],
+        registry.write_link_policy(),
+    )
 }
 
 /// 归档表 schema 名（`<schema>Deleted`；plan_remove 主体与关系谓词分支共用）

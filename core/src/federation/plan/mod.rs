@@ -1,6 +1,6 @@
 //! 联邦计划：把一条 GQL 拆成「各源命令序列 + join 边」
 //!
-//! 拆源规则（`can_pushdown`，见 `multi-datasource-routing-plan.md` §五）：
+//! 拆源规则（下推兼容判定见 [`select::compatible`]，见 `multi-datasource-routing-plan.md` §五）：
 //!   - 关系两端**不同 source** → 跨源，从取数 AST 中剥离，登记为一条 `join` 边，
 //!     并为子模型单独生成一个取数单元（自己那一源）；
 //!   - 同 source 且同 `database`+`schema` → **下推**，留在该源取数 AST（`$lookup` / `JOIN`）；
@@ -27,30 +27,15 @@ use crate::datasource::DataSourceConfig;
 use crate::permission::{can_read_schema, merge_owner_condition, Context};
 use crate::pipeline::{flatten_object_fields, parse_gql, Ast};
 use crate::rbac::{ensure_read, merge_row_condition};
-use crate::schema::{Profile, Registry, Schema};
+use crate::schema::{Profile, Registry};
 
 use route::{detect_cross_source_sort, walk};
 
 mod route;
+mod select;
 
 /// 契约版本：形状变更必须升版并附迁移说明
 pub const FEDERATION_VERSION: u64 = 2;
-
-/// 定位三元组（source + database + schema）
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct Loc {
-    pub(super) source: String,
-    pub(super) database: Option<String>,
-    pub(super) schema: Option<String>,
-}
-
-pub(super) fn loc_of(schema: &Schema) -> Loc {
-    Loc {
-        source: schema.source().to_string(),
-        database: schema.database().map(String::from),
-        schema: schema.schema().map(String::from),
-    }
-}
 
 /// 一个取数单元（某数据源上的一组命令）
 struct UnitSpec {
@@ -83,7 +68,7 @@ struct EdgeSpec {
 /// 生成联邦计划（纯逻辑）
 ///
 /// `ds_config`：`{ "sources": { name: kind } }`（Host `init` 时的 kind 配置；
-/// `null` = 单源 Mongo）。下推判定依赖它区分 SQL / Mongo（见 [`route::can_pushdown`]）。
+/// `null` = 单源 Mongo）。下推判定依赖它区分 SQL / Mongo（见 [`select::compatible`]）。
 ///
 /// 单源（无跨源关系）时同样可用：`sources` 只有根单元、`join.edges` 为空，
 /// Host 走与单库一致的执行路径。
@@ -161,15 +146,36 @@ pub fn plan_federated(
         flatten_object_fields(&mut post_ast, &root_schema);
     }
 
-    let root_loc = loc_of(&root_schema);
+    // ── 落点择优（拆源之前；约束先于优化） ──
+    // 预扫涉及 schema 与关系边 → 取候选链路 → 约束过滤 → 两级字典序择优，
+    // 产出每个 schema 的选中落点 `pinned`（walk 与根单元据此定位）。
+    let mut degraded: Vec<Value> = Vec::new();
+    let (involved, graph_edges) =
+        select::collect_graph(&root_schema.name, &ast.relations, registry)?;
+    let mut cands: select::Candidates = involved
+        .iter()
+        .map(|s| Ok((s.clone(), select::candidates_of(registry, s)?)))
+        .collect::<Result<_, String>>()?;
+    // 约束先于优化：当前 Context 无 source 可达字段，暂不限制（待 01/06 定真实来源）
+    select::filter_reachable(&mut cands, None);
+    let selection = select::select_links(&involved, &graph_edges, &cands, &ds_cfg)?;
+    if selection.approximate {
+        degraded.push(select::degraded_approx());
+    }
+    let pinned = selection.locs; // schema name → Location
+
+    let root_loc = pinned
+        .get(&root_schema.name)
+        .cloned()
+        .unwrap_or_else(|| root_schema.location());
     let mut units: Vec<UnitSpec> = Vec::new();
     let mut edges: Vec<EdgeSpec> = Vec::new();
-    let mut degraded: Vec<Value> = Vec::new();
 
     let mut fetch_ast = ast;
     walk(
         &fetch_ast.model,
         &ds_cfg,
+        &pinned,
         &mut fetch_ast.fields,
         &mut fetch_ast.relations,
         &[],

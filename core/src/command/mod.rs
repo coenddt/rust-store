@@ -53,6 +53,7 @@ mod mutate;
 mod mutation;
 mod query;
 mod write;
+mod write_links;
 
 use crate::permission::Context;
 use crate::schema::{Profile, Registry};
@@ -73,6 +74,10 @@ pub use query::{
     Page, QueryPlan,
 };
 pub use write::{check_write_perm, plan_count, plan_exists, plan_insert, Probe};
+pub use write_links::{
+    err_write_cross_source, resolve_write_links, WriteLinkPolicy, WriteLinks,
+    ERR_WRITE_CROSS_SOURCE_PREFIX,
+};
 
 /// 权限拒绝哨兵：Host 需映射为各自的 PermissionError。
 ///
