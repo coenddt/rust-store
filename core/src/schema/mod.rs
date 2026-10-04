@@ -7,7 +7,9 @@
 //! 由本模块统一再导出，拆分不改语义。
 
 mod definition;
+mod load;
 mod registry;
 
 pub use definition::{map_of, ComputeDef, FieldDef, Location, RelationDef, Schema};
+pub use load::{depth_layered, locate, plan_load, LoadConfig, SourceDecl};
 pub use registry::{Profile, Registry};
