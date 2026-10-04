@@ -45,7 +45,7 @@ function execute(db, reg, out) {
   // ── 建库 + 造数 ───────────────────────────────────────
   const db = new SQL.Database();
   db.run(`CREATE TABLE orders (_id TEXT PRIMARY KEY, code TEXT, amount REAL, __present TEXT)`);
-  db.run(`CREATE TABLE order_items (_id TEXT PRIMARY KEY, orderId TEXT, sku TEXT, __present TEXT)`);
+  db.run(`CREATE TABLE order_items (_id TEXT PRIMARY KEY, order_id TEXT, sku TEXT, __present TEXT)`);
   db.run(`INSERT INTO orders VALUES ('o1','A',50,',_id,code,amount,'),('o2','B',3,',_id,code,amount,'),('o3','C',90,',_id,code,amount,'),('o4','D',70,',_id,code,amount,')`);
   db.run(`INSERT INTO order_items VALUES ('i1','o1','s-x',',_id,orderId,sku,'),('i2','o1','s-y',',_id,orderId,sku,'),('i3','o3','s-z',',_id,orderId,sku,')`);
 

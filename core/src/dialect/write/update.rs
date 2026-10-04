@@ -131,7 +131,7 @@ fn op_assignments(
                 "SQL 后端不支持对 object/array 字段 \"{k}\" 执行 $inc（JSON 列无法数值自增）"
             ));
         }
-        let qc = binder.backend.quote_ident(&col);
+        let qc = binder.backend.pcol(&col);
         match op {
             "$set" => {
                 if v.is_null() {
@@ -263,7 +263,7 @@ pub(super) fn write_with_returning(
 ) -> SqlStmt {
     let ret = cols
         .iter()
-        .map(|c| q(backend, c))
+        .map(|c| backend.pcol(c))
         .collect::<Vec<_>>()
         .join(", ");
     let mut stmt = SqlStmt::write(format!("{} RETURNING {}", write_text, ret), params);
@@ -282,7 +282,7 @@ pub(super) fn read_back(
 ) -> Result<SqlStmt, String> {
     let select_list = cols
         .iter()
-        .map(|c| format!("t.{}", q(backend, c)))
+        .map(|c| format!("t.{}", backend.pcol(c)))
         .collect::<Vec<_>>()
         .join(", ");
     let mut read_binder = Binder::new(backend);

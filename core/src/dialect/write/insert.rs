@@ -134,17 +134,17 @@ fn with_conflict_override(backend: Backend, text: String, cols: &[String]) -> St
         Backend::Sqlite => format!("INSERT OR REPLACE INTO {}", &text["INSERT INTO ".len()..]),
         Backend::Postgres => {
             if upd_cols.is_empty() {
-                format!("{} ON CONFLICT ({}) DO NOTHING", text, q(backend, "_id"))
+                format!("{} ON CONFLICT ({}) DO NOTHING", text, backend.pcol("_id"))
             } else {
                 let sets = upd_cols
                     .iter()
-                    .map(|c| format!("{} = EXCLUDED.{}", q(backend, c), q(backend, c)))
+                    .map(|c| format!("{} = EXCLUDED.{}", backend.pcol(c), backend.pcol(c)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!(
                     "{} ON CONFLICT ({}) DO UPDATE SET {}",
                     text,
-                    q(backend, "_id"),
+                    backend.pcol("_id"),
                     sets
                 )
             }
@@ -152,11 +152,11 @@ fn with_conflict_override(backend: Backend, text: String, cols: &[String]) -> St
         Backend::Mysql => {
             let sets = if upd_cols.is_empty() {
                 // 无可更新列时的 no-op 赋值，保证语法合法
-                format!("{} = {}", q(backend, "_id"), q(backend, "_id"))
+                format!("{} = {}", backend.pcol("_id"), backend.pcol("_id"))
             } else {
                 upd_cols
                     .iter()
-                    .map(|c| format!("{} = VALUES({})", q(backend, c), q(backend, c)))
+                    .map(|c| format!("{} = VALUES({})", backend.pcol(c), backend.pcol(c)))
                     .collect::<Vec<_>>()
                     .join(", ")
             };
@@ -167,7 +167,7 @@ fn with_conflict_override(backend: Backend, text: String, cols: &[String]) -> St
 
 fn quote_join(backend: Backend, cols: &[String]) -> String {
     cols.iter()
-        .map(|c| q(backend, c))
+        .map(|c| backend.pcol(c))
         .collect::<Vec<_>>()
         .join(", ")
 }

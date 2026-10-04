@@ -161,7 +161,7 @@ fn agg_expr(backend: Backend, schema: &Schema, a: &GroupAggCol) -> Result<String
                 a.alias
             )
         })?;
-        Ok(format!("t.{}", q(backend, &c)))
+        Ok(format!("t.{}", backend.pcol(&c)))
     };
     Ok(match a.op {
         AggOp::CountRows => "COUNT(*)".to_string(),
@@ -225,8 +225,8 @@ pub(super) fn translate_group(
                         tname(backend, rel_schema),
                         g_alias,
                         g_alias,
-                        q(backend, &rel.foreign_field),
-                        q(backend, &rel.local_field),
+                        backend.pcol(&rel.foreign_field),
+                        backend.pcol(&rel.local_field),
                     ));
                     joined_rels.push((head, rel));
                 }
@@ -235,7 +235,7 @@ pub(super) fn translate_group(
                     format!(
                         "{}.{}",
                         q(backend, &format!("g_{}", head)),
-                        q(backend, &col)
+                        backend.pcol(&col)
                     ),
                 ));
                 continue;
@@ -247,7 +247,7 @@ pub(super) fn translate_group(
                 k.field
             )
         })?;
-        keys.push((k.out.clone(), format!("t.{}", q(backend, &col))));
+        keys.push((k.out.clone(), format!("t.{}", backend.pcol(&col))));
     }
 
     // ── 聚合列 → SQL 表达式 ──

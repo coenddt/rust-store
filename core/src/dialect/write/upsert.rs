@@ -10,7 +10,7 @@ use crate::dialect::Backend;
 use crate::schema::Schema;
 
 use super::update::{build_assignments, read_back, write_with_returning};
-use super::{bind_value, q, returning_cols, scalar_col, tname, writable_col, Binder};
+use super::{bind_value, returning_cols, scalar_col, tname, writable_col, Binder};
 
 /// upsert：`INSERT ... ON CONFLICT/ON DUPLICATE KEY ...` + 回读
 pub(super) fn translate_upsert(
@@ -56,7 +56,7 @@ pub(super) fn translate_upsert(
     let mut binder = Binder::new(backend);
     let cols_sql = cols
         .iter()
-        .map(|c| q(backend, c))
+        .map(|c| backend.pcol(c))
         .collect::<Vec<_>>()
         .join(", ");
     let phs: Vec<String> = vals.iter().map(|v| binder.bind(v.clone())).collect();
@@ -90,7 +90,7 @@ pub(super) fn translate_upsert(
     Ok(if backend.supports_returning() {
         let target_sql = target
             .iter()
-            .map(|c| q(backend, c))
+            .map(|c| backend.pcol(c))
             .collect::<Vec<_>>()
             .join(", ");
         let text = format!(

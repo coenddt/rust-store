@@ -19,7 +19,7 @@ use crate::pipeline::{merge_and, nested_rel_name_from_as, rel_name_from_as};
 use crate::schema::{Registry, Schema};
 
 use super::aggregate::lookup_extra_condition;
-use super::{col_fn, count_field_pattern, q, tname};
+use super::{col_fn, count_field_pattern, tname};
 
 /// 解析后的嵌套关系下钻（SQL 侧）：子级 filter 内一层关系下钻 → 嵌套 `EXISTS`
 pub(super) struct SqlNested {
@@ -271,7 +271,7 @@ fn acc_to_sql(backend: Backend, rel_schema: &Schema, acc: &Value) -> Result<Stri
         let f = f.trim_start_matches('$');
         let c = scalar_column(rel_schema, f)
             .ok_or_else(|| format!("关系聚合谓词聚合字段 \"{f}\" 无法映射到标量列"))?;
-        Ok(format!("c.{}", q(backend, &c)))
+        Ok(format!("c.{}", backend.pcol(&c)))
     };
     match op.as_str() {
         // `$count:"*"` → `{$sum: 1}`
@@ -376,8 +376,8 @@ pub(super) fn exists_clause(
         let mut conds: Vec<String> = vec![format!(
             "{}.{} = c.{}",
             alias,
-            q(backend, &n_fk_col),
-            q(backend, &n_local_col)
+            backend.pcol(&n_fk_col),
+            backend.pcol(&n_local_col)
         )];
         // 孙表 owner 注入（与子表 owner 同源；越权防护）
         if let Some(ne) = &n.extra {
@@ -440,12 +440,12 @@ pub(super) fn exists_clause(
         "{}EXISTS (SELECT 1 FROM {} c WHERE c.{} = {}.{}{}{} GROUP BY c.{} HAVING {})",
         if negated { "NOT " } else { "" },
         tname(backend, rel_schema),
-        q(backend, &fk_col),
+        backend.pcol(&fk_col),
         root_alias,
-        q(backend, &local_col),
+        backend.pcol(&local_col),
         extra_sql,
         nested_sql,
-        q(backend, &fk_col),
+        backend.pcol(&fk_col),
         having_sql,
     );
     Ok(WhereClause { text, params })

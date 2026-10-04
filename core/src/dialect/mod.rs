@@ -125,6 +125,23 @@ pub(crate) fn field_is_bool(schema: &Schema, field: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// 保留物理名（I3）：`_id` 恒原样；`__` 前缀内部合成名不翻译。
+fn is_reserved_physical(name: &str) -> bool {
+    name == "_id" || name.starts_with("__")
+}
+
+/// 逻辑名 → 本后端物理标识符（设计 §6，翻译单点在 [`crate::naming`]）。
+///
+/// 保留名（I3：`_id` / `__` 前缀）原样返回，其余走 `naming` 归一为 snake_case（SQL 物理风格）。
+/// **只做正向（逻辑 → 物理）**；反向翻译不在本层。
+pub(crate) fn physical_of(name: &str) -> String {
+    if is_reserved_physical(name) {
+        name.to_string()
+    } else {
+        crate::naming::to_snake(&crate::naming::canonical(name))
+    }
+}
+
 /// 支持的数据库后端
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
@@ -145,11 +162,21 @@ impl Backend {
     }
 
     /// 双重引号标识符
+    ///
+    /// **仅用于别名 / 已物理名**（`t`、`r0`、`__present`、`__rn`、`fk`、`v`… 等合成名）。
+    /// 逻辑数据标识符（字段 / 关系字段 / 计算列 key / 表名）一律走 [`Backend::pcol`]。
     pub fn quote_ident(&self, ident: &str) -> String {
         match self {
             Backend::Mysql => format!("`{}`", ident.replace('`', "``")),
             _ => format!("\"{}\"", ident.replace('"', "\"\"")),
         }
+    }
+
+    /// 列引用统一出口：`quote_ident(physical_of(logical))`（设计 §6 翻译边界「落库」）。
+    ///
+    /// 逻辑数据标识符 → 本后端物理名（snake_case）后再引号化。
+    pub(crate) fn pcol(&self, logical: &str) -> String {
+        self.quote_ident(&physical_of(logical))
     }
 
     /// 双精度浮点类型名（§9.7「数值归 double」）
@@ -167,21 +194,23 @@ impl Backend {
 
     /// 表名 → SQL：`database` / `schema` 可选限定（空串按 `None` 处理）。
     ///
-    /// 过渡规则（P3「物理名翻译接通」再细化）：**PG 用 `schema` 限定**（database 由连接承载，
-    /// 不进表名）；**MySQL/SQLite 用 `database` 限定**。见 `multi-datasource-routing-plan.md` §4.3。
+    /// **PG 用 `schema` 限定**（`"schema"."table"`；database 由连接承载，**禁**跨库限定）；
+    /// **MySQL/SQLite 用 `database` 限定**（`"db"."table"`）。表名走 [`physical_of`]（物理名）。
+    /// 见设计 §3.2 / §6.4。
     pub fn qualified_table(
         &self,
         database: Option<&str>,
         schema: Option<&str>,
         table: &str,
     ) -> String {
+        let t = self.quote_ident(&physical_of(table));
         let qual = match self {
             Backend::Postgres => schema,
             _ => database,
         };
         match qual.filter(|s| !s.is_empty()) {
-            Some(q) => format!("{}.{}", self.quote_ident(q), self.quote_ident(table)),
-            None => self.quote_ident(table),
+            Some(q) => format!("{}.{}", self.quote_ident(q), t),
+            None => t,
         }
     }
 

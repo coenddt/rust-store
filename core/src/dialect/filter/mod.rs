@@ -250,7 +250,7 @@ impl Ctx<'_> {
             // 表达式模式（HAVING）：`c` 已是完整 SQL 表达式，不再限定/加引号
             c.to_string()
         } else {
-            format!("{}.{}", self.alias, self.backend.quote_ident(c))
+            format!("{}.{}", self.alias, self.backend.pcol(c))
         }
     }
 

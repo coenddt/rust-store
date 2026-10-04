@@ -16,7 +16,7 @@ use crate::schema::{Registry, Schema};
 
 use super::filter::build_filter;
 use super::ir::{RowCol, RowShape, SqlStmt};
-use super::{field_is_bool, Backend};
+use super::{field_is_bool, physical_of, Backend};
 
 mod insert;
 mod update;
@@ -191,7 +191,10 @@ fn returning_cols(schema: &Schema) -> Vec<String> {
 }
 
 /// 回读列 → RowShape（标量直接还原到 `[field]`；object/array 列标记 JSON 解析；
-/// §9.7 布尔列标记归一）
+/// §9.7 布尔列标记归一）。
+///
+/// 回读边界（设计 §6.4）：SQL 发射物理名 → **alias 用物理名**（与驱动返回列键一致），
+/// **`json_path` 保持逻辑名**（还原为逻辑键）；`returning_cols` 亦保持逻辑。
 fn returning_shape(schema: &Schema, cols: &[String]) -> RowShape {
     RowShape {
         columns: cols
@@ -203,9 +206,9 @@ fn returning_shape(schema: &Schema, cols: &[String]) -> RowShape {
                     Some("object") | Some("array")
                 );
                 if is_json {
-                    RowCol::json(c, &[c.as_str()])
+                    RowCol::json(&physical_of(c), &[c.as_str()])
                 } else {
-                    RowCol::scalar_bool(c, &[c.as_str()], field_is_bool(schema, c))
+                    RowCol::scalar_bool(&physical_of(c), &[c.as_str()], field_is_bool(schema, c))
                 }
             })
             .collect(),

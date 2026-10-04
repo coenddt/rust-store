@@ -128,6 +128,70 @@ fn dialect_cross_backend_sql_parity() {
     );
 }
 
+// ─── §6 物理名翻译接通：逻辑名 → SQL snake_case + 表限定 ──────────────
+
+/// 含驼峰字段 `orderTotal` 的 schema：SQL 侧发射物理名 `order_total`（collection `order_items`
+/// 本身已 snake 保持原样）；PG 用 `"schema"."table"`、MySQL 用 `"database"."table"`
+/// （PG 禁跨库限定，不得出现 database）。见设计 §6.1/§6.4。
+#[test]
+fn dialect_physical_name_translation() {
+    let schemas: Vec<Value> = serde_json::from_str(
+        r#"[{
+            "name": "OrderItem", "collection": "order_items", "timestamps": false,
+            "fields": { "orderTotal": { "type": "number" }, "sku": { "type": "string" } },
+            "relations": {}
+        }]"#,
+    )
+    .expect("schemas 解析失败");
+    let registry = registry_with(&schemas);
+
+    // MySQL：反引号 + 物理列名，且用 database 限定
+    let my = translate(
+        Backend::Mysql,
+        &json!({ "kind": "find", "collection": "order_items", "database": "shopdb",
+                 "projection": { "orderTotal": 1 } }),
+        &registry,
+    )
+    .expect("mysql translate");
+    let my_text = my["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        my_text.contains("`order_total`") && my_text.contains("`shopdb`.`order_items`"),
+        "MySQL 应发射物理列名与 database 限定: {my_text}"
+    );
+
+    // PG：双引号 + 物理列名，且用 schema 限定（不得出现 database）
+    let pg = translate(
+        Backend::Postgres,
+        &json!({ "kind": "find", "collection": "order_items", "database": "shopdb",
+                 "schema": "sales", "projection": { "orderTotal": 1 } }),
+        &registry,
+    )
+    .expect("pg translate");
+    let pg_text = pg["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        pg_text.contains("\"order_total\"") && pg_text.contains("\"sales\".\"order_items\""),
+        "PG 应发射物理列名与 schema 限定: {pg_text}"
+    );
+    assert!(
+        !pg_text.contains("shopdb"),
+        "PG 禁跨库限定（不得出现 database）: {pg_text}"
+    );
+
+    // SQLite：双引号 + 物理列名
+    let lite = translate(
+        Backend::Sqlite,
+        &json!({ "kind": "find", "collection": "order_items",
+                 "projection": { "orderTotal": 1 } }),
+        &registry,
+    )
+    .expect("sqlite translate");
+    let lite_text = lite["stmts"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        lite_text.contains("\"order_total\""),
+        "SQLite 应发射物理列名: {lite_text}"
+    );
+}
+
 #[test]
 fn dialect_aggregate_lookup_sql_parity() {
     assert_sql_parity(
@@ -943,11 +1007,11 @@ fn dialect_relation_predicate_count_exists() {
         let text = out["stmts"][0]["text"].as_str().unwrap_or("");
         let norm = normalize(text);
         assert!(
-            norm.contains("exists (select 1 from order_items c where c.orderid = t._id"),
+            norm.contains("exists (select 1 from order_items c where c.order_id = t._id"),
             "[{backend:?}] 应为 EXISTS 相关子查询: {text}"
         );
         assert!(
-            norm.contains("group by c.orderid having count(*) > ?"),
+            norm.contains("group by c.order_id having count(*) > ?"),
             "[{backend:?}] 应为 GROUP BY + HAVING: {text}"
         );
         assert!(
@@ -1185,16 +1249,16 @@ fn dialect_relation_predicate_nested_exists() {
         let text = out["stmts"][0]["text"].as_str().unwrap_or("");
         let norm = normalize(text);
         assert!(
-            norm.contains("exists (select 1 from order_items c where c.orderid = orders._id")
-                || norm.contains("exists (select 1 from order_items c where c.orderid = t._id"),
+            norm.contains("exists (select 1 from order_items c where c.order_id = orders._id")
+                || norm.contains("exists (select 1 from order_items c where c.order_id = t._id"),
             "[{backend:?}] 外层应为 EXISTS 相关子查询: {text}"
         );
         assert!(
-            norm.contains("and exists (select 1 from order_addons n0 where n0.itemid = c._id and n0.price > ?)"),
+            norm.contains("and exists (select 1 from order_addons n0 where n0.item_id = c._id and n0.price > ?)"),
             "[{backend:?}] 内层应为嵌套 EXISTS（挂在 c 上）: {text}"
         );
         assert!(
-            norm.contains("group by c.orderid having count(*) > ?"),
+            norm.contains("group by c.order_id having count(*) > ?"),
             "[{backend:?}] 外层应为 GROUP BY + HAVING: {text}"
         );
         let params = out["stmts"][0]["params"]

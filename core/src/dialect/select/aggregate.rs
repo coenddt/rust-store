@@ -12,7 +12,7 @@ use crate::dialect::filter::{
     build_filter, build_filter_with_relations, RelPredResolver, Warnings, WhereClause,
 };
 use crate::dialect::ir::{RowCol, RowShape, SqlStmt};
-use crate::dialect::{field_is_bool, Backend, ColumnRef};
+use crate::dialect::{field_is_bool, physical_of, Backend, ColumnRef};
 use crate::pipeline::REL_PRED_PREFIX;
 
 use super::group_agg::{self, GroupSpec};
@@ -248,7 +248,7 @@ fn child_order_sql(backend: Backend, rel_schema: &Schema, j: &Join) -> Result<St
                 let d = dir.as_i64().unwrap_or(1);
                 parts.push(format!(
                     "c.{} {}",
-                    q(backend, &c),
+                    backend.pcol(&c),
                     if d >= 0 { "ASC" } else { "DESC" }
                 ));
             }
@@ -330,7 +330,7 @@ pub(super) fn translate_aggregate(
                     // - 其余（未知字段 / object·array 整值 / 关系名本身 / 无对应 $lookup）
                     //   → **不生成 SQL**，告警 + 标记 unsupported 交由 Host 兜底排序。
                     let json_expr = |col: &str, path: &[String]| -> String {
-                        let base = format!("t.{}", q(backend, col));
+                        let base = format!("t.{}", backend.pcol(col));
                         let segs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
                         backend.json_extract_scalar(&base, &segs)
                     };
@@ -341,7 +341,7 @@ pub(super) fn translate_aggregate(
                                     .get(&joins[i].model)
                                     .ok()
                                     .and_then(|rel| crate::dialect::scalar_column(rel, rest))
-                                    .map(|c| format!("r{}.{}", i, q(backend, &c)))
+                                    .map(|c| format!("r{}.{}", i, backend.pcol(&c)))
                             } else {
                                 // 对象点号路径（U4）：standard 档 JSON 提取；整值 object 排序不支持
                                 match crate::dialect::field_column_ref(schema, k) {
@@ -359,7 +359,7 @@ pub(super) fn translate_aggregate(
                             } else {
                                 match col_fn(schema)(k) {
                                     Some(ColumnRef::Scalar(c)) => {
-                                        Some(format!("t.{}", q(backend, &c)))
+                                        Some(format!("t.{}", backend.pcol(&c)))
                                     }
                                     // 整值 object/array 排序无意义 → 不下推
                                     Some(ColumnRef::Json(..)) => None,
@@ -513,22 +513,22 @@ pub(super) fn translate_aggregate(
         match col_fn(schema)(f) {
             // 标量列
             Some(ColumnRef::Scalar(c)) => {
-                cols_sql.push(format!("t.{}", q(backend, &c)));
+                cols_sql.push(format!("t.{}", backend.pcol(&c)));
                 // §9.7 布尔归一：schema `boolean` 字段的列值 0/1 → JSON bool
                 columns.push(RowCol::scalar_bool(
-                    &c,
+                    &physical_of(&c),
                     &[f.as_str()],
                     field_is_bool(schema, f),
                 ));
             }
             // object/array JSON 列：整列取出，还原时解析 JSON 文本
             Some(ColumnRef::Json(c, _)) => {
-                cols_sql.push(format!("t.{}", q(backend, &c)));
-                columns.push(RowCol::json(&c, &[f.as_str()]));
+                cols_sql.push(format!("t.{}", backend.pcol(&c)));
+                columns.push(RowCol::json(&physical_of(&c), &[f.as_str()]));
             }
             // 对象点号路径投影：取该路径的标量值（还原为嵌套对象）
             Some(ColumnRef::JsonPath(c, path)) => {
-                let base = format!("t.{}", q(backend, &c));
+                let base = format!("t.{}", backend.pcol(&c));
                 let segs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
                 let alias = f.replace('.', "_");
                 cols_sql.push(format!(
@@ -595,7 +595,7 @@ pub(super) fn translate_aggregate(
             let order = child_order_sql(backend, rel_schema, j)?;
             let mut inner = format!(
                 "SELECT c.*, ROW_NUMBER() OVER (PARTITION BY c.{} ORDER BY {}) AS {} FROM {} c",
-                q(backend, &j.foreign_col),
+                backend.pcol(&j.foreign_col),
                 order,
                 q(backend, "__rn"),
                 tname(backend, rel_schema),
@@ -634,9 +634,9 @@ pub(super) fn translate_aggregate(
             child_ref,
             r,
             r,
-            q(backend, &j.foreign_col),
+            backend.pcol(&j.foreign_col),
             parent_alias,
-            q(backend, &j.local_col),
+            backend.pcol(&j.local_col),
             on_extra,
         ));
 
@@ -654,7 +654,7 @@ pub(super) fn translate_aggregate(
             cols_sql.push(format!(
                 "{}.{} AS {}",
                 r,
-                q(backend, &rf),
+                backend.pcol(&rf),
                 q(backend, &alias_col)
             ));
             // 关系列：json_path = 关系路径 + 字段名；ones = 每级基数（one→对象/null）
@@ -706,7 +706,7 @@ pub(super) fn translate_aggregate(
                 join_params.extend(wh.params);
             }
         }
-        let fk = q(backend, &ca.foreign_col);
+        let fk = backend.pcol(&ca.foreign_col);
         let agg_expr = match ca.op.as_str() {
             "$count" => "COUNT(*)".to_string(),
             op @ ("$sum" | "$avg" | "$min" | "$max") => {
@@ -726,7 +726,7 @@ pub(super) fn translate_aggregate(
                     "$min" => "MIN",
                     _ => "MAX",
                 };
-                let arg_sql = format!("c.{}", q(backend, &col));
+                let arg_sql = format!("c.{}", backend.pcol(&col));
                 if op == "$avg" {
                     // §9.7「数值归 double」：先 CAST 到双精度，消除 MySQL `AVG(int)` 的 4 位小数截断
                     format!("AVG(CAST({arg_sql} AS {}))", backend.double_type())
@@ -759,7 +759,7 @@ pub(super) fn translate_aggregate(
             alias,
             alias,
             q(backend, "fk"),
-            q(backend, &ca.local_col),
+            backend.pcol(&ca.local_col),
         ));
         let out = if ca.op == "$count" {
             format!("COALESCE({}.{}, 0)", alias, q(backend, "v"))

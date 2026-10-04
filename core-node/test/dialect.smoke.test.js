@@ -110,7 +110,7 @@ test('dialect smoke: insertMany + count on sqlite', () => {
 test('dialect smoke: $lookup join → nested items array', () => {
   const sqlDb = db();
   sqlDb.run(`CREATE TABLE orders (_id TEXT PRIMARY KEY, code TEXT, amount REAL, __present TEXT)`);
-  sqlDb.run(`CREATE TABLE order_items (_id TEXT PRIMARY KEY, orderId TEXT, sku TEXT, qty INTEGER, __present TEXT)`);
+  sqlDb.run(`CREATE TABLE order_items (_id TEXT PRIMARY KEY, order_id TEXT, sku TEXT, qty INTEGER, __present TEXT)`);
   sqlDb.run(`INSERT INTO orders VALUES ('o1','A-1',10,',_id,code,amount,'),('o2','B-1',20,',_id,code,amount,')`);
   sqlDb.run(`INSERT INTO order_items VALUES ('i1','o1','sku-x',2,',_id,orderId,sku,qty,'),('i2','o1','sku-y',3,',_id,orderId,sku,qty,')`);
 

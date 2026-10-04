@@ -6,7 +6,7 @@ use crate::schema::Schema;
 
 use crate::dialect::filter::build_filter;
 use crate::dialect::ir::{RowCol, RowShape, SqlStmt};
-use crate::dialect::{field_is_bool, Backend, ColumnRef};
+use crate::dialect::{field_is_bool, physical_of, Backend, ColumnRef};
 
 use super::{col_fn, projection_fields, q, tname};
 
@@ -42,22 +42,22 @@ pub(super) fn translate_find(
         match col_fn(schema)(f) {
             // 标量列
             Some(ColumnRef::Scalar(c)) => {
-                cols_sql.push(format!("t.{}", q(backend, &c)));
+                cols_sql.push(format!("t.{}", backend.pcol(&c)));
                 // §9.7 布尔归一：schema `boolean` 字段的列值 0/1 → JSON bool
                 columns.push(RowCol::scalar_bool(
-                    &c,
+                    &physical_of(&c),
                     &[f.as_str()],
                     field_is_bool(schema, f),
                 ));
             }
             // object/array JSON 列：整列取出，还原时解析 JSON 文本
             Some(ColumnRef::Json(c, _)) => {
-                cols_sql.push(format!("t.{}", q(backend, &c)));
-                columns.push(RowCol::json(&c, &[f.as_str()]));
+                cols_sql.push(format!("t.{}", backend.pcol(&c)));
+                columns.push(RowCol::json(&physical_of(&c), &[f.as_str()]));
             }
             // 对象点号路径投影：取该路径的标量值（还原为嵌套对象）
             Some(ColumnRef::JsonPath(c, path)) => {
-                let base = format!("t.{}", q(backend, &c));
+                let base = format!("t.{}", backend.pcol(&c));
                 let segs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
                 let alias = f.replace('.', "_");
                 cols_sql.push(format!(
