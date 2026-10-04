@@ -15,7 +15,7 @@ authors:
 repository-code: "https://github.com/coenddt/rust-store"
 url: "https://github.com/coenddt/rust-store"
 license: MIT
-version: "3.2.0"
+version: "4.0.0"
 date-released: "2026-09-14"
 keywords:
   - rust
