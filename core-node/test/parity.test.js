@@ -32,7 +32,16 @@ const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 /** 建绑定实例并注册 schema / 全部同步 fn 回调（异步回调由 Host 侧直接调用） */
 function makeRegistry(fx) {
   const reg = new Registry();
-  for (const s of fx.schemas || []) reg.register(s);
+  const schemas = fx.schemas || [];
+  if (schemas.length) {
+    // 定义文件零落点：用例内 schema 的 `datasource` 由本夹具读取，作为 Location 注入
+    reg.registerBatch(
+      schemas.map((s) => ({
+        defn: s,
+        location: { source: s.datasource || 'default', database: null, schema: null },
+      })),
+    );
+  }
   // 档位：缺省 standard；用例可声明 `"profile": "text2query"` 覆盖（双门禁分离）
   if (fx.profile) reg.setProfile(fx.profile);
   for (const [ref, fn] of Object.entries(fns)) reg.setFn(ref, fn);

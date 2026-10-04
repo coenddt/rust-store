@@ -89,8 +89,23 @@ def load(name):
 def make_registry(fx):
     """建绑定实例并注册 schema / 全部同步 fn 回调（异步回调由 Host 侧直接调用）"""
     reg = Registry()
-    for s in fx.get("schemas") or []:
-        reg.register(s)
+    schemas = fx.get("schemas") or []
+    if schemas:
+        # 定义文件零落点：用例内 schema 的 `datasource` 由本夹具读取，作为 Location 注入
+        reg.register_batch(
+            [
+                {
+                    "defn": s,
+                    "location": {
+                        "source": s.get("datasource") or "default",
+                        "database": None,
+                        "schema": None,
+                    },
+                }
+                for s in schemas
+            ],
+            None,
+        )
     # 档位：缺省 standard；用例可声明 `"profile": "text2query"` 覆盖（双门禁分离）
     if fx.get("profile"):
         reg.set_profile(fx["profile"])

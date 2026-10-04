@@ -29,12 +29,13 @@ async fn fresh_store() -> Store {
         .expect("注册失败");
     // SQL 后端每表必建 __present 哨兵列（存「显式存在字段集合」；见 nodejs-store/src/ddl.js:10
     // 与 core dialect/write/insert.rs::present_value —— dialect 层物理契约）
+    // SQL 标识符落库名为物理名（snake_case；见 core dialect/mod.rs::physical_of）
     let pool = store.sqlite_pool().expect("SQLite 源");
-    sqlx::query("CREATE TABLE \"user\" (_id TEXT PRIMARY KEY, name TEXT, age REAL, createdAt INTEGER, updatedAt INTEGER, \"__present\" TEXT)")
+    sqlx::query("CREATE TABLE \"user\" (_id TEXT PRIMARY KEY, name TEXT, age REAL, created_at INTEGER, updated_at INTEGER, \"__present\" TEXT)")
         .execute(pool)
         .await
         .expect("建表失败");
-    sqlx::query("CREATE TABLE \"user_deleted\" (_id TEXT PRIMARY KEY, name TEXT, age REAL, createdAt INTEGER, updatedAt INTEGER, deletedAt INTEGER, \"__present\" TEXT)")
+    sqlx::query("CREATE TABLE \"user_deleted\" (_id TEXT PRIMARY KEY, name TEXT, age REAL, created_at INTEGER, updated_at INTEGER, deleted_at INTEGER, \"__present\" TEXT)")
         .execute(pool)
         .await
         .expect("建归档表失败");
@@ -91,7 +92,12 @@ async fn insert_query_update_remove_e2e() {
         .expect("update 失败");
     assert_eq!(updated.expect("update 应命中")["age"].as_f64(), Some(31.0));
 
-    // 权限：无权限 ctx 拒绝写（core ERR_NO_WRITE，宿主原样透传）
+    // 权限：拒写清单命中者拒绝写（core ERR_PERMISSION，宿主原样透传）
+    // 拒写语义已清单化：guest 不再默认拒写，由显式 set_deny_write_roles 承载
+    // （见 CHANGELOG「guest 不再默认拒写」/ core/tests/guards.rs::deny_write_roles 组）
+    store
+        .set_deny_write_roles(vec!["guest".to_string()])
+        .expect("注入拒写清单失败");
     let guest = Context {
         user_id: Some("guest".into()),
         roles: Some(vec!["guest".into()]),
