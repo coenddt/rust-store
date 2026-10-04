@@ -4,6 +4,55 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 4.0.0 (2026-10-04)
+
+### Breaking（定义零落点 + `namespace` 删名）
+
+- **落点外置**：定义文件不再携带落点字段（`source` / `database` / `schema` 从定义中移除），
+  定位语义中的 `namespace` 一词删除，改由「定义目录层级 + `store.config.json`」解析：
+  定义根下一级 = `database`，PostgreSQL 再加一级 = `schema`，更深层级自由打平（无语义）。
+- **命令体形状**：命令体定位字段改为 `{source, database, schema, collection}`；
+  `routeOverride` 键由 `{source, namespace}` 更名为 `{source?, database?, schema?}`。
+- **同批同名报错**：同一装载批次内出现重名定义 ⇒ 报错、服务不启动（原为静默覆盖）；
+  同名语义 = 一份主（无 `replica`）+ 若干从（`{ "name": ..., "replica": true }`，仅声明链路，
+  不进控制面）；主 0 份或多份 ⇒ 报错。
+
+### Breaking（数据标识符下沉翻译 + 归一冲突）
+
+- **数据标识符下沉翻译**：定义侧标识符（`collection` / 字段 / 关系字段 / 计算列键 / `fnRef` / 索引名）
+  以任意风格书写，由引擎翻译为目标风格——SQL（MySQL / PostgreSQL / SQLite）落 `snake_case`，
+  MongoDB 落 `camelCase`；宿主代码风格（Node / Java / C# / Rust `camelCase`、Go `PascalCase`、
+  Python `snake_case`）随计算列。契约键（`fnRef` / `localField` / `foreignField` / `asyncFn` / `type` …）
+  与 schema `name` 不翻译。
+- **归一实现唯一**：归一化（canonicalization）唯一实现在 `core::naming`，经 `core-node` / `core-py`
+  透出；宿主不得重复实现。
+- **`ERR_NAME_CONFLICT`**：同 schema 内两个逻辑名归一后相等（如 `orderTotal` vs `order_total`），
+  或某名归一后撞契约保留键（如 `fnref`）⇒ 报错、服务不启动（绝不静默覆盖）。
+  **既有与保留键同名归一的数据标识符（如字段名 `type` / `read` / `write`）将被拒绝**。
+
+### Breaking（计算列 `fnRef` 复合名 + 归一匹配）
+
+- **默认复合名**：逻辑 `fnRef` 默认生成为 `<schema.name>.<计算列键>`（不再手写）；`name` 全局唯一
+  ⇒ `fnRef` 全局唯一。跨 schema 复用实现时显式写共享名（如 `"fnRef": "common.moneyLabel"`），
+  命名由必填降为可选。
+- **归一匹配**：宿主实现按归一化绑定——实现名的宿主语言风格与 schema 逻辑 `fnRef` 均归一为 token
+  序列比对（Node 的 `orderAmountLabel` 与 Python 的 `order_amount_label` 绑定同一逻辑计算列）。
+- **`ERR_FN_MISSING`**：声明的 `fnRef` 必须有实现，否则服务启动失败。
+
+### Migration
+
+- 替换定义 / 命令中的 `namespace` → `database`（PG 再加 `schema`）；定义文件删除落点字段
+  （`source` / `database` / `schema`）。
+- 目录按新语义重排：一级 = `database`；PG 二级 = `schema`；更深层级自由打平。
+- `routeOverride` 键改名为 `{source?, database?, schema?}`。
+- 抬高绑定依赖下限：Node `^4.0.0` / Python `>=4.0.0,<5.0.0`。
+- 文档面：`core` / `core-node` / `core-py` README 新增「命名规范与翻译摘要」
+  （`SPEC:NAMING-STYLE` / `SPEC:FNREF` 定稿块）。
+
+### 证据
+
+引擎侧三 README 规范块一致性由 `tools/check-spec-snippets.js` 守卫（归一后逐段相等，缺失 / 不等即退出码 1）。
+
 ## 3.0.0 (2026-10-02)
 
 ### Breaking（RBAC 内置角色清单化，设计 §11）

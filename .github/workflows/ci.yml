@@ -33,6 +33,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test（仅 core crate；绑定层 parity 见 node-binding / py-binding）
         run: cargo test -p rust-store-core
+      - name: Check SPEC snippets (README carriers)
+        run: node tools/check-spec-snippets.js
 
   node-binding:
     name: node binding parity
