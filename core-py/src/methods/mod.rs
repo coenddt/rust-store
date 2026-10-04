@@ -7,5 +7,6 @@ pub(crate) mod compute;
 pub(crate) mod datasource;
 pub(crate) mod dialect;
 pub(crate) mod federation;
+pub(crate) mod load;
 pub(crate) mod perm;
 pub(crate) mod plan;

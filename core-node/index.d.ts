@@ -66,6 +66,15 @@ export declare class Registry {
   planFederated(gql: string, params: any, ctx?: any | undefined | null, dsConfig?: any | undefined | null): any
   /** 合并各源结果 → 嵌套文档数组；`results` 必须与 `plan.sources` **同序同长** */
   mergeFederated(plan: any, results: Array<any>): any
+  /**
+   * 目录语义纯规划：`store.config.json` + 目录扫描结果 → 定位后的装载项。
+   *
+   * `config` = `{sources, defs}`；`files` = `[{rel, defn}]`（`rel` = 相对 defs-root 的路径）。
+   * 返回 `[{defn, location:{source,database,schema}}]`（主在前、其后从；组间按 name 字典序）。
+   */
+  planLoad(config: any, files: any): any
+  /** 带定位批量注册（D13 批次唯一）；`items` = `[{defn, location}]`，`ctx` 缺省 = 无上下文。 */
+  registerBatch(items: any, ctx?: any | undefined | null): void
   canRead(model: string, ctx?: any | undefined | null): boolean
   canWrite(model: string, ctx?: any | undefined | null): boolean
   shouldInjectOwner(model: string, ctx?: any | undefined | null): boolean
