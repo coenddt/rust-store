@@ -53,6 +53,181 @@ struct Entry {
     version: u64,
 }
 
+/// 批次分组结果（判据单点输出；`register_batch` 与 `schema::load::plan_load` 共用）。
+pub(super) struct BatchClass {
+    /// 组名（按首次出现顺序）
+    pub order: Vec<String>,
+    /// name → (主定义, 落点, collection)；每组至多一份主
+    pub primaries: HashMap<String, (Value, Location, String)>,
+    /// name → 从项（原序）
+    pub replicas: HashMap<String, Vec<(Value, Location)>>,
+}
+
+/// 批次判据错误（调用方各自格式化文案：注册期与装载期文案口径不同）。
+pub(super) enum BatchError {
+    /// 解析错误（非对象 / 缺 name）
+    Parse(String),
+    /// 同名主 ≥2（A1）：组名 + 主项在输入中的下标
+    PrimaryDuplicate { name: String, indices: Vec<usize> },
+    /// 批内四元组冲突
+    LocationConflict {
+        collection: String,
+        prev: String,
+        name: String,
+        source: String,
+        database: Option<String>,
+        schema: Option<String>,
+    },
+}
+
+/// 批次判据单点：**分组 + 主唯一（≥2 ⇒ `Err`）+ 批内四元组冲突（⇒ `Err`）**。
+///
+/// **0 主不在此报错**（交由调用方决定：`register_batch` 走既有 entry 追加从链路，
+/// `plan_load` 直接拒——「主定义缺失」）。`register_batch` 与 `plan_load` 共用本函数，
+/// 禁各写一份（判据单点，防 A1/A3 漂移）。
+pub(super) fn classify_batch(items: &[(Value, Location)]) -> Result<BatchClass, BatchError> {
+    let mut order: Vec<String> = Vec::new();
+    let mut primaries: HashMap<String, (Value, Location, String)> = HashMap::new();
+    let mut primary_idx: HashMap<String, usize> = HashMap::new();
+    let mut replicas: HashMap<String, Vec<(Value, Location)>> = HashMap::new();
+
+    for (idx, (defn, loc)) in items.iter().enumerate() {
+        let obj = defn
+            .as_object()
+            .ok_or_else(|| BatchError::Parse("schema 定义必须是对象".to_string()))?;
+        let name = obj
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| BatchError::Parse("schema 缺少 name".to_string()))?
+            .to_string();
+        if !order.iter().any(|n| n == &name) {
+            order.push(name.clone());
+        }
+
+        if obj.get("replica").map(is_truthy).unwrap_or(false) {
+            replicas
+                .entry(name)
+                .or_default()
+                .push((defn.clone(), loc.clone()));
+            continue;
+        }
+
+        let collection = obj
+            .get("collection")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| name.clone());
+        if let Some(first) = primary_idx.get(&name) {
+            // 同名主 ≥2 ⇒ Err（A1）；携带下标供调用方定位（rel 路径 / 提示）
+            return Err(BatchError::PrimaryDuplicate {
+                name,
+                indices: vec![*first, idx],
+            });
+        }
+        primary_idx.insert(name.clone(), idx);
+        primaries.insert(name, (defn.clone(), loc.clone(), collection));
+    }
+
+    // 批内四元组冲突：主 + 从全部链路（判据函数 `detect_location_conflict`）
+    let mut quads: Vec<(String, String, Location)> = Vec::new();
+    for name in &order {
+        if let Some((_, loc, coll)) = primaries.get(name) {
+            quads.push((name.clone(), coll.clone(), loc.clone()));
+        }
+        if let Some(rs) = replicas.get(name) {
+            for (defn, loc) in rs {
+                let coll = defn
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(name)
+                    .to_string();
+                quads.push((name.clone(), coll, loc.clone()));
+            }
+        }
+    }
+    if let Some(c) = detect_location_conflict(&quads) {
+        return Err(BatchError::LocationConflict {
+            collection: c.collection,
+            prev: c.prev,
+            name: c.name,
+            source: c.source,
+            database: c.database,
+            schema: c.schema,
+        });
+    }
+
+    Ok(BatchClass {
+        order,
+        primaries,
+        replicas,
+    })
+}
+
+/// 四元组冲突信息（供调用方格式化文案）
+pub(super) struct LocationConflict {
+    pub collection: String,
+    pub prev: String,
+    pub name: String,
+    pub source: String,
+    pub database: Option<String>,
+    pub schema: Option<String>,
+}
+
+/// 四元组 `(source, database, schema, collection)` 冲突检测（**判据单点**）：
+/// 同一四元组被两个不同 schema 名占用 ⇒ `Some(冲突)`。`register_batch`（含既有 entry）
+/// 与 `plan_load`（批内）共用。
+pub(super) fn detect_location_conflict(
+    entries: &[(String, String, Location)],
+) -> Option<LocationConflict> {
+    let mut seen: HashMap<(String, Option<String>, Option<String>, String), String> = HashMap::new();
+    for (name, collection, loc) in entries {
+        let key = (
+            loc.source.clone(),
+            loc.database.clone(),
+            loc.schema.clone(),
+            collection.clone(),
+        );
+        if let Some(prev) = seen.get(&key) {
+            if prev != name {
+                return Some(LocationConflict {
+                    collection: collection.clone(),
+                    prev: prev.clone(),
+                    name: name.clone(),
+                    source: loc.source.clone(),
+                    database: loc.database.clone(),
+                    schema: loc.schema.clone(),
+                });
+            }
+        } else {
+            seen.insert(key, name.clone());
+        }
+    }
+    None
+}
+
+/// `BatchError` → 注册期文案（保留既有子串：`同名主定义重复` / `定位冲突`）。
+fn batch_err_to_msg(e: BatchError) -> String {
+    match e {
+        BatchError::Parse(m) => m,
+        BatchError::PrimaryDuplicate { name, .. } => format!(
+            "同名主定义重复: {}（同一装载批次内 name 必须唯一，从定义请用 replica: true）",
+            name
+        ),
+        BatchError::LocationConflict {
+            collection,
+            prev,
+            source,
+            database,
+            schema,
+            ..
+        } => format!(
+            "定位冲突: ({}, {:?}, {:?}, {}) 已被 schema `{}` 占用",
+            source, database, schema, collection, prev
+        ),
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Registry {
     entries: HashMap<String, Entry>,
@@ -99,11 +274,12 @@ impl Registry {
     /// 带定位的批量注册（D13：唯一性校验落「装载批次集合」）。
     ///
     /// 算法（**先构造后落库，任一步 Err ⇒ 零副作用**）：
-    /// 1. 逐项解析 + `can_register` 门禁（判决先于 `build_schema`）。
-    /// 2. 按 `name` 分组：`obj["replica"]`（`is_truthy`）为真 ⇒ 入 `replicas`（**不 build_schema**，
-    ///    不读 collection/fields）；否则 `build_schema` 为 **主**。
-    /// 3. 每组主定义 0 份且无既有同名 entry ⇒ `Err`；≥2 份主 ⇒ `Err`（A1）。
-    /// 4. 全批 `(source, database, schema, collection)` 跨名冲突 ⇒ `Err`（替代旧 `check_location_unique`）。
+    /// 1. 判据单点 [`classify_batch`]（分组 / 主唯一 ≥2 ⇒ `Err` / 批内四元组冲突），与
+    ///    `schema::load::plan_load` 同源。
+    /// 2. `can_register` 门禁（判决先于 `build_schema`）。
+    /// 3. 逐组：有主 ⇒ `build_schema` 为 **主**；0 主 ⇒ 追加既有同名 entry 的从链路，无既有 ⇒ `Err`。
+    /// 4. 全批 + 既有 `(source, database, schema, collection)` 跨名冲突 ⇒ `Err`
+    ///    （判据函数 [`detect_location_conflict`]，替代旧 `check_location_unique`）。
     /// 5. 提交：`links = [primary.loc] ++ replicas`；命中既有 entry ⇒ `version + 1`
     ///    （`order` 位置不变）、替换结构与链路；新名 ⇒ `version = 1`、`order.push`。
     ///    `Schema.source/database/schema` 由 `primary.loc` 注入（`source == "default"` ⇒ `None`）。
@@ -114,99 +290,49 @@ impl Registry {
         items: &[(Value, Location)],
         ctx: Option<&crate::permission::Context>,
     ) -> Result<(), String> {
-        struct Primary {
-            name: String,
-            schema: Schema,
-            loc: Location,
-            raw: Value,
-            is_archive: bool,
-        }
+        // ── 1：判据单点（分组 / 主唯一 / 批内四元组冲突），与 plan_load 同源 ──
+        let class = classify_batch(items).map_err(batch_err_to_msg)?;
 
-        // ── 1/2：解析 + 门禁 + 分组（主 build_schema，从不读从定义的结构） ──
-        let mut primaries: Vec<Primary> = Vec::new();
-        let mut replicas: Vec<(String, Location)> = Vec::new();
-        let mut name_order: Vec<String> = Vec::new();
-        let push_name = |v: &mut Vec<String>, n: &str| {
-            if !v.iter().any(|x| x == n) {
-                v.push(n.to_string());
-            }
-        };
-
-        for (defn, loc) in items {
-            let obj = defn
-                .as_object()
-                .ok_or_else(|| "schema 定义必须是对象".to_string())?;
-            let name = obj
-                .get("name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| "schema 缺少 name".to_string())?
-                .to_string();
-
-            // 定义层门禁：判决先于 build_schema —— 拒绝即返回，绝不部分写入
+        // 定义层门禁：判决先于 build_schema —— 拒绝即返回，绝不部分写入
+        for (defn, _loc) in items {
+            let name = defn.get("name").and_then(|v| v.as_str()).unwrap_or("");
             if !crate::permission::can_register(&self.meta_policy, ctx) {
                 return Err(format!("ERR_PERMISSION: 无权注册或覆盖定义 {name}"));
             }
-            push_name(&mut name_order, &name);
-
-            if obj.get("replica").map(is_truthy).unwrap_or(false) {
-                replicas.push((name, loc.clone()));
-                continue;
-            }
-
-            let collection = obj
-                .get("collection")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .unwrap_or_else(|| name.clone());
-            let schema = build_schema(obj, name.clone(), collection, loc)?;
-            let is_archive = obj.get("_isArchive").map(is_truthy).unwrap_or(false);
-            primaries.push(Primary {
-                name,
-                schema,
-                loc: loc.clone(),
-                raw: defn.clone(),
-                is_archive,
-            });
         }
 
-        // ── 3：逐组判决（每组主恰好一份）→ 拟定 entry 序列（主 + 归档附表，保序） ──
+        // ── 2：逐组拟定 entry 序列（主 + 归档附表，保序） ──
         struct Planned {
             name: String,
             schema: Schema,
             links: Vec<Location>,
         }
         let mut planned: Vec<Planned> = Vec::new();
-        for name in &name_order {
-            let ps: Vec<&Primary> = primaries.iter().filter(|p| &p.name == name).collect();
-            let rs: Vec<Location> = replicas
-                .iter()
-                .filter(|(n, _)| n == name)
-                .map(|(_, l)| l.clone())
-                .collect();
-            if ps.len() > 1 {
-                return Err(format!(
-                    "同名主定义重复: {}（同一装载批次内 name 必须唯一，从定义请用 replica: true）",
-                    name
-                ));
-            }
-            if let Some(p) = ps.first() {
-                let mut links = vec![p.loc.clone()];
+        for name in &class.order {
+            let rs: Vec<Location> = class
+                .replicas
+                .get(name)
+                .map(|v| v.iter().map(|(_, l)| l.clone()).collect())
+                .unwrap_or_default();
+            if let Some((raw, loc, collection)) = class.primaries.get(name) {
+                let obj = raw.as_object().unwrap();
+                let schema = build_schema(obj, name.clone(), collection.clone(), loc)?;
+                let is_archive = obj.get("_isArchive").map(is_truthy).unwrap_or(false);
+                let mut links = vec![loc.clone()];
                 links.extend(rs);
                 planned.push(Planned {
                     name: name.clone(),
-                    schema: p.schema.clone(),
+                    schema: schema.clone(),
                     links: links.clone(),
                 });
                 // 归档附表紧随主定义派生（`links` 继承主链路，定位同主）
-                if !p.is_archive && !p.name.ends_with("Deleted") {
-                    let aobj =
-                        archive_defn(p.raw.as_object().unwrap(), &p.name, &p.schema.collection)
-                            .as_object()
-                            .cloned()
-                            .unwrap();
-                    let aname = format!("{}Deleted", p.name);
-                    let acoll = format!("{}_deleted", p.schema.collection);
+                if !is_archive && !name.ends_with("Deleted") {
+                    let aobj = archive_defn(obj, name, &schema.collection)
+                        .as_object()
+                        .cloned()
+                        .unwrap();
+                    let aname = format!("{}Deleted", name);
+                    let acoll = format!("{}_deleted", schema.collection);
                     let aschema = build_schema(&aobj, aname.clone(), acoll, &links[0])?;
                     planned.push(Planned {
                         name: aname,
@@ -232,54 +358,31 @@ impl Registry {
             }
         }
 
-        // ── 4：四元组唯一性（本批 + 既有，跨名冲突即 Err；同名重复链路放行） ──
+        // ── 3：四元组唯一性（本批 + 既有，跨名冲突即 Err；判据函数单点） ──
         let batch_names: std::collections::HashSet<&str> =
             planned.iter().map(|p| p.name.as_str()).collect();
-        let mut seen: HashMap<(String, Option<String>, Option<String>, String), String> =
-            HashMap::new();
+        let mut quads: Vec<(String, String, Location)> = Vec::new();
         for (n, e) in &self.entries {
             if batch_names.contains(n.as_str()) {
                 continue; // 本批将整体替换该名，旧链路不参与冲突判定
             }
             for l in &e.links {
-                if let Some(prev) = seen.insert(
-                    (
-                        l.source.clone(),
-                        l.database.clone(),
-                        l.schema.clone(),
-                        e.schema.collection.clone(),
-                    ),
-                    n.clone(),
-                ) {
-                    return Err(format!(
-                        "定位冲突: ({}, {:?}, {:?}, {}) 已同时被 schema `{}` 占用",
-                        l.source, l.database, l.schema, e.schema.collection, prev
-                    ));
-                }
+                quads.push((n.clone(), e.schema.collection.clone(), l.clone()));
             }
         }
         for p in &planned {
             for l in &p.links {
-                let key = (
-                    l.source.clone(),
-                    l.database.clone(),
-                    l.schema.clone(),
-                    p.schema.collection.clone(),
-                );
-                if let Some(prev) = seen.get(&key) {
-                    if prev != &p.name {
-                        return Err(format!(
-                            "定位冲突: ({}, {:?}, {:?}, {}) 已被 schema `{}` 占用",
-                            l.source, l.database, l.schema, p.schema.collection, prev
-                        ));
-                    }
-                } else {
-                    seen.insert(key, p.name.clone());
-                }
+                quads.push((p.name.clone(), p.schema.collection.clone(), l.clone()));
             }
         }
+        if let Some(c) = detect_location_conflict(&quads) {
+            return Err(format!(
+                "定位冲突: ({}, {:?}, {:?}, {}) 已被 schema `{}` 占用",
+                c.source, c.database, c.schema, c.collection, c.prev
+            ));
+        }
 
-        // ── 5：提交（命中既有 ⇒ version + 1 且 order 位置不变；新名 ⇒ version = 1 + push） ──
+        // ── 4：提交（命中既有 ⇒ version + 1 且 order 位置不变；新名 ⇒ version = 1 + push） ──
         for p in planned {
             if let Some(e) = self.entries.get_mut(&p.name) {
                 e.schema = p.schema;
