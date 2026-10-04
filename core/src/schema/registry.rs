@@ -70,14 +70,7 @@ pub(super) enum BatchError {
     /// 同名主 ≥2（A1）：组名 + 主项在输入中的下标
     PrimaryDuplicate { name: String, indices: Vec<usize> },
     /// 批内四元组冲突
-    LocationConflict {
-        collection: String,
-        prev: String,
-        name: String,
-        source: String,
-        database: Option<String>,
-        schema: Option<String>,
-    },
+    LocationConflict(Box<LocationConflict>),
 }
 
 /// 批次判据单点：**分组 + 主唯一（≥2 ⇒ `Err`）+ 批内四元组冲突（⇒ `Err`）**。
@@ -147,14 +140,7 @@ pub(super) fn classify_batch(items: &[(Value, Location)]) -> Result<BatchClass, 
         }
     }
     if let Some(c) = detect_location_conflict(&quads) {
-        return Err(BatchError::LocationConflict {
-            collection: c.collection,
-            prev: c.prev,
-            name: c.name,
-            source: c.source,
-            database: c.database,
-            schema: c.schema,
-        });
+        return Err(BatchError::LocationConflict(Box::new(c)));
     }
 
     Ok(BatchClass {
@@ -180,7 +166,8 @@ pub(super) struct LocationConflict {
 pub(super) fn detect_location_conflict(
     entries: &[(String, String, Location)],
 ) -> Option<LocationConflict> {
-    let mut seen: HashMap<(String, Option<String>, Option<String>, String), String> = HashMap::new();
+    let mut seen: HashMap<(String, Option<String>, Option<String>, String), String> =
+        HashMap::new();
     for (name, collection, loc) in entries {
         let key = (
             loc.source.clone(),
@@ -214,16 +201,9 @@ fn batch_err_to_msg(e: BatchError) -> String {
             "同名主定义重复: {}（同一装载批次内 name 必须唯一，从定义请用 replica: true）",
             name
         ),
-        BatchError::LocationConflict {
-            collection,
-            prev,
-            source,
-            database,
-            schema,
-            ..
-        } => format!(
+        BatchError::LocationConflict(c) => format!(
             "定位冲突: ({}, {:?}, {:?}, {}) 已被 schema `{}` 占用",
-            source, database, schema, collection, prev
+            c.source, c.database, c.schema, c.collection, c.prev
         ),
     }
 }

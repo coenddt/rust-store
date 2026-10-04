@@ -21,10 +21,15 @@ fn f(rel: &str, defn: Value) -> (String, Value) {
     (rel.to_string(), defn)
 }
 
-fn loc_of(items: &[(Value, rust_store_core::schema::Location)], name: &str) -> (String, Option<String>, Option<String>) {
+fn loc_of(
+    items: &[(Value, rust_store_core::schema::Location)],
+    name: &str,
+) -> (String, Option<String>, Option<String>) {
     let hit = items
         .iter()
-        .find(|(d, _)| d.get("name").and_then(|v| v.as_str()) == Some(name) && d.get("replica").is_none())
+        .find(|(d, _)| {
+            d.get("name").and_then(|v| v.as_str()) == Some(name) && d.get("replica").is_none()
+        })
         .expect("应存在主定义");
     (
         hit.1.source.clone(),
@@ -104,8 +109,14 @@ fn a2_directory_is_location() {
     let files = vec![
         f("sales_db/Order.json", json!({ "name": "Order" })),
         f("sales_db/inventory/Item.json", json!({ "name": "Item" })),
-        f("analytics_db/app/Customer.json", json!({ "name": "Customer" })),
-        f("analytics_db/app/report/Monthly.json", json!({ "name": "Monthly" })),
+        f(
+            "analytics_db/app/Customer.json",
+            json!({ "name": "Customer" }),
+        ),
+        f(
+            "analytics_db/app/report/Monthly.json",
+            json!({ "name": "Monthly" }),
+        ),
     ];
     let items = plan_load(&cfg(), &files).unwrap();
     assert_eq!(
@@ -118,11 +129,19 @@ fn a2_directory_is_location() {
     );
     assert_eq!(
         loc_of(&items, "Customer"),
-        ("pgMain".into(), Some("analytics_db".into()), Some("app".into()))
+        (
+            "pgMain".into(),
+            Some("analytics_db".into()),
+            Some("app".into())
+        )
     );
     assert_eq!(
         loc_of(&items, "Monthly"),
-        ("pgMain".into(), Some("analytics_db".into()), Some("app".into()))
+        (
+            "pgMain".into(),
+            Some("analytics_db".into()),
+            Some("app".into())
+        )
     );
 }
 
@@ -143,20 +162,32 @@ fn a1_duplicate_primary() {
 #[test]
 fn a3_primary_then_replica() {
     let files = vec![
-        f("analytics_db/Order.json", json!({ "name": "Order", "replica": true })),
-        f("sales_db/Order.json", json!({ "name": "Order", "collection": "order" })),
+        f(
+            "analytics_db/Order.json",
+            json!({ "name": "Order", "replica": true }),
+        ),
+        f(
+            "sales_db/Order.json",
+            json!({ "name": "Order", "collection": "order" }),
+        ),
     ];
     let items = plan_load(&cfg(), &files).unwrap();
     assert_eq!(items.len(), 2);
     assert!(items[0].0.get("replica").is_none(), "主应在前");
     assert_eq!(items[0].1.database.as_deref(), Some("sales_db"));
-    assert_eq!(items[1].0.get("replica").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(
+        items[1].0.get("replica").and_then(|v| v.as_bool()),
+        Some(true)
+    );
     assert_eq!(items[1].1.database.as_deref(), Some("analytics_db"));
 }
 
 #[test]
 fn a3_missing_primary_errors() {
-    let files = vec![f("sales_db/Order.json", json!({ "name": "Order", "replica": true }))];
+    let files = vec![f(
+        "sales_db/Order.json",
+        json!({ "name": "Order", "replica": true }),
+    )];
     let err = plan_load(&cfg(), &files).expect_err("全 replica 应报主缺失");
     assert!(err.contains("ERR:LOAD 主定义缺失"), "错误信息异常: {err}");
 }

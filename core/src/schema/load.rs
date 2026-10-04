@@ -45,7 +45,9 @@ impl LoadConfig {
         let sources_obj = obj
             .get("sources")
             .and_then(|s| s.as_object())
-            .ok_or_else(|| "ERR:LOAD 缺 sources（须为 { name: { kind, databases } } 对象）".to_string())?;
+            .ok_or_else(|| {
+                "ERR:LOAD 缺 sources（须为 { name: { kind, databases } } 对象）".to_string()
+            })?;
         if sources_obj.is_empty() {
             return Err("ERR:LOAD sources 不得为空".to_string());
         }
@@ -62,7 +64,9 @@ impl LoadConfig {
                 .ok_or_else(|| format!("ERR:LOAD 连接 {name} 缺 kind"))?;
             // kind 白名单：复用 DataSource::from_kind（mongo/mongodb/mysql/pg/postgres/postgresql/sqlite）
             DataSource::from_kind(raw_kind).map_err(|_| {
-                format!("ERR:LOAD 连接 {name} 的 kind 非法: {raw_kind}（仅 mongodb/mysql/pg/sqlite）")
+                format!(
+                    "ERR:LOAD 连接 {name} 的 kind 非法: {raw_kind}（仅 mongodb/mysql/pg/sqlite）"
+                )
             })?;
             let databases: Vec<String> = d
                 .get("databases")
@@ -76,7 +80,9 @@ impl LoadConfig {
                 })
                 .unwrap_or_default();
             if databases.is_empty() {
-                return Err(format!("ERR:LOAD 连接 {name} 的 databases 须为非空字符串数组"));
+                return Err(format!(
+                    "ERR:LOAD 连接 {name} 的 databases 须为非空字符串数组"
+                ));
             }
             sources.push(SourceDecl {
                 name: name.clone(),
@@ -120,7 +126,9 @@ impl LoadConfig {
             }
         }
         let decl = hit.ok_or_else(|| {
-            format!("ERR:LOAD 库目录未声明: {db}（须在 store.config.json 的某连接 databases 中列出）")
+            format!(
+                "ERR:LOAD 库目录未声明: {db}（须在 store.config.json 的某连接 databases 中列出）"
+            )
         })?;
         let depth = depth_layered(&decl.kind)?;
         Ok((decl, depth))
@@ -130,9 +138,8 @@ impl LoadConfig {
 /// 语义层级深度：PG=2（L2=schema），Mongo/MySQL/SQLite=1（L2+ 打平）。
 /// kind 非法 ⇒ `Err`（禁回落默认）。
 pub fn depth_layered(kind: &str) -> Result<u8, String> {
-    let ds = DataSource::from_kind(kind).map_err(|_| {
-        format!("ERR:LOAD 连接 kind 非法: {kind}（仅 mongodb/mysql/pg/sqlite）")
-    })?;
+    let ds = DataSource::from_kind(kind)
+        .map_err(|_| format!("ERR:LOAD 连接 kind 非法: {kind}（仅 mongodb/mysql/pg/sqlite）"))?;
     Ok(match ds.backend() {
         Some(Backend::Postgres) => 2,
         _ => 1,
@@ -260,15 +267,9 @@ fn batch_err_to_load(e: BatchError, files: &[(String, Value)]) -> String {
                 rels.join(" 与 ")
             )
         }
-        BatchError::LocationConflict {
-            collection,
-            prev,
-            name,
-            source,
-            database,
-            schema,
-        } => format!(
-            "ERR:LOAD 落点冲突: {collection} 同时映射 ({source}, {database:?}, {schema:?})（同一落点只能有一个 collection；冲突名 `{prev}` 与 `{name}`）"
+        BatchError::LocationConflict(c) => format!(
+            "ERR:LOAD 落点冲突: {} 同时映射 ({}, {:?}, {:?})（同一落点只能有一个 collection；冲突名 `{}` 与 `{}`）",
+            c.collection, c.source, c.database, c.schema, c.prev, c.name
         ),
     }
 }
