@@ -203,3 +203,40 @@ impl Registry {
 pub fn system_context() -> Value {
     serde_json::json!({ "internal": true })
 }
+
+/// 命名归一（设计 §6.2）：用户任意写法 → 全小写 token 序列。
+#[napi]
+pub fn canonical(s: String) -> Vec<String> {
+    rust_store_core::naming::canonical(&s)
+}
+
+/// token 序列 → snake_case
+#[napi]
+pub fn to_snake(tokens: Vec<String>) -> String {
+    rust_store_core::naming::to_snake(&tokens)
+}
+
+/// token 序列 → camelCase
+#[napi]
+pub fn to_camel(tokens: Vec<String>) -> String {
+    rust_store_core::naming::to_camel(&tokens)
+}
+
+/// token 序列 → PascalCase
+#[napi]
+pub fn to_pascal(tokens: Vec<String>) -> String {
+    rust_store_core::naming::to_pascal(&tokens)
+}
+
+/// 逻辑名 → 目标风格物理名；`target` 非法 ⇒ 抛错（禁静默回落）。
+#[napi]
+pub fn translate_name(logical: String, target: String) -> Result<String> {
+    rust_store_core::naming::translate_by_str(&logical, &target).map_err(napi::Error::from_reason)
+}
+
+/// 命名冲突检测（A7）：一组逻辑名归一后撞名 / 撞保留键 ⇒ 抛错。
+#[napi]
+pub fn detect_conflicts(names: Vec<String>) -> Result<()> {
+    rust_store_core::naming::detect_conflicts(names.iter().map(String::as_str))
+        .map_err(napi::Error::from_reason)
+}

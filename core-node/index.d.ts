@@ -9,6 +9,18 @@
  * 与 `undefined`（未传上下文，`require_context` 开启时报错）区分。
  */
 export declare function systemContext(): any
+/** 命名归一（设计 §6.2）：用户任意写法 → 全小写 token 序列。 */
+export declare function canonical(s: string): Array<string>
+/** token 序列 → snake_case */
+export declare function toSnake(tokens: Array<string>): string
+/** token 序列 → camelCase */
+export declare function toCamel(tokens: Array<string>): string
+/** token 序列 → PascalCase */
+export declare function toPascal(tokens: Array<string>): string
+/** 逻辑名 → 目标风格物理名；`target` 非法 ⇒ 抛错（禁静默回落）。 */
+export declare function translateName(logical: string, target: string): string
+/** 命名冲突检测（A7）：一组逻辑名归一后撞名 / 撞保留键 ⇒ 抛错。 */
+export declare function detectConflicts(names: Array<string>): void
 export declare class Registry {
   /** 逐条后处理文档（默认值 → 同步 fn → 递归下钻 → 权限裁剪），返回 `{doc}` */
   processNode(gql: string, doc: any, ctx?: any | undefined | null): any

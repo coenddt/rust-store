@@ -178,9 +178,53 @@ fn system_context(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyDict>> {
     Ok(dict)
 }
 
+/// 命名归一（设计 §6.2）：用户任意写法 → 全小写 token 序列。
+#[pyfunction]
+fn canonical(s: &str) -> Vec<String> {
+    rust_store_core::naming::canonical(s)
+}
+
+/// token 序列 → snake_case
+#[pyfunction]
+fn to_snake(tokens: Vec<String>) -> String {
+    rust_store_core::naming::to_snake(&tokens)
+}
+
+/// token 序列 → camelCase
+#[pyfunction]
+fn to_camel(tokens: Vec<String>) -> String {
+    rust_store_core::naming::to_camel(&tokens)
+}
+
+/// token 序列 → PascalCase
+#[pyfunction]
+fn to_pascal(tokens: Vec<String>) -> String {
+    rust_store_core::naming::to_pascal(&tokens)
+}
+
+/// 逻辑名 → 目标风格物理名；`target` 非法 ⇒ 抛 `ValueError`（禁静默回落）。
+#[pyfunction]
+fn translate_name(logical: &str, target: &str) -> PyResult<String> {
+    rust_store_core::naming::translate_by_str(logical, target)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// 命名冲突检测（A7）：归一后撞名 / 撞保留键 ⇒ 抛 `ValueError`。
+#[pyfunction]
+fn detect_conflicts(names: Vec<String>) -> PyResult<()> {
+    rust_store_core::naming::detect_conflicts(names.iter().map(String::as_str))
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 #[pymodule]
 fn rust_store_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Registry>()?;
     m.add_function(wrap_pyfunction!(system_context, m)?)?;
+    m.add_function(wrap_pyfunction!(canonical, m)?)?;
+    m.add_function(wrap_pyfunction!(to_snake, m)?)?;
+    m.add_function(wrap_pyfunction!(to_camel, m)?)?;
+    m.add_function(wrap_pyfunction!(to_pascal, m)?)?;
+    m.add_function(wrap_pyfunction!(translate_name, m)?)?;
+    m.add_function(wrap_pyfunction!(detect_conflicts, m)?)?;
     Ok(())
 }

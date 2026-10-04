@@ -537,6 +537,13 @@ fn build_schema(
     let relations = parse_relations(obj);
     // 计算列的 agg 需要校验「引用的关系存在」→ 必须晚于 relations 解析
     let computes = parse_computes(obj, &relations)?;
+    // 命名冲突检测（A7）：fields ∪ relations ∪ computes 归一后撞名 / 撞保留键 ⇒ 报错
+    // （三者同属结果文档命名空间；`_id` 已在 detect_conflicts 内豁免）
+    let mut ids: Vec<&str> = Vec::new();
+    ids.extend(fields.keys().map(String::as_str));
+    ids.extend(relations.keys().map(String::as_str));
+    ids.extend(computes.iter().map(|(k, _)| k.as_str()));
+    crate::naming::detect_conflicts(ids)?;
     Ok(Schema {
         name,
         collection,
