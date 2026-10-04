@@ -21,7 +21,7 @@ use serde_json::{json, Map, Value};
 use rust_store_core::command::plan_query;
 use rust_store_core::federation::{merge_federated, plan_federated, MAX_FEDERATION_ROWS};
 use rust_store_core::permission::{context_from_value, Context};
-use rust_store_core::schema::Registry;
+use rust_store_core::schema::{Location, Registry};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -36,12 +36,28 @@ fn load(path: &PathBuf) -> Value {
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("解析 {} 失败: {}", path.display(), e))
 }
 
+/// 定义文件零落点：用例内 schema 的 `datasource` 键由本夹具读取，作为 [`Location`] 注入。
 fn build_registry(fx: &Value) -> Result<Registry, String> {
     let mut registry = Registry::new();
     if let Some(schemas) = fx.get("schemas").and_then(|v| v.as_array()) {
-        for s in schemas {
-            registry.register(s)?;
-        }
+        let items: Vec<(Value, Location)> = schemas
+            .iter()
+            .map(|s| {
+                let src = s
+                    .get("datasource")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default");
+                (
+                    s.clone(),
+                    Location {
+                        source: src.to_string(),
+                        database: None,
+                        schema: None,
+                    },
+                )
+            })
+            .collect();
+        registry.register_batch(&items, None)?;
     }
     Ok(registry)
 }
@@ -75,7 +91,8 @@ fn project_plan(plan: &Value) -> Value {
                     json!({
                         "key": s.get("key").cloned().unwrap_or(Value::Null),
                         "source": s.get("source").cloned().unwrap_or(Value::Null),
-                        "namespace": s.get("namespace").cloned().unwrap_or(Value::Null),
+                        "database": s.get("database").cloned().unwrap_or(Value::Null),
+                        "schema": s.get("schema").cloned().unwrap_or(Value::Null),
                         "model": s.get("model").cloned().unwrap_or(Value::Null),
                         "mode": s.get("mode").cloned().unwrap_or(Value::Null),
                     })

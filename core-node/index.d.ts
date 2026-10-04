@@ -41,11 +41,11 @@ export declare class Registry {
   /** 原生 SQL 语句编译：位置档透传 / 命名档 `:name` 编译 + 读写推断（C4；js 端 `rawStmtCompile`） */
   rawStmtCompile(backend: string, text: string, params: any, isWrite?: boolean | undefined | null): any
   /**
-   * 生成联邦计划：按 schema 的 `(datasource, namespace)` 与数据源 kind 把一条 GQL
+   * 生成联邦计划：按 schema 的 `(source, database, schema)` 与数据源 kind 把一条 GQL
    * 拆成「各源命令序列 + 内存 join 边」；Host 逐源执行命令后调 `mergeFederated`
    *
    * `dsConfig`：`{ "sources": { name: kind } }`（与 `init` 的数据源声明一致；
-   * `null` = 单源 Mongo）。SQL 同源跨 namespace 仍下推（qualified JOIN），
+   * `null` = 单源 Mongo）。SQL 同源跨 database/schema 仍下推（qualified JOIN），
    * Mongo 跨 db 剥离为内存 join。
    *
    * 返回 `{v, kind:"federated", root, sources, join, postprocess, degraded, maxRowsPerSource}`；

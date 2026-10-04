@@ -4,7 +4,30 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 
+use crate::datasource::DEFAULT_SOURCE;
 use crate::types::{is_truthy, str_list};
+
+/// 落点：定义之外，由「目录语义 + 连接配置」解析得到（设计 §5.2）。
+/// 落点维度 = `source` + `database` + `schema`（`schema` 仅 PostgreSQL）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Location {
+    /// 连接选择（source 名）；缺省 [`DEFAULT_SOURCE`]
+    pub source: String,
+    /// 连接内「库」：Mongo db / MySQL database / SQLite attached / PG 库
+    pub database: Option<String>,
+    /// 连接内「schema」：仅 PostgreSQL
+    pub schema: Option<String>,
+}
+
+impl Default for Location {
+    fn default() -> Self {
+        Self {
+            source: DEFAULT_SOURCE.to_string(),
+            database: None,
+            schema: None,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct FieldDef {
@@ -58,12 +81,14 @@ pub struct Schema {
     pub write: Option<Vec<String>>,
     /// 原始索引定义（`[{keys: {...}, options: {...}}]`），upsert 条件构建依赖 unique 索引
     pub indexes: Vec<Value>,
-    /// 绑定的数据源名（可选；缺省 = `default`，回落单源 Mongo）。见 [`crate::datasource`]
-    pub datasource: Option<String>,
-    /// 连接内的库/schema 名（可选；缺省 = `null`，用连接自身默认：Mongo db 实例的库名、
-    /// PG 的 search_path、MySQL 的连接库、SQLite 的 main）。
-    /// 与 `datasource`/`collection` 构成定位三元组，见 [`super::Registry::get_by_location`]。
-    pub namespace: Option<String>,
+    /// 数据源名（由 `register_batch` 的 [`Location`] 注入；`None` = 缺省 `default`）。
+    /// 见 [`crate::datasource`]
+    pub source: Option<String>,
+    /// 连接内「库」（由 `register_batch` 注入；`None` = 连接默认：Mongo db 实例的库名、
+    /// PG 的库、MySQL 的连接库、SQLite 的 main）。
+    pub database: Option<String>,
+    /// 连接内「schema」（仅 PG；由 `register_batch` 注入；`None` = 连接默认 search_path）。
+    pub schema: Option<String>,
 }
 
 impl Schema {
@@ -76,14 +101,19 @@ impl Schema {
 
     /// 解析后的数据源名（缺省 `default`）
     pub fn source(&self) -> &str {
-        self.datasource
+        self.source
             .as_deref()
             .unwrap_or(crate::datasource::DEFAULT_SOURCE)
     }
 
-    /// 解析后的 namespace（空串归一为 `None`）
-    pub fn ns(&self) -> Option<&str> {
-        self.namespace.as_deref().filter(|s| !s.is_empty())
+    /// 解析后的 database（空串归一为 `None`）
+    pub fn database(&self) -> Option<&str> {
+        self.database.as_deref().filter(|s| !s.is_empty())
+    }
+
+    /// 解析后的 schema（空串归一为 `None`；仅 PG）
+    pub fn schema(&self) -> Option<&str> {
+        self.schema.as_deref().filter(|s| !s.is_empty())
     }
 
     /// `_id` 是否声明 `strategy: "autoincrement"`（阶段2：数据库自增主键）

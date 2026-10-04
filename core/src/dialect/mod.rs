@@ -165,13 +165,22 @@ impl Backend {
         }
     }
 
-    /// 表名 → SQL：namespace 可选限定（`Some(ns)` → `"ns"."table"`；`None` → `"table"`）
+    /// 表名 → SQL：`database` / `schema` 可选限定（空串按 `None` 处理）。
     ///
-    /// namespace 与连接的 search_path / 连接库 / ATTACH 库对应（见
-    /// `multi-datasource-routing-plan.md` §二）；空串按 `None` 处理。
-    pub fn qualified_table(&self, namespace: Option<&str>, table: &str) -> String {
-        match namespace.filter(|s| !s.is_empty()) {
-            Some(ns) => format!("{}.{}", self.quote_ident(ns), self.quote_ident(table)),
+    /// 过渡规则（P3「物理名翻译接通」再细化）：**PG 用 `schema` 限定**（database 由连接承载，
+    /// 不进表名）；**MySQL/SQLite 用 `database` 限定**。见 `multi-datasource-routing-plan.md` §4.3。
+    pub fn qualified_table(
+        &self,
+        database: Option<&str>,
+        schema: Option<&str>,
+        table: &str,
+    ) -> String {
+        let qual = match self {
+            Backend::Postgres => schema,
+            _ => database,
+        };
+        match qual.filter(|s| !s.is_empty()) {
+            Some(q) => format!("{}.{}", self.quote_ident(q), self.quote_ident(table)),
             None => self.quote_ident(table),
         }
     }

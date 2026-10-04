@@ -19,11 +19,11 @@ fn py_to_json_opt(v: Option<&Bound<'_, PyAny>>) -> PyResult<serde_json::Value> {
 
 #[pymethods]
 impl Registry {
-    /// 生成联邦计划：按 schema 的 `(datasource, namespace)` 与数据源 kind 把一条 GQL
+    /// 生成联邦计划：按 schema 的 `(source, database, schema)` 与数据源 kind 把一条 GQL
     /// 拆成「各源命令序列 + 内存 join 边」；Host 逐源执行命令后调 `merge_federated`
     ///
     /// `ds_config`：`{ "sources": { name: kind } }`（与 `init` 的数据源声明一致；
-    /// `None` = 单源 Mongo）。SQL 同源跨 namespace 仍下推（qualified JOIN），
+    /// `None` = 单源 Mongo）。SQL 同源跨 database/schema 仍下推（qualified JOIN），
     /// Mongo 跨 db 剥离为内存 join。
     #[pyo3(signature = (gql, params=None, ctx=None, ds_config=None))]
     fn plan_federated(

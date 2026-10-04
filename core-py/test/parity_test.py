@@ -510,7 +510,8 @@ def project_plan(plan):
         {
             "key": s.get("key"),
             "source": s.get("source"),
-            "namespace": s.get("namespace"),
+            "database": s.get("database"),
+            "schema": s.get("schema"),
             "model": s.get("model"),
             "mode": s.get("mode"),
         }

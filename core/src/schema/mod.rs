@@ -9,5 +9,5 @@
 mod definition;
 mod registry;
 
-pub use definition::{map_of, ComputeDef, FieldDef, RelationDef, Schema};
+pub use definition::{map_of, ComputeDef, FieldDef, Location, RelationDef, Schema};
 pub use registry::{Profile, Registry};

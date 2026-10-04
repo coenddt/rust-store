@@ -10,21 +10,22 @@
 //!
 //! 命令 JSON 形状（语言无关，Node/Python 两侧共用）：
 //!
-//! `source` / `namespace` / `collection` 为**定位三元组**，由生成该命令的 schema 一次填入
-//! （`source` 缺省 `"default"`，`namespace` 缺省 `null` = 连接自身默认库/schema）。
-//! Host 依据 `cmd.source`（而非 collection 反查）选择连接；`namespace` 的用法见
+//! `source` / `database` / `schema` / `collection` 为**定位四元组**，由生成该命令的 schema
+//! 一次填入（`source` 缺省 `"default"`，`database` / `schema` 缺省 `null` = 连接自身默认库/schema；
+//! `schema` 仅 PostgreSQL 落点携带非 null）。
+//! Host 依据 `cmd.source`（而非 collection 反查）选择连接；`database` / `schema` 的用法见
 //! `multi-datasource-routing-plan.md`（Mongo client 型 source / SQL qualified 表名）。
 //!
 //! ```json
-//! { "kind": "find", "source": "default", "namespace": null, "collection": "u", "filter": {...}, "projection": {...}|null }
-//! { "kind": "aggregate", "source": "pg1", "namespace": "app", "collection": "u", "pipeline": [ ... ] }
-//! { "kind": "countDocuments", "source": "default", "namespace": null, "collection": "u", "filter": {...} }
-//! { "kind": "findOne", "source": "default", "namespace": null, "collection": "u", "filter": {...}, "projection": {...}|null }
-//! { "kind": "insertOne", "source": "default", "namespace": null, "collection": "u", "doc": {...} }
-//! { "kind": "insertMany", "source": "default", "namespace": null, "collection": "u", "docs": [ ... ] }
-//! { "kind": "findOneAndUpdate", "source": "default", "namespace": null, "collection": "u", "filter": {...}, "update": {...}, "options": {...} }
-//! { "kind": "updateMany", "source": "default", "namespace": null, "collection": "u", "filter": {...}, "update": {...} }
-//! { "kind": "deleteMany", "source": "default", "namespace": null, "collection": "u", "filter": {...} }
+//! { "kind": "find", "source": "default", "database": null, "schema": null, "collection": "u", "filter": {...}, "projection": {...}|null }
+//! { "kind": "aggregate", "source": "pg1", "database": "app_db", "schema": "app", "collection": "u", "pipeline": [ ... ] }
+//! { "kind": "countDocuments", "source": "default", "database": null, "schema": null, "collection": "u", "filter": {...} }
+//! { "kind": "findOne", "source": "default", "database": null, "schema": null, "collection": "u", "filter": {...}, "projection": {...}|null }
+//! { "kind": "insertOne", "source": "default", "database": null, "schema": null, "collection": "u", "doc": {...} }
+//! { "kind": "insertMany", "source": "default", "database": null, "schema": null, "collection": "u", "docs": [ ... ] }
+//! { "kind": "findOneAndUpdate", "source": "default", "database": null, "schema": null, "collection": "u", "filter": {...}, "update": {...}, "options": {...} }
+//! { "kind": "updateMany", "source": "default", "database": null, "schema": null, "collection": "u", "filter": {...}, "update": {...} }
+//! { "kind": "deleteMany", "source": "default", "database": null, "schema": null, "collection": "u", "filter": {...} }
 //! ```
 //!
 //! 两阶段查询（`$lookup` + `$skip/$limit`）的命令序列里，第二条 aggregate 的
@@ -159,7 +160,7 @@ pub fn forbid_t2q_shape(profile: Profile, feature: &str, detail: String) -> Resu
 
 /// text2query 档禁止携带 `route_override`（受信来源门禁）。
 ///
-/// `route_override`（`{source, namespace}`）是多租户路由覆盖的**受信服务端参数**，
+/// `route_override`（`{source, database, schema}`）是多租户路由覆盖的**受信服务端参数**，
 /// 禁止透传用户输入 / AI 生成（否则可被用于跨源路由，CWE-639）。standard 档维持
 /// 受信可用；text2query 档只要携带即拒。判决逻辑单点在此，绑定层（core-py/core-node）
 /// 在 `with_route_override` 唯一注入点调用，覆盖读 / 写全部 plan 入口。

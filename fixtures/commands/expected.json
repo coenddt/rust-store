@@ -18,7 +18,8 @@
             "status": 1
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "postprocess": {
@@ -51,7 +52,8 @@
           "filter": {},
           "projection": null,
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "postprocess": {
@@ -89,7 +91,8 @@
             }
           ],
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "postprocess": {
@@ -165,7 +168,8 @@
             }
           ],
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "postprocess": {
@@ -224,7 +228,8 @@
             }
           ],
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "kind": "aggregate",
@@ -278,7 +283,8 @@
             }
           ],
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "postprocess": {
@@ -372,7 +378,8 @@
             }
           ],
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "postprocess": {
@@ -425,7 +432,8 @@
             "title": 1
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "postprocess": {
@@ -484,7 +492,8 @@
             }
           ],
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "postprocess": {
@@ -511,7 +520,8 @@
           "status": "draft"
         },
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "page": 0,
       "pageSize": 10,
@@ -546,7 +556,8 @@
             }
           ],
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "postprocess": {
@@ -570,7 +581,8 @@
         "collection": "posts",
         "filter": {},
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "page": 1,
       "pageSize": 5000,
@@ -609,7 +621,8 @@
             }
           ],
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "kind": "aggregate",
@@ -663,7 +676,8 @@
             }
           ],
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "postprocess": {
@@ -700,7 +714,8 @@
         "collection": "orders",
         "filter": {},
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "page": 2,
       "pageSize": 5,
@@ -817,7 +832,8 @@
           "updatedAt": 1700000000000
         },
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "returns": {
         "title": "hello",
@@ -844,7 +860,8 @@
           "views": null
         },
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "returns": {
         "_id": "P-CUSTOM",
@@ -871,7 +888,8 @@
           "updatedAt": 1700000000000
         },
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "returns": {
         "title": "t",
@@ -903,7 +921,8 @@
           "_id": 1
         },
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "found": true,
       "collections": [
@@ -920,7 +939,8 @@
         "collection": "posts",
         "filter": {},
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       }
     }
   },
@@ -935,7 +955,8 @@
           "status": "draft"
         },
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       }
     }
   },
@@ -961,7 +982,8 @@
           }
         ],
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "returns": [
         {
@@ -1004,7 +1026,8 @@
           }
         ],
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "returns": [
         {
@@ -1058,7 +1081,8 @@
             "returnDocument": "after"
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "returns": {
@@ -1093,7 +1117,8 @@
             "returnDocument": "after"
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "returns": {
@@ -1130,7 +1155,8 @@
             "returnDocument": "after"
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "returns": {
@@ -1163,7 +1189,8 @@
             "upsert": true
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "returns": null
@@ -1186,7 +1213,8 @@
           }
         },
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "returns": {
         "modifiedCount": 3
@@ -1206,7 +1234,8 @@
           },
           "projection": null,
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "kind": "insertMany",
@@ -1222,7 +1251,8 @@
           ],
           "upsertById": true,
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "kind": "deleteMany",
@@ -1231,7 +1261,8 @@
             "_id": "p1"
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "returns": {
@@ -1253,7 +1284,8 @@
           },
           "projection": null,
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "kind": "deleteMany",
@@ -1262,7 +1294,8 @@
             "_id": "pX"
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "returns": {
@@ -1284,7 +1317,8 @@
           },
           "projection": null,
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "kind": "deleteMany",
@@ -1293,7 +1327,8 @@
             "_id": "p1"
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "returns": {
@@ -1328,7 +1363,8 @@
           "returnDocument": "after"
         },
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "returns": {
         "_id": "PLOYW3V28AAAA",
@@ -1365,7 +1401,8 @@
           "returnDocument": "before"
         },
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "returns": {
         "_id": "p1",
@@ -1402,7 +1439,8 @@
           "returnDocument": "after"
         },
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "returns": {
         "_id": "P-EXIST",
@@ -1433,7 +1471,8 @@
             "updatedAt": 1700000000000
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "returns": {
@@ -1476,7 +1515,8 @@
             "returnDocument": "after"
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "returns": {
@@ -1504,7 +1544,8 @@
             "updatedAt": 1700000000000
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "kind": "insertOne",
@@ -1517,7 +1558,8 @@
             "updatedAt": 1700000000000
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "kind": "insertOne",
@@ -1530,7 +1572,8 @@
             "updatedAt": 1700000000000
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "returns": {
@@ -1556,7 +1599,8 @@
             "updatedAt": 1700000000000
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "kind": "findOneAndUpdate",
@@ -1580,7 +1624,8 @@
             "returnDocument": "after"
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "returns": {
@@ -1606,7 +1651,8 @@
             "updatedAt": 1700000000000
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "kind": "findOneAndUpdate",
@@ -1634,7 +1680,8 @@
             "returnDocument": "after"
           },
           "source": "default",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "returns": {

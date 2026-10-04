@@ -187,7 +187,8 @@
           "updatedAt": 1700000000000
         },
         "source": "default",
-        "namespace": null
+        "database": null,
+        "schema": null
       },
       "returns": {
         "a": 2,

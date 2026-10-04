@@ -422,7 +422,8 @@ function projectPlan(plan) {
   const sources = (plan.sources || []).map((s) => ({
     key: s.key ?? null,
     source: s.source ?? null,
-    namespace: s.namespace ?? null,
+    database: s.database ?? null,
+    schema: s.schema ?? null,
     model: s.model ?? null,
     mode: s.mode ?? null,
   }));

@@ -22,9 +22,10 @@ use super::Backend;
 /// }
 /// ```
 ///
-/// 行形状扩展：`tables[].namespace`（可选）— 当 Host 明确知道表所属库/schema
-/// （如 SQLite attached db、MySQL 显式 database、PG 显式 schema）时携带，
-/// 生成的 def 会带上该 `namespace`（缺省不产出该字段 = 连接默认）。
+/// 行形状扩展：`tables[].database`（可选）+ `tables[].schema`（可选，仅 PG）— 当 Host 明确知道
+/// 表所属库/schema（如 SQLite attached db、MySQL 显式 database、PG 显式 schema）时携带。
+/// **本模块不再把落点写进 def**（定义零落点）；落点由调用方（宿主）作为
+/// `Location { source, database, schema }` 传给 `Registry::register_batch`。
 ///
 /// 输出：schemaJSON 数组（每个 `Schema` 一个 def，可直接传给 `Registry::register`）。
 pub fn schema_def_from_rows(rows: &Value) -> Result<Value, String> {
@@ -145,7 +146,7 @@ pub fn schema_def_from_rows(rows: &Value) -> Result<Value, String> {
             );
         }
 
-        let mut def = json!({
+        let def = json!({
             "name": name,
             "collection": name,
             "idPrefix": "",
@@ -153,11 +154,8 @@ pub fn schema_def_from_rows(rows: &Value) -> Result<Value, String> {
             "fields": Value::Object(fields_map),
             "relations": Value::Object(relations_map),
         });
-        // tables[].namespace（可选）→ def.namespace（连接内库/schema 显式定位）
-        let ns = t.get("namespace").and_then(|v| v.as_str()).unwrap_or("");
-        if !ns.is_empty() {
-            def["namespace"] = json!(ns);
-        }
+        // 落点（tables[].database / tables[].schema）不再写入 def —— 定义零落点；
+        // 由调用方（宿主）读取行形状后作为 `Location` 传给 `Registry::register_batch`。
         defs.push(def);
     }
 

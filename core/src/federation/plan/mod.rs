@@ -3,8 +3,8 @@
 //! 拆源规则（`can_pushdown`，见 `multi-datasource-routing-plan.md` §五）：
 //!   - 关系两端**不同 source** → 跨源，从取数 AST 中剥离，登记为一条 `join` 边，
 //!     并为子模型单独生成一个取数单元（自己那一源）；
-//!   - 同 source 且同 namespace → **下推**，留在该源取数 AST（`$lookup` / `JOIN`）；
-//!   - 同 source 跨 namespace：SQL 后端物理支持（qualified 表名 JOIN）→ **仍下推**；
+//!   - 同 source 且同 `database`+`schema` → **下推**，留在该源取数 AST（`$lookup` / `JOIN`）；
+//!   - 同 source 跨 `database`/`schema`：SQL 后端物理支持（qualified 表名 JOIN）→ **仍下推**；
 //!     Mongo 跨 db 无 `$lookup` → 剥离（内存 join）。
 //!
 //! 父取数 AST 会被就地改成「只剩可下推关系」；后处理 AST（`postprocess.ast`）仍是
@@ -36,17 +36,19 @@ mod route;
 /// 契约版本：形状变更必须升版并附迁移说明
 pub const FEDERATION_VERSION: u64 = 2;
 
-/// 定位二元组（source + namespace）
+/// 定位三元组（source + database + schema）
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Loc {
     pub(super) source: String,
-    pub(super) namespace: Option<String>,
+    pub(super) database: Option<String>,
+    pub(super) schema: Option<String>,
 }
 
 pub(super) fn loc_of(schema: &Schema) -> Loc {
     Loc {
         source: schema.source().to_string(),
-        namespace: schema.namespace.clone(),
+        database: schema.database().map(String::from),
+        schema: schema.schema().map(String::from),
     }
 }
 
@@ -55,7 +57,8 @@ struct UnitSpec {
     /// 结果回喂的键（`merge_federated` 的 `results[key]`）
     key: String,
     source: String,
-    namespace: Option<String>,
+    database: Option<String>,
+    schema: Option<String>,
     model: String,
     ast: Ast,
     /// 该单元在嵌套结构中的父层级深度（= 父边 `path.len()`，根为 0）
@@ -194,7 +197,8 @@ pub fn plan_federated(
     let mut sources = vec![json!({
         "key": "0",
         "source": root_loc.source,
-        "namespace": root_loc.namespace.map(|s| json!(s)).unwrap_or(Value::Null),
+        "database": root_loc.database.map(|s| json!(s)).unwrap_or(Value::Null),
+        "schema": root_loc.schema.map(|s| json!(s)).unwrap_or(Value::Null),
         "model": root_schema.name,
         "mode": root_plan.mode.as_str(),
         "commands": root_plan.commands,
@@ -212,7 +216,8 @@ pub fn plan_federated(
         sources.push(json!({
             "key": unit.key,
             "source": unit.source,
-            "namespace": unit.namespace.as_ref().map(|s| json!(s)).unwrap_or(Value::Null),
+            "database": unit.database.as_ref().map(|s| json!(s)).unwrap_or(Value::Null),
+            "schema": unit.schema.as_ref().map(|s| json!(s)).unwrap_or(Value::Null),
             "model": unit.model,
             "mode": plan.mode.as_str(),
             "commands": plan.commands,

@@ -26,7 +26,7 @@ mod write;
 
 /// 多租户路由 override（§6）：先做**受信来源门禁**（text2query 档一律拒绝，
 /// 判决单点在 core `ensure_route_override_allowed`），`route_override` 键出现才替换
-/// 计划内命令体的 `source` / `namespace`（见 core `apply_route_override`）。
+/// 计划内命令体的 `source` / `database` / `schema`（见 core `apply_route_override`）。
 pub(super) fn with_route_override(
     mut plan: Value,
     route_override: &Option<Value>,

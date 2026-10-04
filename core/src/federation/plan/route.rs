@@ -10,9 +10,9 @@ use super::{loc_of, EdgeSpec, UnitSpec};
 
 /// 同源下推判定：
 /// - 跨 source → 不下推（内存 join）；
-/// - 双方都是 SQL → 下推（同/跨 namespace 都行，qualified 表名）；
-/// - 其余（Mongo，或 kind 未知）→ 仅同 namespace 下推（`$lookup` 不能跨 db；
-///   kind 未知时保守不跨 ns 下推，宁拆勿错）。
+/// - 双方都是 SQL → 下推（同/跨 `database`/`schema` 都行，qualified 表名）；
+/// - 其余（Mongo，或 kind 未知）→ 仅同落点下推（`$lookup` 不能跨 db；
+///   kind 未知时保守不跨落点下推，宁拆勿错）。
 pub(super) fn can_pushdown(
     parent: &Schema,
     child: &Schema,
@@ -21,11 +21,11 @@ pub(super) fn can_pushdown(
     if parent.source() != child.source() {
         return Ok(false);
     }
-    let pds = ds_cfg.resolve(parent.datasource.as_deref()).ok();
-    let cds = ds_cfg.resolve(child.datasource.as_deref()).ok();
+    let pds = ds_cfg.resolve(parent.source.as_deref()).ok();
+    let cds = ds_cfg.resolve(child.source.as_deref()).ok();
     Ok(match (pds, cds) {
         (Some(DataSource::Sql(_)), Some(DataSource::Sql(_))) => true,
-        _ => parent.namespace == child.namespace,
+        _ => parent.database() == child.database() && parent.schema() == child.schema(),
     })
 }
 
@@ -97,7 +97,7 @@ pub(super) fn walk(
         }
 
         if can_pushdown(&parent_schema, &child_schema, ds_cfg)? {
-            // 同源（SQL 同源含跨 namespace；Mongo 同源同库）：留在本层，由该源 $lookup / JOIN 下推
+            // 同源（SQL 同源含跨 database/schema；Mongo 同源同库）：留在本层，由该源 $lookup / JOIN 下推
             i += 1;
             continue;
         }
@@ -147,7 +147,8 @@ pub(super) fn walk(
         units.push(UnitSpec {
             key: key.clone(),
             source: child_loc.source.clone(),
-            namespace: child_loc.namespace.clone(),
+            database: child_loc.database.clone(),
+            schema: child_loc.schema.clone(),
             model: rel_def.model.clone(),
             ast: child_ast,
             depth,

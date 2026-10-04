@@ -557,7 +557,7 @@ pub(super) fn translate_aggregate(
             Some(p) => format!("r{}", p),
             None => "t".to_string(),
         };
-        // 关系目标 schema：namespace 限定与字段展开都依赖它；定位失败 = 关系悬空 → 跳过并告警
+        // 关系目标 schema：database/schema 限定与字段展开都依赖它；定位失败 = 关系悬空 → 跳过并告警
         let rel_schema = match registry.get(&j.model) {
             Ok(s) => s,
             Err(e) => {

@@ -12,7 +12,8 @@
           "source": "default",
           "model": "Post",
           "mode": "aggregate",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "edges": [],
@@ -33,7 +34,8 @@
           "source": "mysql_main",
           "model": "Order",
           "mode": "aggregate",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "edges": [],
@@ -54,14 +56,16 @@
           "source": "mongodb_main",
           "model": "User",
           "mode": "find",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "key": "1",
           "source": "mysql_main",
           "model": "Order",
           "mode": "aggregate",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "edges": [
@@ -92,14 +96,16 @@
           "source": "mysql_main",
           "model": "Comment",
           "mode": "find",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "key": "1",
           "source": "default",
           "model": "Post",
           "mode": "aggregate",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "edges": [
@@ -130,14 +136,16 @@
           "source": "mongodb_main",
           "model": "User",
           "mode": "find",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "key": "1",
           "source": "pg_main",
           "model": "Profile",
           "mode": "aggregate",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "edges": [
@@ -168,21 +176,24 @@
           "source": "mongodb_main",
           "model": "Team",
           "mode": "find",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "key": "2",
           "source": "mysql_main",
           "model": "Order",
           "mode": "aggregate",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "key": "1",
           "source": "pg_main",
           "model": "OrderItem",
           "mode": "aggregate",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "edges": [
@@ -224,14 +235,16 @@
           "source": "mongodb_main",
           "model": "User",
           "mode": "find",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "key": "1",
           "source": "mysql_main",
           "model": "Order",
           "mode": "aggregate",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "edges": [
@@ -264,14 +277,16 @@
           "source": "mongodb_main",
           "model": "User",
           "mode": "find",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "key": "1",
           "source": "mysql_main",
           "model": "Order",
           "mode": "aggregate",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "edges": [
@@ -304,14 +319,16 @@
           "source": "mongodb_main",
           "model": "User",
           "mode": "aggregate",
-          "namespace": null
+          "database": null,
+          "schema": null
         },
         {
           "key": "1",
           "source": "mysql_main",
           "model": "Order",
           "mode": "aggregate",
-          "namespace": null
+          "database": null,
+          "schema": null
         }
       ],
       "edges": [

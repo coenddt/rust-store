@@ -6,7 +6,7 @@ use serde_json::{json, Map, Value};
 
 use crate::types::{is_truthy, str_list, AGG_OPS};
 
-use super::definition::{normalize_fields, ComputeDef, FieldDef, RelationDef, Schema};
+use super::definition::{normalize_fields, ComputeDef, FieldDef, Location, RelationDef, Schema};
 
 /// 查询档位：判决唯一在 core（照 [`Registry::require_context`] 既有范式）。
 ///
@@ -41,9 +41,19 @@ impl Profile {
     }
 }
 
+/// 一条注册项：一份主结构 + 主/从链路 + 版本（D4/D5/D13）。
+#[derive(Debug, Clone)]
+struct Entry {
+    schema: Schema,
+    /// 主 + 从链路；`links[0]` 恒为主落点（= `schema` 的定位投影）
+    links: Vec<Location>,
+    /// 版本：首次注册 = 1；跨批次 reload 同名 ⇒ +1
+    version: u64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Registry {
-    schemas: HashMap<String, Schema>,
+    entries: HashMap<String, Entry>,
     order: Vec<String>,
     /// 上下文强制开关（默认关闭 = fail-open，与 JS 原版 parity）；
     /// 开启后所有 plan 入口对 `ctx: None` 显式报错（fail-secure，见 `permission` 模块文档）。
@@ -66,72 +76,258 @@ impl Registry {
 
     /// 注册一个 schema（含自动注册 `<Name>Deleted` 归档表），对应 JS `register`。
     ///
-    /// 兼容入口：定义层门禁按当前 [`MetaPolicy`](crate::permission::MetaPolicy) 判决
+    /// 兼容入口：单条 + 缺省落点（`source="default"`、`database/schema=None`）。
+    /// 定义层门禁按当前 [`MetaPolicy`](crate::permission::MetaPolicy) 判决
     /// （默认 Open → 全放行）。需带 ctx 显式过门禁请用 [`Self::register_with_ctx`]。
     pub fn register(&mut self, defn: &Value) -> Result<(), String> {
         self.register_with_ctx(defn, None)
     }
 
-    /// 带 ctx 的注册：定义层门禁（[`can_register`](crate::permission::can_register)）
-    /// 判决**先于** `build_schema`（拒绝即返回，零副作用）。
-    ///
-    /// 归档附表 `<Name>Deleted` 的自动派生属内部动作，以系统上下文注册，不受业务 ctx 影响。
+    /// 带 ctx 的注册（单条 + 缺省落点）：内部转 [`Self::register_batch`]。
     pub fn register_with_ctx(
         &mut self,
         defn: &Value,
         ctx: Option<&crate::permission::Context>,
     ) -> Result<(), String> {
-        let obj = defn
-            .as_object()
-            .ok_or_else(|| "schema 定义必须是对象".to_string())?;
-        let name = obj
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "schema 缺少 name".to_string())?
-            .to_string();
+        self.register_batch(&[(defn.clone(), Location::default())], ctx)
+    }
 
-        // 定义层门禁：判决先于 build_schema —— 拒绝即返回，绝不部分写入
-        if !crate::permission::can_register(&self.meta_policy, ctx) {
-            return Err(format!("ERR_PERMISSION: 无权注册或覆盖定义 {name}"));
+    /// 带定位的批量注册（D13：唯一性校验落「装载批次集合」）。
+    ///
+    /// 算法（**先构造后落库，任一步 Err ⇒ 零副作用**）：
+    /// 1. 逐项解析 + `can_register` 门禁（判决先于 `build_schema`）。
+    /// 2. 按 `name` 分组：`obj["replica"]`（`is_truthy`）为真 ⇒ 入 `replicas`（**不 build_schema**，
+    ///    不读 collection/fields）；否则 `build_schema` 为 **主**。
+    /// 3. 每组主定义 0 份且无既有同名 entry ⇒ `Err`；≥2 份主 ⇒ `Err`（A1）。
+    /// 4. 全批 `(source, database, schema, collection)` 跨名冲突 ⇒ `Err`（替代旧 `check_location_unique`）。
+    /// 5. 提交：`links = [primary.loc] ++ replicas`；命中既有 entry ⇒ `version + 1`
+    ///    （`order` 位置不变）、替换结构与链路；新名 ⇒ `version = 1`、`order.push`。
+    ///    `Schema.source/database/schema` 由 `primary.loc` 注入（`source == "default"` ⇒ `None`）。
+    /// 6. 归档派生：主 `name` 不以 `"Deleted"` 结尾且非 `_isArchive` ⇒ 派生 `<Name>Deleted`
+    ///    （`links` 继承主链路，定位同主）。
+    pub fn register_batch(
+        &mut self,
+        items: &[(Value, Location)],
+        ctx: Option<&crate::permission::Context>,
+    ) -> Result<(), String> {
+        struct Primary {
+            name: String,
+            schema: Schema,
+            loc: Location,
+            raw: Value,
+            is_archive: bool,
         }
 
-        let collection = obj
-            .get("collection")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-            .unwrap_or_else(|| name.clone());
+        // ── 1/2：解析 + 门禁 + 分组（主 build_schema，从不读从定义的结构） ──
+        let mut primaries: Vec<Primary> = Vec::new();
+        let mut replicas: Vec<(String, Location)> = Vec::new();
+        let mut name_order: Vec<String> = Vec::new();
+        let push_name = |v: &mut Vec<String>, n: &str| {
+            if !v.iter().any(|x| x == n) {
+                v.push(n.to_string());
+            }
+        };
 
-        let schema = build_schema(obj, name.clone(), collection.clone())?;
+        for (defn, loc) in items {
+            let obj = defn
+                .as_object()
+                .ok_or_else(|| "schema 定义必须是对象".to_string())?;
+            let name = obj
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "schema 缺少 name".to_string())?
+                .to_string();
 
-        // 定位三元组唯一性（fail fast，绝不静默串源）：同名覆盖除外
-        self.check_location_unique(&name, &schema)?;
+            // 定义层门禁：判决先于 build_schema —— 拒绝即返回，绝不部分写入
+            if !crate::permission::can_register(&self.meta_policy, ctx) {
+                return Err(format!("ERR_PERMISSION: 无权注册或覆盖定义 {name}"));
+            }
+            push_name(&mut name_order, &name);
 
-        let is_archive = obj.get("_isArchive").map(is_truthy).unwrap_or(false);
-        self.schemas.insert(name.clone(), schema);
-        self.order.push(name.clone());
+            if obj.get("replica").map(is_truthy).unwrap_or(false) {
+                replicas.push((name, loc.clone()));
+                continue;
+            }
 
-        // 自动注册删除附表 schema —— 每个业务表对应一个 `<collection>_deleted` 归档表
-        // （内部动作，以系统上下文注册，不受业务门禁影响）
-        if !is_archive && !name.ends_with("Deleted") {
-            self.register_with_ctx(
-                &archive_defn(obj, &name, &collection),
-                Some(&crate::permission::Context::system()),
-            )?;
+            let collection = obj
+                .get("collection")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .unwrap_or_else(|| name.clone());
+            let schema = build_schema(obj, name.clone(), collection, loc)?;
+            let is_archive = obj.get("_isArchive").map(is_truthy).unwrap_or(false);
+            primaries.push(Primary {
+                name,
+                schema,
+                loc: loc.clone(),
+                raw: defn.clone(),
+                is_archive,
+            });
+        }
+
+        // ── 3：逐组判决（每组主恰好一份）→ 拟定 entry 序列（主 + 归档附表，保序） ──
+        struct Planned {
+            name: String,
+            schema: Schema,
+            links: Vec<Location>,
+        }
+        let mut planned: Vec<Planned> = Vec::new();
+        for name in &name_order {
+            let ps: Vec<&Primary> = primaries.iter().filter(|p| &p.name == name).collect();
+            let rs: Vec<Location> = replicas
+                .iter()
+                .filter(|(n, _)| n == name)
+                .map(|(_, l)| l.clone())
+                .collect();
+            if ps.len() > 1 {
+                return Err(format!(
+                    "同名主定义重复: {}（同一装载批次内 name 必须唯一，从定义请用 replica: true）",
+                    name
+                ));
+            }
+            if let Some(p) = ps.first() {
+                let mut links = vec![p.loc.clone()];
+                links.extend(rs);
+                planned.push(Planned {
+                    name: name.clone(),
+                    schema: p.schema.clone(),
+                    links: links.clone(),
+                });
+                // 归档附表紧随主定义派生（`links` 继承主链路，定位同主）
+                if !p.is_archive && !p.name.ends_with("Deleted") {
+                    let aobj =
+                        archive_defn(p.raw.as_object().unwrap(), &p.name, &p.schema.collection)
+                            .as_object()
+                            .cloned()
+                            .unwrap();
+                    let aname = format!("{}Deleted", p.name);
+                    let acoll = format!("{}_deleted", p.schema.collection);
+                    let aschema = build_schema(&aobj, aname.clone(), acoll, &links[0])?;
+                    planned.push(Planned {
+                        name: aname,
+                        schema: aschema,
+                        links,
+                    });
+                }
+            } else {
+                // 0 主：只能是对既有 entry 追加从链路（跨批演进）
+                let Some(existing) = self.entries.get(name) else {
+                    return Err(format!(
+                        "未找到主 schema: {}（从定义 `replica` 必须伴随同批主定义，或该 name 已注册）",
+                        name
+                    ));
+                };
+                let mut links = existing.links.clone();
+                links.extend(rs);
+                planned.push(Planned {
+                    name: name.clone(),
+                    schema: existing.schema.clone(),
+                    links,
+                });
+            }
+        }
+
+        // ── 4：四元组唯一性（本批 + 既有，跨名冲突即 Err；同名重复链路放行） ──
+        let batch_names: std::collections::HashSet<&str> =
+            planned.iter().map(|p| p.name.as_str()).collect();
+        let mut seen: HashMap<(String, Option<String>, Option<String>, String), String> =
+            HashMap::new();
+        for (n, e) in &self.entries {
+            if batch_names.contains(n.as_str()) {
+                continue; // 本批将整体替换该名，旧链路不参与冲突判定
+            }
+            for l in &e.links {
+                if let Some(prev) = seen.insert(
+                    (
+                        l.source.clone(),
+                        l.database.clone(),
+                        l.schema.clone(),
+                        e.schema.collection.clone(),
+                    ),
+                    n.clone(),
+                ) {
+                    return Err(format!(
+                        "定位冲突: ({}, {:?}, {:?}, {}) 已同时被 schema `{}` 占用",
+                        l.source, l.database, l.schema, e.schema.collection, prev
+                    ));
+                }
+            }
+        }
+        for p in &planned {
+            for l in &p.links {
+                let key = (
+                    l.source.clone(),
+                    l.database.clone(),
+                    l.schema.clone(),
+                    p.schema.collection.clone(),
+                );
+                if let Some(prev) = seen.get(&key) {
+                    if prev != &p.name {
+                        return Err(format!(
+                            "定位冲突: ({}, {:?}, {:?}, {}) 已被 schema `{}` 占用",
+                            l.source, l.database, l.schema, p.schema.collection, prev
+                        ));
+                    }
+                } else {
+                    seen.insert(key, p.name.clone());
+                }
+            }
+        }
+
+        // ── 5：提交（命中既有 ⇒ version + 1 且 order 位置不变；新名 ⇒ version = 1 + push） ──
+        for p in planned {
+            if let Some(e) = self.entries.get_mut(&p.name) {
+                e.schema = p.schema;
+                e.links = p.links;
+                e.version += 1;
+            } else {
+                self.entries.insert(
+                    p.name.clone(),
+                    Entry {
+                        schema: p.schema,
+                        links: p.links,
+                        version: 1,
+                    },
+                );
+                self.order.push(p.name);
+            }
         }
 
         Ok(())
     }
 
-    /// 按名称获取 schema
-    pub fn get(&self, name: &str) -> Result<&Schema, String> {
-        self.schemas
+    /// 主链路 + 从链路（只读）
+    pub fn links_of(&self, name: &str) -> Result<&[Location], String> {
+        Ok(&self.get_entry(name)?.links)
+    }
+
+    /// 主落点（= `links[0]`）
+    pub fn primary_location(&self, name: &str) -> Result<&Location, String> {
+        self.get_entry(name)?
+            .links
+            .first()
+            .ok_or_else(|| format!("Schema 无落点链路: {}", name))
+    }
+
+    /// 版本（首次 = 1）
+    pub fn version_of(&self, name: &str) -> Result<u64, String> {
+        Ok(self.get_entry(name)?.version)
+    }
+
+    fn get_entry(&self, name: &str) -> Result<&Entry, String> {
+        self.entries
             .get(name)
             .ok_or_else(|| format!("Schema 未注册: {}", name))
     }
 
+    /// 按名称获取 schema
+    pub fn get(&self, name: &str) -> Result<&Schema, String> {
+        self.get_entry(name).map(|e| &e.schema)
+    }
+
     pub fn has(&self, name: &str) -> bool {
-        self.schemas.contains_key(name)
+        self.entries.contains_key(name)
     }
 
     /// 清空 schema 注册表（`schemas` + `order`），对应绑定层的测试隔离 / 动态重建场景。
@@ -140,7 +336,7 @@ impl Registry {
     /// `role_rules`）与回调表（`clear_fns` 对称：各清各的）——开关生命周期属
     /// Registry 配置面，不随 schema 集合重建而丢。
     pub fn clear(&mut self) {
-        self.schemas.clear();
+        self.entries.clear();
         self.order.clear();
     }
 
@@ -230,84 +426,74 @@ impl Registry {
         self.rbac.as_ref()
     }
 
-    /// 按定位三元组精确获取 schema（命令路由的唯一定位入口）
+    /// 按定位四元组精确获取 schema（命令路由的唯一定位入口）
     ///
-    /// `(source, namespace, collection)` 三元组在 Registry 内唯一（注册期校验），
-    /// 故此处零候选 = 未注册；一候选 = 精确命中。**不做任何猜测回落**。
+    /// 命中判据：`collection` 相等 **且** 四元组命中该 entry 的**任一链路**。
+    /// **不做任何猜测回落**。
     pub fn get_by_location(
         &self,
         source: &str,
-        namespace: Option<&str>,
+        database: Option<&str>,
+        schema: Option<&str>,
         collection: &str,
     ) -> Result<&Schema, String> {
-        let ns = namespace.filter(|s| !s.is_empty());
-        self.schemas
+        let db = database.filter(|s| !s.is_empty());
+        let sc = schema.filter(|s| !s.is_empty());
+        self.entries
             .values()
-            .find(|s| s.collection == collection && s.source() == source && s.ns() == ns)
+            .find(|e| {
+                e.schema.collection == collection
+                    && e.links.iter().any(|l| {
+                        l.source == source
+                            && l.database.as_deref().filter(|s| !s.is_empty()) == db
+                            && l.schema.as_deref().filter(|s| !s.is_empty()) == sc
+                    })
+            })
+            .map(|e| &e.schema)
             .ok_or_else(|| {
                 format!(
-                    "Schema 未定位（source = {}, namespace = {:?}, collection = {}）",
-                    source, ns, collection
+                    "Schema 未定位（source = {}, database = {:?}, schema = {:?}, collection = {}）",
+                    source, db, sc, collection
                 )
             })
     }
 
-    /// 命令结构定位（方言翻译用）：优先三元组精确命中；未命中时（`route_override`
-    /// 改写 namespace 的多租户场景）回落 `(source, collection)` 定位 —— 结构 schema
-    /// 与定位 namespace 正交（见 multi-datasource-routing-plan.md §6：权限/字段
-    /// 校验仍按结构 schema）。
+    /// 命令结构定位（方言翻译用）：优先四元组精确命中；未命中时（`route_override`
+    /// 改写落点的多租户场景）回落 `(source, collection)` 定位 —— 结构 schema
+    /// 与定位落点正交（见 multi-datasource-routing-plan.md §6：权限/字段校验仍按结构 schema）。
     ///
-    /// `(source, collection)` 恰一候选 → 命中；多候选时取 `namespace = null` 的
-    /// 结构声明，无 null 声明 → 报错（拒绝猜测，铁律 3）。
+    /// `(source, collection)` 恰一候选 → 命中；多候选时取 `database`/`schema` 均 `null` 的
+    /// 结构声明，无该声明 → 报错（拒绝猜测，铁律 3）。
     pub fn get_for_command(
         &self,
         source: &str,
-        namespace: Option<&str>,
+        database: Option<&str>,
+        schema: Option<&str>,
         collection: &str,
     ) -> Result<&Schema, String> {
-        if let Ok(s) = self.get_by_location(source, namespace, collection) {
+        if let Ok(s) = self.get_by_location(source, database, schema, collection) {
             return Ok(s);
         }
-        let candidates: Vec<&Schema> = self
-            .schemas
+        let candidates: Vec<&Entry> = self
+            .entries
             .values()
-            .filter(|s| s.collection == collection && s.source() == source)
+            .filter(|e| {
+                e.schema.collection == collection && e.links.iter().any(|l| l.source == source)
+            })
             .collect();
         match candidates.len() {
-            0 => self.get_by_location(source, namespace, collection),
-            1 => Ok(candidates[0]),
+            0 => self.get_by_location(source, database, schema, collection),
+            1 => Ok(&candidates[0].schema),
             _ => candidates
                 .iter()
-                .find(|s| s.ns().is_none())
-                .copied()
+                .find(|e| e.schema.database().is_none() && e.schema.schema().is_none())
+                .map(|e| &e.schema)
                 .ok_or_else(|| {
                     format!(
-                        "命令定位 ({}, {:?}, {}) 存在多个结构 schema（多租户 override 需唯一的 (source, collection) 结构声明）",
-                        source, namespace, collection
+                        "命令定位 ({}, {:?}, {:?}, {}) 存在多个结构 schema（多租户 override 需唯一的 (source, collection) 结构声明）",
+                        source, database, schema, collection
                     )
                 }),
-        }
-    }
-
-    /// 定位三元组唯一性校验：不同 schema 名占用同一 `(source, namespace, collection)`
-    /// → Err（同名覆盖 = 更新语义，放行）。
-    fn check_location_unique(&self, name: &str, schema: &Schema) -> Result<(), String> {
-        let conflict = self.schemas.iter().find(|(n, s)| {
-            n.as_str() != name
-                && s.collection == schema.collection
-                && s.source() == schema.source()
-                && s.ns() == schema.ns()
-        });
-        match conflict {
-            None => Ok(()),
-            Some((other, s)) => Err(format!(
-                "定位三元组冲突: ({}, {:?}, {}) 已被 schema `{}`（collection = {}）占用",
-                schema.source(),
-                schema.ns(),
-                schema.collection,
-                other,
-                s.collection
-            )),
         }
     }
 
@@ -315,9 +501,9 @@ impl Registry {
         self.order.clone()
     }
 
-    /// schema 声明的数据源名（未声明 → `None`，语义为 `default`）
+    /// schema 绑定的数据源名（= 主链路 source；`default` → `None`）
     pub fn schema_datasource(&self, name: &str) -> Result<Option<String>, String> {
-        Ok(self.get(name)?.datasource.clone())
+        Ok(self.get(name)?.source.clone())
     }
 
     /// 解析 schema 绑定的数据源（`config` 为 `{ "sources": { name: kind } }`）
@@ -329,17 +515,19 @@ impl Registry {
         schema_name: &str,
         config: &Value,
     ) -> Result<crate::datasource::DataSource, String> {
-        let declared = self.get(schema_name)?.datasource.as_deref();
+        let declared = self.get(schema_name)?.source.as_deref();
         let cfg = crate::datasource::DataSourceConfig::from_json(config)?;
         cfg.resolve(declared)
     }
 }
 
-/// 由原始定义构建 [`Schema`]（字段/关系/计算列/元数据分块解析，保持单一职责）
+/// 由原始定义构建 [`Schema`]（字段/关系/计算列/元数据分块解析，保持单一职责）。
+/// 落点（`source`/`database`/`schema`）由 `loc` 注入（定义文件零落点）。
 fn build_schema(
     obj: &Map<String, Value>,
     name: String,
     collection: String,
+    loc: &Location,
 ) -> Result<Schema, String> {
     let timestamps = parse_timestamps(obj)?;
     let mut fields = normalize_fields(obj.get("fields"))?;
@@ -368,8 +556,13 @@ fn build_schema(
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default(),
-        datasource: opt_nonempty_str(obj.get("datasource")),
-        namespace: opt_nonempty_str(obj.get("namespace")),
+        source: if loc.source == crate::datasource::DEFAULT_SOURCE {
+            None
+        } else {
+            Some(loc.source.clone())
+        },
+        database: loc.database.clone().filter(|s| !s.is_empty()),
+        schema: loc.schema.clone().filter(|s| !s.is_empty()),
     })
 }
 
@@ -534,15 +727,8 @@ fn parse_agg(
     }
 }
 
-/// 取非空字符串字段（空串归一为 `None`）
-fn opt_nonempty_str(v: Option<&Value>) -> Option<String> {
-    v.and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-}
-
-/// 构造 `<Name>Deleted` 归档表 schema 定义（字段 = 原字段 + `deletedAt`）；
-/// 归档表与原表同库 —— `datasource` 与 `namespace` 一并继承。
+/// 构造 `<Name>Deleted` 归档表 schema 定义（字段 = 原字段 + `deletedAt`）。
+/// 归档表与原表同落点 —— 落点不由定义文件携带，改由批次继承主链路（见 `register_batch`）。
 fn archive_defn(obj: &Map<String, Value>, name: &str, collection: &str) -> Value {
     let mut arch_fields = obj
         .get("fields")
@@ -557,7 +743,7 @@ fn archive_defn(obj: &Map<String, Value>, name: &str, collection: &str) -> Value
             o.remove("strategy");
         }
     }
-    let mut arch = json!({
+    let arch = json!({
         "name": format!("{}Deleted", name),
         "collection": format!("{}_deleted", collection),
         "idPrefix": "",
@@ -565,11 +751,5 @@ fn archive_defn(obj: &Map<String, Value>, name: &str, collection: &str) -> Value
         "fields": Value::Object(arch_fields),
         "indexes": obj.get("indexes").cloned().unwrap_or_else(|| json!([])),
     });
-    if let Some(ds) = obj.get("datasource") {
-        arch["datasource"] = ds.clone();
-    }
-    if let Some(ns) = obj.get("namespace") {
-        arch["namespace"] = ns.clone();
-    }
     arch
 }
