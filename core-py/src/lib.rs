@@ -24,7 +24,7 @@ use pyo3::prelude::*;
 
 use rust_store_core::schema::{Profile, Registry as CoreRegistry};
 
-use crate::convert::{err, py_to_json};
+use crate::convert::{err, py_to_json, to_py};
 
 mod convert;
 mod fns;
@@ -216,6 +216,27 @@ fn detect_conflicts(names: Vec<String>) -> PyResult<()> {
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
+/// 内容寻址路径（纯函数）
+#[pyfunction]
+fn resource_content_path(py: Python<'_>, sha1: String) -> PyResult<Py<PyAny>> {
+    let out = rust_store_core::resource::content_path(&sha1).map_err(err)?;
+    to_py(py, serde_json::json!(out))
+}
+
+/// 是否外部 URL（纯函数）
+#[pyfunction]
+fn resource_is_external_url(reference: String) -> bool {
+    rust_store_core::resource::is_external_url(&reference)
+}
+
+/// URL 组合（纯函数）
+#[pyfunction]
+fn resource_compose_url(py: Python<'_>, reference: String, cfg: Py<PyAny>) -> PyResult<Py<PyAny>> {
+    let cfg = crate::convert::py_to_json(cfg.bind(py))?;
+    let out = rust_store_core::resource::compose_url(&reference, &cfg).map_err(err)?;
+    to_py(py, serde_json::json!(out))
+}
+
 #[pymodule]
 fn rust_store_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Registry>()?;
@@ -226,5 +247,8 @@ fn rust_store_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(to_pascal, m)?)?;
     m.add_function(wrap_pyfunction!(translate_name, m)?)?;
     m.add_function(wrap_pyfunction!(detect_conflicts, m)?)?;
+    m.add_function(wrap_pyfunction!(resource_content_path, m)?)?;
+    m.add_function(wrap_pyfunction!(resource_is_external_url, m)?)?;
+    m.add_function(wrap_pyfunction!(resource_compose_url, m)?)?;
     Ok(())
 }
