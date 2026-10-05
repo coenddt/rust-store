@@ -18,6 +18,7 @@ pub mod naming;
 pub mod permission;
 pub mod pipeline;
 pub mod rbac;
+pub mod resource;
 pub mod schema;
 pub mod types;
 
