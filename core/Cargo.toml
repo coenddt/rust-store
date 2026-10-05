@@ -51,3 +51,7 @@ path = "tests/parity_dialect.rs"
 [[test]]
 name = "parity_federation"
 path = "tests/parity_federation.rs"
+
+[[test]]
+name = "resource"
+path = "tests/resource.rs"
