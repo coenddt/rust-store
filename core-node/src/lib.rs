@@ -240,3 +240,21 @@ pub fn detect_conflicts(names: Vec<String>) -> Result<()> {
     rust_store_core::naming::detect_conflicts(names.iter().map(String::as_str))
         .map_err(napi::Error::from_reason)
 }
+
+/// 内容寻址路径（纯函数）
+#[napi]
+pub fn resource_content_path(sha1: String) -> Result<String> {
+    rust_store_core::resource::content_path(&sha1).map_err(convert::err)
+}
+
+/// 是否外部 URL（纯函数）
+#[napi]
+pub fn resource_is_external_url(reference: String) -> bool {
+    rust_store_core::resource::is_external_url(&reference)
+}
+
+/// URL 组合（纯函数）
+#[napi]
+pub fn resource_compose_url(reference: String, cfg: Value) -> Result<String> {
+    rust_store_core::resource::compose_url(&reference, &cfg).map_err(convert::err)
+}

@@ -21,6 +21,12 @@ export declare function toPascal(tokens: Array<string>): string
 export declare function translateName(logical: string, target: string): string
 /** 命名冲突检测（A7）：一组逻辑名归一后撞名 / 撞保留键 ⇒ 抛错。 */
 export declare function detectConflicts(names: Array<string>): void
+/** 内容寻址路径（纯函数） */
+export declare function resourceContentPath(sha1: string): string
+/** 是否外部 URL（纯函数） */
+export declare function resourceIsExternalUrl(reference: string): boolean
+/** URL 组合（纯函数） */
+export declare function resourceComposeUrl(reference: string, cfg: any): string
 export declare class Registry {
   /** 逐条后处理文档（默认值 → 同步 fn → 递归下钻 → 权限裁剪），返回 `{doc}` */
   processNode(gql: string, doc: any, ctx?: any | undefined | null): any
