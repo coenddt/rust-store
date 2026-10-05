@@ -26,7 +26,11 @@ pub fn is_external_url(reference: &str) -> bool {
 
 /// 引用类型：`"external"` | `"internal"`。
 pub fn ref_kind(reference: &str) -> &'static str {
-    if is_external_url(reference) { "external" } else { "internal" }
+    if is_external_url(reference) {
+        "external"
+    } else {
+        "internal"
+    }
 }
 
 /// URL 纯组合（无 IO）。cfg：
@@ -79,7 +83,10 @@ pub fn compose_url(reference: &str, cfg: &Value) -> Result<String, String> {
     if let Some(Value::Object(q)) = o.get("query") {
         let mut pairs: BTreeMap<String, String> = BTreeMap::new();
         for (k, v) in q {
-            pairs.insert(k.clone(), percent_encode(&render(&scalar_to_string(v), &vars)));
+            pairs.insert(
+                k.clone(),
+                percent_encode(&render(&scalar_to_string(v), &vars)),
+            );
         }
         if !pairs.is_empty() {
             let qs = pairs
