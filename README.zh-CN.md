@@ -26,6 +26,7 @@
 - [GQL 能力](#gql-能力)
 - [后端与方言](#后端与方言)
 - [权限模型](#权限模型)
+- [触发器](#触发器)
 - [测试与对拍](#测试与对拍)
 - [事务型能力](#事务型能力)
 - [边界与常见坑](#边界与常见坑)
@@ -302,6 +303,48 @@ schema 级 `read` / `write`、字段级 `field.read` / `field.write`、关系级
 - 权限上下文是**显式入参**（`ctx`）—— 这是与旧隐式 `AsyncLocalStorage` 风格设计的刻意差异。
 
 面向 AI 查询宿主的接入守卫：`timestamps` 值校验（仅 `true` / `false` / `"ms"` / `"s"`，非法值注册即报错）与联邦 `degraded` 事件（`{code, layer, message, hint}`，见 `plan.degraded`），令无法下推的跨源分页/排序绝不静默阻断查询。守卫测试见 `core/tests/guards.rs`。
+
+## 触发器
+
+schema 声明式触发链：写事件（首批 `insert` / `update`）在规划期展开为有序副作用步骤，随写命令一并返回（`plan.triggers`），由 Host 在同一原子包络内执行。core 负责解析校验与展开（`core/src/command/triggers.rs`）；Host 执行器见 nodejs-store `src/crud/triggers.js` 与 py-store `py_store/crud/triggers.py`（双宿主对同一 fixture 的展开输出逐字节一致，golden 见 `core/tests/triggers.rs` + `fixtures/triggers/cases.json`）。
+
+**声明形态**（schema 顶层 `triggers` 字段）：
+
+```json
+{
+  "triggers": {
+    "insert": [
+      { "name": "decStock", "into": "Product", "op": "update",
+        "condition": { "_id": "{{root.productId}}" },
+        "data": { "$inc": { "stock": -1 } } },
+      { "name": "stockLog", "into": "StockLog", "op": "insert",
+        "data": { "orderId": "{{root._id}}", "delta": -1, "at": "{{now}}" } }
+    ],
+    "update": [
+      { "name": "onPaid", "onFields": ["status"],
+        "when": { "eq": ["{{root.status}}", "paid"] },
+        "fnRef": "grantPoints",
+        "args": { "userId": "{{root.userId}}", "amount": "{{root.amount}}" } }
+    ]
+  }
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `name` | 步骤名；同一次顶层调用内 `(name, _id)` 去重，不重复执行 |
+| `into` | 目标 schema（命令式步骤） |
+| `op` | `insert` / `update`（白名单，注册期校验） |
+| `onFields` | update 事件的字段级命中名单，必须为 schema 已声明字段 |
+| `when` | 命中后的条件守卫（极简文法：`eq/ne/gt/gte/lt/lte/in/and/or/not`） |
+| `condition` / `data` | 命令式步骤的写目标条件与写数据 |
+| `fnRef` / `args` | 回调式步骤的宿主实现与参数（启动期缺实现 ⇒ `ERR_TRIGGER_FN_MISSING`） |
+
+**占位符**：`{{root.<field>}}`（事件源文档字段；update 时 = 变化后值）、`{{before.<field>}}`（变化前值）、`{{now}}`（宿主时钟）。占位符必须独占字符串值（只做整值替换），内嵌拼接（如 `"order-{{root._id}}"`）显式报 `ERR_TRIGGER_PLACEHOLDER`——禁静默漂移。
+
+**判定语义**：update 事件先判 `onFields 值真的变化`（结构深比较，no-op 抑制——值未变不触发）→ 再判 `when`。系统字段（`createdAt` / `updatedAt` / `deletedAt`）不进触发器探针投影，其变化天然不触发。
+
+**边界**：触发链步骤与源写落在同一 `runAtomic` 包络内 → 单源真事务；触及第二数据源按顺序执行并经反馈通道声明 `nonAtomic`；`store.session()` 内对跨源写 fail-closed。**不支持级联**（触发写不再触发任何触发器，声明 `cascade` 键注册期 `Err`）；`updateMany` 不支持字段级触发（显式拒绝，禁静默降级）；`remove` 事件与命令式步骤 `op: "upsert"` 注册期 `Err`（remove 触发语义不明，upsert 无单一定位语义）；text2query 档下声明触发器即 `Err`（纯查询宿主禁写路径能力）。
 
 ## 事务型能力
 

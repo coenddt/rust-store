@@ -4,6 +4,22 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## Unreleased
+
+### Added（触发器）
+
+- **schema 声明式触发链**：schema 顶层 `triggers` 声明写事件（首批 `insert` / `update`）的副作用
+  步骤，规划期展开为 `plan.triggers`——命令式 `{name, onFields, when, command}` 或回调式
+  `{name, onFields, when, callback:{fnRef,args}}`，由 Host 在源写同一原子包络内执行。
+  判定语义：update 事件先判 `onFields 值真的变化`（no-op 抑制）→ 再判 `when`。
+- **注册期校验（零静默）**：事件键白名单（`remove` ⇒ Err）；命令式 `op` 白名单 `insert` / `update`
+  （`upsert` ⇒ Err）；`cascade` 键拒绝（首批不支持级联）；`onFields` 必须为 schema 已声明字段；
+  `when` 必须为对象。text2query 档下声明触发器即 `Err`（纯查询宿主禁写路径能力）。
+- **触发器探针**：update 触发器把 `onFields ∪ {{before.*}}` 引用并入探针投影，Host 据探针结果做
+  字段级命中判定并替换 before 占位符。
+- **golden 守护**：`core/tests/triggers.rs`（含 `triggers_fixture_shape`）+ `fixtures/triggers/cases.json`；
+  node / py 宿主对同一 fixture 的展开输出逐字节一致（`parity-triggers` / `parity_triggers` 对拍脚本）。
+
 ## 4.0.0 (2026-10-04)
 
 ### Breaking（定义零落点 + `namespace` 删名）
