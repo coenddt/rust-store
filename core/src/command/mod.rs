@@ -52,6 +52,7 @@ mod finalize;
 mod mutate;
 mod mutation;
 mod query;
+mod triggers;
 mod write;
 mod write_links;
 
@@ -68,6 +69,7 @@ pub use mutate::{
     plan_archive_docs, plan_insert_many, plan_remove, plan_update, plan_update_many, plan_upsert,
 };
 pub use mutation::plan_mutation;
+pub use triggers::{before_probe_fields, expand_triggers, has_triggers};
 pub use query::{
     build_plan, check_readable_relations, has_pipeline, plan_query, plan_query_ast_mut,
     plan_query_mut, plan_query_one, resolve_page, restore_sort_order, sorts_by_relation, Mode,
