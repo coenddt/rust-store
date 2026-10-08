@@ -222,21 +222,6 @@ pub fn check_write_perm(
     action: WriteAction,
     extra_probe_fields: &[String],
 ) -> Result<Option<Value>, String> {
-    // JS：`if (ctx)` 才做检查 —— 无上下文（内部调用）不设防
-    let Some(c) = ctx else {
-        return Ok(None);
-    };
-    // 拒写清单（默认空——无拒写；原 guest 硬编码随清单化移除，设计 §11.4）
-    let rules = registry.role_rules();
-    if crate::permission::has_any_role(c, &rules.deny_write_roles) {
-        return Err(deny_msg.to_string());
-    }
-    // RBAC 表级写判定（deny-wins；拒绝文案自带 RBAC 标识，不走入参 deny_msg）
-    ensure_write(registry, schema, Some(c), action)?;
-    // RBAC 行级限制是否存在（存在则探针投影需并入 condition 字段键）
-    let rbac_row_restricted =
-        crate::rbac::row_condition(registry, schema, Some(c), action.as_str()).is_some();
-
     let probe_projection = |extra: &[String]| -> Value {
         let mut m = Map::new();
         m.insert("_id".to_string(), json!(1));
@@ -249,6 +234,46 @@ pub fn check_write_perm(
         }
         Value::Object(m)
     };
+
+    // 无 ctx（内部调用）：权限不设防，但触发器探针（`before` 值供给 / onFields 命中
+    // 判定）**与权限无关**，必须发 —— 否则字段级判定退化为「全命中」，静默放大触发面
+    // （no-op 抑制失效）。投影只含 `_id` + 触发器引用字段（不带 createdBy —— 触发器探针
+    // 无 creator 判定语义，且目标 schema 未声明 createdBy 时 SQL 列不存在）。
+    // 有 ctx 时走下方权限路径：权限探针投影已并入 extra（onFields ∪ before 引用）。
+    if ctx.is_none() {
+        if !extra_probe_fields.is_empty() {
+            if let Probe::NotProbed = probe {
+                let mut m = Map::new();
+                m.insert("_id".to_string(), json!(1));
+                for f in extra_probe_fields {
+                    // 仅取 schema 已声明字段（防触发器声明引用未声明键污染投影）
+                    if schema.fields.contains_key(f) {
+                        m.insert(f.clone(), json!(1));
+                    }
+                }
+                return Ok(Some(cmd_find_one(
+                    schema,
+                    condition,
+                    Some(&Value::Object(m)),
+                )));
+            }
+        }
+        return Ok(None);
+    }
+    let Some(c) = ctx else {
+        unreachable!("上方已处理 ctx.is_none()");
+    };
+    // 拒写清单（默认空——无拒写；原 guest 硬编码随清单化移除，设计 §11.4）
+    let rules = registry.role_rules();
+    if crate::permission::has_any_role(c, &rules.deny_write_roles) {
+        return Err(deny_msg.to_string());
+    }
+    // RBAC 表级写判定（deny-wins；拒绝文案自带 RBAC 标识，不走入参 deny_msg）
+    ensure_write(registry, schema, Some(c), action)?;
+    // RBAC 行级限制是否存在（存在则探针投影需并入 condition 字段键）
+    let rbac_row_restricted =
+        crate::rbac::row_condition(registry, schema, Some(c), action.as_str()).is_some();
+
     // 探针投影字段全集：RBAC 行级条件字段 ∪ 触发器 onFields / before 引用字段
     let mut merged = probe_condition_fields(registry, schema, Some(c), action.as_str());
     for f in extra_probe_fields {

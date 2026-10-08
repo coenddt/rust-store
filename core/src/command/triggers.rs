@@ -151,11 +151,13 @@ fn build_trigger_step(
                     WriteAction::Update
                 },
             )?;
-            // 字段声明校验（值可能含占位符 → 只校验键，不校验类型）
+            // 字段声明校验（值可能含占位符 → 只校验键，不校验类型）；
+            // `_id` 豁免 —— 主键由 Host 显式供给（idPrefix/占位符），与普通 insert
+            // 文档显式携带 `_id` 同一契约（schema.fields 不声明 `_id`，见 registry.rs）
             let tfields: Vec<&String> = target.fields.keys().collect();
             if let Value::Object(d) = data {
                 for k in d.keys() {
-                    if !k.starts_with('$') && !tfields.iter().any(|f| *f == k) {
+                    if k != "_id" && !k.starts_with('$') && !tfields.contains(&k) {
                         return Err(format!(
                             "触发器 \"{name}\" 的 data 字段 \"{k}\" 未在目标 schema \"{into}\" 中声明"
                         ));

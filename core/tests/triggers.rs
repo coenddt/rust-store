@@ -267,9 +267,10 @@ fn plan_update_needs_probe_projection_includes_on_fields() {
 
 #[test]
 fn plan_update_emits_triggers_step() {
-    // 静态全放行（不配 creator）→ 直接出 command + triggers
+    // 无 ctx（内部调用）也必须发触发器探针（before 供给与权限无关）：
+    // NotProbed → needsProbe；携 Found 重入 → command + triggers
     let reg = registry_with(&[audit_schema(), task_schema()]);
-    let plan = plan_update(
+    let first = plan_update(
         "Task",
         &reg,
         None,
@@ -278,6 +279,25 @@ fn plan_update_emits_triggers_step() {
         &json!({}),
         1000,
         Probe::NotProbed,
+    )
+    .expect("plan_update 应成功");
+    let probe_cmd = first
+        .get("needsProbe")
+        .expect("配 update 触发器（无 ctx）应发探针");
+    let proj = probe_cmd
+        .get("projection")
+        .expect("探针命令应含 projection");
+    assert_eq!(proj["status"], json!(1), "onFields 应并入探针投影");
+    assert_eq!(proj["_id"], json!(1));
+    let plan = plan_update(
+        "Task",
+        &reg,
+        None,
+        &json!({ "title": "x" }),
+        &json!({ "status": "done" }),
+        &json!({}),
+        1000,
+        Probe::Found(&json!({ "_id": "t1", "status": "open" })),
     )
     .expect("plan_update 应成功");
     let triggers = plan
