@@ -6,7 +6,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::command::cmd::{cmd_insert_one, cmd_update_many};
+use crate::command::cmd::{cmd_delete_many, cmd_insert_one, cmd_update_many};
 use crate::permission::{can_write_schema, Context};
 use crate::rbac::{ensure_write, WriteAction};
 use crate::schema::{Registry, TriggerBody, TriggerDef};
@@ -145,10 +145,10 @@ fn build_trigger_step(
                 registry,
                 target,
                 ctx,
-                if op == "insert" {
-                    WriteAction::Insert
-                } else {
-                    WriteAction::Update
+                match op.as_str() {
+                    "insert" => WriteAction::Insert,
+                    "remove" => WriteAction::Remove,
+                    _ => WriteAction::Update,
                 },
             )?;
             // 字段声明校验（值可能含占位符 → 只校验键，不校验类型）；
@@ -167,6 +167,8 @@ fn build_trigger_step(
             let command = match op.as_str() {
                 "insert" => cmd_insert_one(target, data),
                 "update" => cmd_update_many(target, condition.as_ref().unwrap_or(&json!({})), data),
+                // remove：condition 圈定删除目标，无 data（parse 已拒）
+                "remove" => cmd_delete_many(target, condition.as_ref().unwrap_or(&json!({}))),
                 other => return Err(format!("触发器 \"{name}\" 的 op \"{other}\" 不支持")),
             };
             Ok(base(json!({ "command": command })))

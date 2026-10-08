@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
-use rust_store_core::command::{before_probe_fields, plan_insert, plan_update, Probe};
+use rust_store_core::command::{before_probe_fields, plan_insert, plan_remove, plan_update, Probe};
 use rust_store_core::permission::Context;
 use rust_store_core::schema::{Profile, Registry};
 
@@ -80,12 +80,24 @@ fn unknown_event_key_is_err() {
     let defn = json!({
         "name": "T", "collection": "t", "idPrefix": "t",
         "fields": { "a": { "type": "string" } },
-        "triggers": { "remove": [ { "fnRef": "f" } ] }
+        "triggers": { "delete": [ { "fnRef": "f" } ] }
     });
     let err = Registry::new()
         .register(&defn)
-        .expect_err("remove 事件应 Err");
+        .expect_err("delete（非 EVENTS 成员）应 Err");
     assert!(err.contains("非法"), "{err}");
+}
+
+#[test]
+fn remove_event_key_is_valid() {
+    let defn = json!({
+        "name": "T", "collection": "t", "idPrefix": "t",
+        "fields": { "a": { "type": "string" } },
+        "triggers": { "remove": [ { "fnRef": "f" } ] }
+    });
+    Registry::new()
+        .register(&defn)
+        .expect("remove 是合法事件键");
 }
 
 #[test]
@@ -337,6 +349,102 @@ fn plan_update_without_triggers_has_no_key() {
     );
 }
 
+// ─── A1/A2：plan_remove 触发链（remove 事件） ─────────────────
+
+/// 带 remove 触发器的 schema：命令式 op:"remove" + 回调式
+fn doc_schema() -> Value {
+    json!({
+        "name": "Doc",
+        "collection": "docs",
+        "idPrefix": "d",
+        "timestamps": false,
+        "fields": {
+            "title": { "type": "string" },
+            "ownerId": { "type": "string" }
+        },
+        "relations": {},
+        "triggers": {
+            "remove": [
+                { "name": "cleanAudit", "into": "Audit", "op": "remove",
+                  "condition": { "note": "{{before.title}}" } },
+                { "name": "onRemoved", "fnRef": "onDocRemoved",
+                  "args": { "id": "{{before._id}}" } }
+            ]
+        }
+    })
+}
+
+#[test]
+fn plan_remove_emits_triggers_step() {
+    let reg = registry_with(&[audit_schema(), doc_schema()]);
+    let plan = plan_remove("Doc", &reg, None, &json!({ "_id": "d1" }), Probe::NotProbed)
+        .expect("plan_remove 应成功");
+    let triggers = plan
+        .get("triggers")
+        .expect("配了 remove 触发器应出现 triggers 键");
+    let arr = triggers.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    // 命令式 step：op:"remove" → deleteMany，目标为 Audit
+    let step0 = &arr[0];
+    assert_eq!(step0["name"], "Doc.remove.cleanAudit");
+    let cmd = step0.get("command").expect("命令式 step 应含 command");
+    assert_eq!(cmd["kind"], "deleteMany");
+    assert_eq!(cmd["collection"], "audits");
+    assert_eq!(cmd["filter"]["note"], "{{before.title}}");
+    // 回调式 step
+    let step1 = &arr[1];
+    assert_eq!(step1["name"], "Doc.remove.onRemoved");
+    let cb = step1.get("callback").expect("回调式 step 应含 callback");
+    assert_eq!(cb["fnRef"], "onDocRemoved");
+    assert_eq!(cb["args"]["id"], "{{before._id}}");
+    // 既有键不受影响
+    assert!(plan.get("deleteCommand").is_some());
+    assert!(plan.get("archiveCollection").is_some());
+}
+
+#[test]
+fn remove_op_missing_condition_is_err() {
+    let defn = json!({
+        "name": "T", "collection": "t", "idPrefix": "t",
+        "fields": { "a": { "type": "string" } },
+        "triggers": { "remove": [ { "into": "T", "op": "remove" } ] }
+    });
+    let err = Registry::new()
+        .register(&defn)
+        .expect_err("op=remove 缺 condition 应 Err");
+    assert!(err.contains("必须提供 condition"), "{err}");
+}
+
+#[test]
+fn remove_op_with_data_is_err() {
+    let defn = json!({
+        "name": "T", "collection": "t", "idPrefix": "t",
+        "fields": { "a": { "type": "string" } },
+        "triggers": { "remove": [ {
+            "into": "T", "op": "remove",
+            "condition": { "a": "x" }, "data": { "a": "y" }
+        } ] }
+    });
+    let err = Registry::new()
+        .register(&defn)
+        .expect_err("op=remove 带 data 应 Err");
+    assert!(err.contains("不接受 data"), "{err}");
+}
+
+#[test]
+fn plan_remove_without_triggers_has_no_key() {
+    let reg = registry_with(&[audit_schema()]);
+    let plan = plan_remove("Audit", &reg, None, &json!({ "_id": "a1" }), Probe::NotProbed)
+        .expect("plan_remove 应成功");
+    assert!(
+        plan.get("triggers").is_none(),
+        "未配置触发器不得出现 triggers 键"
+    );
+    // 结构与改动前一致
+    assert!(plan.get("archiveCollection").is_some());
+    assert!(plan.get("deleteCommand").is_some());
+}
+
 // ─── before_probe_fields ─────────────────────────────────────
 
 #[test]
@@ -434,6 +542,30 @@ fn triggers_fixture_shape() {
     assert_eq!(arr[0]["name"], "Order.update.onPaid");
     let cb = arr[0].get("callback").expect("onPaid 应为回调式 step");
     assert_eq!(cb["fnRef"], "grantPoints");
+
+    // remove 声明用例：plan_remove → remove_cmd(deleteMany) + remove_cb(callback)
+    let rplan = plan_remove(
+        c1["schema"].as_str().unwrap(),
+        &reg,
+        None,
+        &c1["condition"],
+        Probe::NotProbed,
+    )
+    .expect("fixture plan_remove 应成功");
+    let rtrig = rplan
+        .get("triggers")
+        .expect("fixture remove 声明应出现 triggers 键");
+    let rarr = rtrig.as_array().expect("triggers 应为数组");
+    assert_eq!(rarr.len(), 2);
+    assert_eq!(rarr[0]["name"], "Order.remove.cleanLogs");
+    let rcmd = rarr[0].get("command").expect("cleanLogs 应为命令式 step");
+    assert_eq!(rcmd["kind"], "deleteMany");
+    assert_eq!(rcmd["collection"], "StockLog");
+    assert_eq!(rcmd["filter"]["orderId"], "{{before._id}}");
+    assert_eq!(rarr[1]["name"], "Order.remove.onRemoved");
+    let rcb = rarr[1].get("callback").expect("onRemoved 应为回调式 step");
+    assert_eq!(rcb["fnRef"], "onOrderRemoved");
+    assert_eq!(rcb["args"]["id"], "{{before._id}}");
 }
 
 #[test]

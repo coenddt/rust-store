@@ -10,11 +10,11 @@ use serde_json::{Map, Value};
 
 use crate::types::str_list;
 
-/// 事件名（首批两类：insert / update；其余键注册期 Err —— remove 触发语义不明，暂不支持）
-pub const EVENTS: [&str; 2] = ["insert", "update"];
+/// 事件名（insert / update / remove；其余键注册期 Err）
+pub const EVENTS: [&str; 3] = ["insert", "update", "remove"];
 
 /// 命令式触发支持的 op 白名单（首批不含 upsert）
-pub const OPS: [&str; 2] = ["insert", "update"];
+pub const OPS: [&str; 3] = ["insert", "update", "remove"];
 
 /// `triggers` = 事件名 → 触发列表
 pub type Triggers = HashMap<String, Vec<TriggerDef>>;
@@ -51,7 +51,7 @@ pub enum TriggerBody {
 ///  3. 事件值非数组 / 元素非对象；
 ///  4. `into`/`op`/`data`（命令式）与 `fnRef`（回调式）**互斥且必居其一**；
 ///  5. `op` 不在 `OPS`；
-///  6. 命令式缺 `data`，或 `op=update` 缺 `condition`；
+///  6. 命令式缺 `data`（`op=remove` 相反：出现 `data` 即 Err），或 `op=update`/`op=remove` 缺 `condition`；
 ///  7. `onFields` 非字符串数组，或字段未在 `fields` 中声明（`$` 前缀键除外）；
 ///  8. `when` 非对象；出现 `cascade` 键（首批不支持级联）；
 ///  9. 命令式 `data` 的键未在**目标 schema** 中声明（在展开期校验，见 `command::triggers`）。
@@ -67,7 +67,7 @@ pub fn parse_triggers(
     for (event, val) in tm {
         if !EVENTS.contains(&event.as_str()) {
             return Err(format!(
-                "schema \"{owner}\" 的 triggers 事件键 \"{event}\" 非法（仅 insert/update）"
+                "schema \"{owner}\" 的 triggers 事件键 \"{event}\" 非法（仅 insert/update/remove）"
             ));
         }
         let arr = val
@@ -145,16 +145,27 @@ fn parse_one(
             .ok_or_else(|| format!("{at} 缺少 op"))?
             .to_string();
         if !OPS.contains(&op.as_str()) {
-            return Err(format!("{at} 的 op \"{op}\" 不在白名单（insert/update）"));
+            return Err(format!("{at} 的 op \"{op}\" 不在白名单（insert/update/remove）"));
         }
-        let data = to
-            .get("data")
-            .filter(|v| v.is_object())
-            .cloned()
-            .ok_or_else(|| format!("{at} 的命令式触发缺 data（须为对象）"))?;
+        let data = match op.as_str() {
+            // remove：删除语义由 condition 圈定目标，不接受 data（出现即 Err，零静默）
+            "remove" => {
+                if to.get("data").map(|d| !d.is_null()).unwrap_or(false) {
+                    return Err(format!("{at} 的 op=remove 不接受 data"));
+                }
+                Value::Null
+            }
+            _ => to
+                .get("data")
+                .filter(|v| v.is_object())
+                .cloned()
+                .ok_or_else(|| format!("{at} 的命令式触发缺 data（须为对象）"))?,
+        };
         let condition = to.get("condition").cloned();
-        if op == "update" && !condition.as_ref().map(|v| v.is_object()).unwrap_or(false) {
-            return Err(format!("{at} 的 op=update 必须提供 condition（对象）"));
+        if (op == "update" || op == "remove")
+            && !condition.as_ref().map(|v| v.is_object()).unwrap_or(false)
+        {
+            return Err(format!("{at} 的 op={op} 必须提供 condition（对象）"));
         }
         TriggerBody::Command {
             into,

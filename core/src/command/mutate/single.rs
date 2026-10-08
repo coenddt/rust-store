@@ -127,6 +127,11 @@ pub fn plan_remove(
         return Ok(json!({ "needsProbe": cmd }));
     }
 
+    // 触发链展开（remove 事件；text2query 档下含触发器即 Err —— A9）。
+    // before 值来源 = 归档 findCommand 的完整文档（Host 端替换 `{{before.*}}`），
+    // 故 findCommand 投影保持全字段（None）——归档需完整文档，extra 字段天然包含，
+    // 不收窄投影（收窄会丢归档字段）。
+    let remove_triggers = crate::command::triggers::expand_triggers(registry, ctx, schema_name, "remove")?;
     // 关系谓词条件（阶段1 T1-04）：归一为 preCommand（aggregate 取命中 `_id`）+ `_id $in`。
     // 归档 find 也用改写后条件（`_id $in` 标量条件，Mongo/SQL 双侧直接可执行）。
     let has_rel_pred = condition
@@ -139,12 +144,19 @@ pub fn plan_remove(
         if let Some(obj) = delete_command.as_object_mut() {
             obj.insert("preCommand".to_string(), pre.lookup_command);
         }
+        let mut plan = json!({
+            "archiveCollection": if registry.has(&archive_name_of(schema_name)) { json!(registry.get(&archive_name_of(schema_name))?.collection) } else { Value::Null },
+            "findCommand": cmd_find(schema, &pre.condition, None),
+            "deleteCommand": delete_command,
+        });
+        // 未配置触发器时不出现 triggers 键（A2 零回归）
+        if !remove_triggers.is_empty() {
+            plan.as_object_mut()
+                .expect("plan_remove：plan 必为对象")
+                .insert("triggers".to_string(), json!(remove_triggers));
+        }
         return attach_write_links(
-            json!({
-                "archiveCollection": if registry.has(&archive_name_of(schema_name)) { json!(registry.get(&archive_name_of(schema_name))?.collection) } else { Value::Null },
-                "findCommand": cmd_find(schema, &pre.condition, None),
-                "deleteCommand": delete_command,
-            }),
+            plan,
             registry,
             &[schema_name],
             registry.write_link_policy(),
@@ -164,12 +176,19 @@ pub fn plan_remove(
         (Value::Null, None)
     };
     let delete_command = cmd_delete_many(schema, eff_condition);
+    let mut plan = json!({
+        "archiveCollection": archive_collection,
+        "findCommand": find_command,
+        "deleteCommand": delete_command,
+    });
+    // 未配置触发器时不出现 triggers 键（A2 零回归）
+    if !remove_triggers.is_empty() {
+        plan.as_object_mut()
+            .expect("plan_remove：plan 必为对象")
+            .insert("triggers".to_string(), json!(remove_triggers));
+    }
     attach_write_links(
-        json!({
-            "archiveCollection": archive_collection,
-            "findCommand": find_command,
-            "deleteCommand": delete_command,
-        }),
+        plan,
         registry,
         &[schema_name],
         registry.write_link_policy(),

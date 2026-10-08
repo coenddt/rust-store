@@ -17,6 +17,12 @@
             "when": { "eq": ["{{root.status}}", "paid"] },
             "fnRef": "grantPoints",
             "args": { "userId": "{{root.userId}}", "amount": "{{root.amount}}" } }
+        ],
+        "remove": [
+          { "name": "cleanLogs", "into": "StockLog", "op": "remove",
+            "condition": { "orderId": "{{before._id}}" } },
+          { "name": "onRemoved", "fnRef": "onOrderRemoved",
+            "args": { "id": "{{before._id}}", "amount": "{{before.amount}}" } }
         ]
       }
     },
