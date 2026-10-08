@@ -43,7 +43,11 @@ pub fn plan_update(
     // 触发器探针字段：onFields ∪ {{before.*}} 引用（update 事件；Host 据探针结果
     // 判定字段级命中并替换 before 占位符 —— A3/A4）
     let extra = crate::command::triggers::before_probe_fields(
-        schema.triggers.get("update").map(|v| v.as_slice()).unwrap_or(&[]),
+        schema
+            .triggers
+            .get("update")
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]),
     );
     if let Some(cmd) = check_write_perm(
         registry,

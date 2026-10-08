@@ -156,7 +156,17 @@ fn parse_one(
         if op == "update" && !condition.as_ref().map(|v| v.is_object()).unwrap_or(false) {
             return Err(format!("{at} 的 op=update 必须提供 condition（对象）"));
         }
-        TriggerBody::Command { into, op, condition, data }
+        TriggerBody::Command {
+            into,
+            op,
+            condition,
+            data,
+        }
     };
-    Ok(TriggerDef { name, when: to.get("when").cloned(), on_fields, body })
+    Ok(TriggerDef {
+        name,
+        when: to.get("when").cloned(),
+        on_fields,
+        body,
+    })
 }

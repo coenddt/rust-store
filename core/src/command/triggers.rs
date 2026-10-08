@@ -27,7 +27,7 @@ pub fn has_triggers(registry: &Registry, schema_name: &str, event: &str) -> bool
 pub fn before_probe_fields(triggers: &[TriggerDef]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut push = |f: &str| {
-        if !f.is_empty() && !out.iter().any(|x| x == f) {
+        if !f.is_empty() && !out.contains(&f.to_string()) {
             out.push(f.to_string());
         }
     };
@@ -39,7 +39,10 @@ pub fn before_probe_fields(triggers: &[TriggerDef]) -> Vec<String> {
         if let TriggerBody::Callback { args, .. } = &td.body {
             collect_before_refs(Some(args), &mut push);
         }
-        if let TriggerBody::Command { data, condition, .. } = &td.body {
+        if let TriggerBody::Command {
+            data, condition, ..
+        } = &td.body
+        {
             collect_before_refs(Some(data), &mut push);
             collect_before_refs(condition.as_ref(), &mut push);
         }
@@ -90,7 +93,14 @@ pub fn expand_triggers(
     }
     let mut out = Vec::new();
     for (i, td) in list.iter().enumerate() {
-        out.push(build_trigger_step(registry, ctx, owner_schema, event, i, td)?);
+        out.push(build_trigger_step(
+            registry,
+            ctx,
+            owner_schema,
+            event,
+            i,
+            td,
+        )?);
     }
     Ok(out)
 }
@@ -121,7 +131,12 @@ fn build_trigger_step(
         Value::Object(m)
     };
     match &td.body {
-        TriggerBody::Command { into, op, condition, data } => {
+        TriggerBody::Command {
+            into,
+            op,
+            condition,
+            data,
+        } => {
             let target = registry.get(into)?;
             if !can_write_schema(registry.role_rules(), target, ctx) {
                 return Err(ERR_NO_WRITE.to_string());
@@ -149,11 +164,7 @@ fn build_trigger_step(
             }
             let command = match op.as_str() {
                 "insert" => cmd_insert_one(target, data),
-                "update" => cmd_update_many(
-                    target,
-                    condition.as_ref().unwrap_or(&json!({})),
-                    data,
-                ),
+                "update" => cmd_update_many(target, condition.as_ref().unwrap_or(&json!({})), data),
                 other => return Err(format!("触发器 \"{name}\" 的 op \"{other}\" 不支持")),
             };
             Ok(base(json!({ "command": command })))
