@@ -77,6 +77,8 @@ pub struct Schema {
     pub relations: HashMap<String, RelationDef>,
     /// 保持注册顺序：`build_agg_stages` 的输出顺序依赖它
     pub computes: Vec<(String, ComputeDef)>,
+    /// 写触发器声明（事件 → 触发列表；解析见 `super::triggers`，规划见 `crate::command::triggers`）
+    pub triggers: super::triggers::Triggers,
     pub read: Option<Vec<String>>,
     pub write: Option<Vec<String>>,
     /// 原始索引定义（`[{keys: {...}, options: {...}}]`），upsert 条件构建依赖 unique 索引
