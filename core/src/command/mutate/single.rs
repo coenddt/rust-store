@@ -48,6 +48,7 @@ pub fn plan_update(
         ERR_NO_WRITE,
         probe,
         WriteAction::Update,
+        &[],
     )? {
         return Ok(json!({ "needsProbe": cmd }));
     }
@@ -108,6 +109,7 @@ pub fn plan_remove(
         ERR_NO_DELETE,
         probe,
         WriteAction::Remove,
+        &[],
     )? {
         return Ok(json!({ "needsProbe": cmd }));
     }

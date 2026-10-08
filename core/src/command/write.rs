@@ -196,6 +196,11 @@ pub enum Probe<'a> {
 ///   （[`ensure_write_on_doc`]），杜绝 ownerOnly 单条更新静默命中他人文档；
 /// - 探针重入（`Probe::Found`）时静态 `evaluate` 与 RBAC 行级判定都过才放行。
 ///
+/// `extra_probe_fields`：触发器探针需额外投影的字段（`onFields` ∪ `{{before.*}}`
+/// 引用，见 `command::triggers::before_probe_fields`）。非空时即使权限本不需探针
+/// 也发探针（Host 据探针结果替换 `{{before.*}}` 并判定字段级命中）；为空时行为
+/// 与无参版本**逐字节等价**（零回归契约）。
+///
 /// 返回：`Ok(None)` = 放行；`Ok(Some(cmd))` = Host 先执行该 findOne 探针后携
 /// [`Probe::Found`] / [`Probe::NoResult`] 重入；`Err` = 拒绝（Host 映射 PermissionError）。
 #[allow(clippy::too_many_arguments)]
@@ -207,6 +212,7 @@ pub fn check_write_perm(
     deny_msg: &str,
     probe: Probe,
     action: WriteAction,
+    extra_probe_fields: &[String],
 ) -> Result<Option<Value>, String> {
     // JS：`if (ctx)` 才做检查 —— 无上下文（内部调用）不设防
     let Some(c) = ctx else {
@@ -228,11 +234,20 @@ pub fn check_write_perm(
         m.insert("_id".to_string(), json!(1));
         m.insert("createdBy".to_string(), json!(1));
         for f in extra {
-            m.insert(f.clone(), json!(1));
+            // 仅取 schema 已声明字段（防触发器声明引用未声明键污染投影）
+            if schema.fields.contains_key(f) {
+                m.insert(f.clone(), json!(1));
+            }
         }
         Value::Object(m)
     };
-    let rbac_fields = probe_condition_fields(registry, schema, Some(c), action.as_str());
+    // 探针投影字段全集：RBAC 行级条件字段 ∪ 触发器 onFields / before 引用字段
+    let mut merged = probe_condition_fields(registry, schema, Some(c), action.as_str());
+    for f in extra_probe_fields {
+        if !merged.contains(f) {
+            merged.push(f.clone());
+        }
+    }
 
     if can_write_schema(registry.role_rules(), schema, Some(c)) {
         // 静态放行：RBAC 行级受限时仍需探针（否则静默放行越权行更新/删除）
@@ -241,12 +256,25 @@ pub fn check_write_perm(
                 Probe::NotProbed => Ok(Some(cmd_find_one(
                     schema,
                     condition,
-                    Some(&probe_projection(&rbac_fields)),
+                    Some(&probe_projection(&merged)),
                 ))),
                 Probe::NoResult => Err(deny_msg.to_string()),
                 Probe::Found(doc) => {
                     ensure_write_on_doc(registry, schema, Some(c), action, doc).map(|_| None)
                 }
+            };
+        }
+        // 触发器需要 before 值 / 字段级命中判定 → 权限本不需探针也发探针
+        // （静态权限已由 can_write_schema 放行；Found 重入直接放行）
+        if !extra_probe_fields.is_empty() {
+            return match probe {
+                Probe::NotProbed => Ok(Some(cmd_find_one(
+                    schema,
+                    condition,
+                    Some(&probe_projection(&merged)),
+                ))),
+                Probe::NoResult => Err(deny_msg.to_string()),
+                Probe::Found(_) => Ok(None),
             };
         }
         return Ok(None);
@@ -262,7 +290,7 @@ pub fn check_write_perm(
             Probe::NotProbed => Ok(Some(cmd_find_one(
                 schema,
                 condition,
-                Some(&probe_projection(&rbac_fields)),
+                Some(&probe_projection(&merged)),
             ))),
             Probe::NoResult => Err(deny_msg.to_string()),
             Probe::Found(doc) => {
