@@ -40,10 +40,18 @@ pub fn plan_insert(
 
     let doc = build_insert_doc(registry, schema, ctx, data, now, new_id)?;
     let doc = Value::Object(doc);
-    let plan = json!({
+    // 触发链展开（insert 事件；text2query 档下含触发器即 Err —— A9）
+    let triggers = super::triggers::expand_triggers(registry, ctx, schema_name, "insert")?;
+    let mut plan = json!({
         "command": cmd_insert_one(schema, &doc),
         "returns": apply_defaults_and_computes(&doc, schema, fn_registry)?,
     });
+    // 未配置触发器时不出现 triggers 键（A2 零回归）
+    if !triggers.is_empty() {
+        plan.as_object_mut()
+            .expect("plan_insert：plan 必为对象")
+            .insert("triggers".to_string(), json!(triggers));
+    }
     // 写链路附接（多落点 schema 才追加 writeLinks；单落点原样返回）
     attach_write_links(plan, registry, &[schema_name], registry.write_link_policy())
 }
