@@ -1,0 +1,33 @@
+{
+  "schemas": [
+    {
+      "name": "Order", "idPrefix": "o",
+      "fields": { "userId": {"type": "string"}, "productId": {"type": "string"},
+                  "amount": {"type": "number"}, "status": {"type": "string"} },
+      "triggers": {
+        "insert": [
+          { "name": "decStock", "into": "Product", "op": "update",
+            "condition": { "_id": "{{root.productId}}" },
+            "data": { "$inc": { "stock": -1 } } },
+          { "name": "stockLog", "into": "StockLog", "op": "insert",
+            "data": { "orderId": "{{root._id}}", "delta": -1, "at": "{{now}}" } }
+        ],
+        "update": [
+          { "name": "onPaid", "onFields": ["status"],
+            "when": { "eq": ["{{root.status}}", "paid"] },
+            "fnRef": "grantPoints",
+            "args": { "userId": "{{root.userId}}", "amount": "{{root.amount}}" } }
+        ]
+      }
+    },
+    { "name": "Product", "fields": { "stock": {"type": "number"} } },
+    { "name": "StockLog", "fields": { "orderId": {"type": "string"}, "delta": {"type": "number"}, "at": {"type": "number"} } }
+  ],
+  "cases": [
+    { "fn": "planInsert", "schema": "Order", "now": 1730000000000, "newId": "o_fix1",
+      "input": { "userId": "u1", "productId": "p9", "amount": 1200, "status": "new" } },
+    { "fn": "planUpdate", "schema": "Order", "now": 1730000000000,
+      "condition": { "_id": "o_fix1" }, "input": { "status": "paid" },
+      "found": true, "doc": { "_id": "o_fix1", "status": "new" } }
+  ]
+}

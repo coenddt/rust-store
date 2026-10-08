@@ -8,6 +8,8 @@
 //! - text2query 档拒绝
 
 use serde_json::{json, Value};
+use std::fs;
+use std::path::PathBuf;
 
 use rust_store_core::command::{before_probe_fields, plan_insert, plan_update, Probe};
 use rust_store_core::permission::Context;
@@ -345,6 +347,93 @@ fn before_probe_fields_collects_on_fields_and_before_refs() {
     let fields = before_probe_fields(list);
     // onFields(status) ∪ {{before.status}} 引用 → 去重后仅 status
     assert_eq!(fields, vec!["status".to_string()]);
+}
+
+// ─── fixture golden（03 步骤 2；03 §4.2 契约） ────────────────
+
+#[test]
+fn triggers_fixture_shape() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("core 目录应有上级目录")
+        .join("fixtures")
+        .join("triggers")
+        .join("cases.json");
+    let fx: Value = serde_json::from_str(
+        &fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("读取 {} 失败: {}", path.display(), e)),
+    )
+    .unwrap_or_else(|e| panic!("解析 fixture 失败: {e}"));
+
+    let mut reg = Registry::new();
+    for s in fx["schemas"].as_array().expect("schemas 应为数组") {
+        reg.register(s).expect("fixture schema 注册应成功");
+    }
+
+    // case 0：plan_insert → triggers 每 step 含 name/onFields/when/(command|callback)
+    let c0 = &fx["cases"][0];
+    let plan = plan_insert(
+        c0["schema"].as_str().unwrap(),
+        &reg,
+        None,
+        &c0["input"],
+        c0["now"].as_i64().unwrap_or(0),
+        c0["newId"].as_str().unwrap_or(""),
+        None,
+    )
+    .expect("fixture case0 plan_insert 应成功");
+    let triggers = plan.get("triggers").expect("case0 应含 triggers 键");
+    for step in triggers.as_array().expect("triggers 应为数组") {
+        assert!(step.get("name").is_some(), "step 应含 name");
+        assert!(step.get("onFields").is_some(), "step 应含 onFields");
+        assert!(step.get("when").is_some(), "step 应含 when");
+        assert!(
+            step.get("command").is_some() || step.get("callback").is_some(),
+            "step 应含 command 或 callback"
+        );
+    }
+    assert_eq!(triggers[0]["name"], "Order.insert.decStock");
+    assert_eq!(triggers[1]["name"], "Order.insert.stockLog");
+
+    // case 1：plan_update 首次 → needsProbe（projection 含 onFields 的 status）
+    let c1 = &fx["cases"][1];
+    let first = plan_update(
+        c1["schema"].as_str().unwrap(),
+        &reg,
+        None,
+        &c1["condition"],
+        &c1["input"],
+        &json!({}),
+        c1["now"].as_i64().unwrap_or(0),
+        Probe::NotProbed,
+    )
+    .expect("fixture case1 首次 plan_update 应成功");
+    let proj = first
+        .get("needsProbe")
+        .expect("case1 首次应返回 needsProbe")
+        .get("projection")
+        .expect("探针应含 projection");
+    assert_eq!(proj["status"], json!(1), "onFields 应并入探针投影");
+
+    // 携 Found 重入 → command + triggers（fnRef 回调式 step）
+    let doc = c1["doc"].clone();
+    let plan = plan_update(
+        c1["schema"].as_str().unwrap(),
+        &reg,
+        None,
+        &c1["condition"],
+        &c1["input"],
+        &json!({}),
+        c1["now"].as_i64().unwrap_or(0),
+        Probe::Found(&doc),
+    )
+    .expect("fixture case1 重入 plan_update 应成功");
+    let triggers = plan.get("triggers").expect("case1 重入应含 triggers 键");
+    let arr = triggers.as_array().expect("triggers 应为数组");
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["name"], "Order.update.onPaid");
+    let cb = arr[0].get("callback").expect("onPaid 应为回调式 step");
+    assert_eq!(cb["fnRef"], "grantPoints");
 }
 
 #[test]
