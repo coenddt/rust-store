@@ -62,10 +62,10 @@ impl LoadConfig {
                 .and_then(|k| k.as_str())
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| format!("ERR:LOAD 连接 {name} 缺 kind"))?;
-            // kind 白名单：复用 DataSource::from_kind（mongo/mongodb/mysql/pg/postgres/postgresql/sqlite）
+            // kind 白名单：复用 DataSource::from_kind（mongo/mongodb/mysql/pg/postgres/postgresql/sqlite/local）
             DataSource::from_kind(raw_kind).map_err(|_| {
                 format!(
-                    "ERR:LOAD 连接 {name} 的 kind 非法: {raw_kind}（仅 mongodb/mysql/pg/sqlite）"
+                    "ERR:LOAD 连接 {name} 的 kind 非法: {raw_kind}（仅 mongodb/mysql/pg/sqlite/local）"
                 )
             })?;
             let databases: Vec<String> = d
@@ -139,7 +139,7 @@ impl LoadConfig {
 /// kind 非法 ⇒ `Err`（禁回落默认）。
 pub fn depth_layered(kind: &str) -> Result<u8, String> {
     let ds = DataSource::from_kind(kind)
-        .map_err(|_| format!("ERR:LOAD 连接 kind 非法: {kind}（仅 mongodb/mysql/pg/sqlite）"))?;
+        .map_err(|_| format!("ERR:LOAD 连接 kind 非法: {kind}（仅 mongodb/mysql/pg/sqlite/local）"))?;
     Ok(match ds.backend() {
         Some(Backend::Postgres) => 2,
         _ => 1,

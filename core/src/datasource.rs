@@ -28,6 +28,8 @@ pub enum DataSource {
     Mongo,
     /// 关系型 SQL 后端 —— 命令经 dialect 翻译后执行
     Sql(Backend),
+    /// 本地磁盘文档存储 —— 集合以 JSON 文件落盘，命令经 core 本地求值器执行
+    Local,
 }
 
 impl DataSource {
@@ -35,6 +37,7 @@ impl DataSource {
     pub fn from_kind(kind: &str) -> Result<DataSource, String> {
         match kind.to_lowercase().as_str() {
             "mongo" | "mongodb" => Ok(DataSource::Mongo),
+            "local" => Ok(DataSource::Local),
             other => Backend::parse(other).map(DataSource::Sql),
         }
     }
@@ -44,6 +47,7 @@ impl DataSource {
         match self {
             DataSource::Mongo => "mongo",
             DataSource::Sql(b) => b.as_str(),
+            DataSource::Local => "local",
         }
     }
 
@@ -51,11 +55,15 @@ impl DataSource {
         matches!(self, DataSource::Mongo)
     }
 
-    /// SQL 后端（Mongo 时为 `None`）
+    pub fn is_local(&self) -> bool {
+        matches!(self, DataSource::Local)
+    }
+
+    /// SQL 后端（Mongo / Local 时为 `None`）
     pub fn backend(&self) -> Option<Backend> {
         match self {
             DataSource::Sql(b) => Some(*b),
-            DataSource::Mongo => None,
+            DataSource::Mongo | DataSource::Local => None,
         }
     }
 }
@@ -173,5 +181,17 @@ mod tests {
             Some(Backend::Postgres)
         );
         assert!(DataSource::Mongo.is_mongo());
+    }
+
+    #[test]
+    fn local_kind_roundtrip() {
+        let ds = DataSource::from_kind("local").unwrap();
+        assert_eq!(ds, DataSource::Local);
+        assert_eq!(ds.as_str(), "local");
+        assert!(ds.backend().is_none());
+        assert!(ds.is_local());
+        assert!(!DataSource::Mongo.is_local());
+        // 未知 kind 仍报错
+        assert!(DataSource::from_kind("oracle").is_err());
     }
 }
