@@ -4,4 +4,5 @@
 //! 子模块随步骤 2~5 逐步接入：value / filter / pipeline / update / eval；
 //! 最终模块形态见执行文档 §4.1。
 
+pub mod filter;
 pub mod value;

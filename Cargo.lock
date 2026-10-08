@@ -1064,6 +1064,7 @@ dependencies = [
 name = "rust-store-core"
 version = "4.2.0"
 dependencies = [
+ "regex",
  "serde_json",
  "thiserror",
 ]
