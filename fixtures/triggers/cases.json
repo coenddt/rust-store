@@ -69,5 +69,22 @@
                 "fields": { "a": { "type": "string" } },
                 "triggers": { "schedule": [ { "cron": "* * * * *", "fnRef": "f",
                                               "when": { "x": "{{before.a}}" } } ] } } }
+  ],
+  "cronCases": [
+    { "cron": "* * * * *",       "at": { "y": 2026, "mo": 1, "d": 1,  "h": 12, "mi": 34 }, "expect": true },
+    { "cron": "0 2 * * *",       "at": { "y": 2026, "mo": 1, "d": 1,  "h": 2,  "mi": 0 },  "expect": true },
+    { "cron": "0 2 * * *",       "at": { "y": 2026, "mo": 1, "d": 1,  "h": 2,  "mi": 1 },  "expect": false },
+    { "cron": "*/15 * * * *",    "at": { "y": 2026, "mo": 1, "d": 1,  "h": 0,  "mi": 30 }, "expect": true },
+    { "cron": "*/15 * * * *",    "at": { "y": 2026, "mo": 1, "d": 1,  "h": 0,  "mi": 20 }, "expect": false },
+    { "cron": "1-30/10 * * * *", "at": { "y": 2026, "mo": 1, "d": 1,  "h": 8,  "mi": 11 }, "expect": true },
+    { "cron": "1-30/10 * * * *", "at": { "y": 2026, "mo": 1, "d": 1,  "h": 8,  "mi": 12 }, "expect": false },
+    { "cron": "0 9-18 * * 1-5",  "at": { "y": 2026, "mo": 1, "d": 1,  "h": 9,  "mi": 0 },  "expect": true },
+    { "cron": "0 9-18 * * 1-5",  "at": { "y": 2026, "mo": 1, "d": 3,  "h": 9,  "mi": 0 },  "expect": false },
+    { "cron": "30 4 1,15 * *",   "at": { "y": 2026, "mo": 1, "d": 15, "h": 4,  "mi": 30 }, "expect": true },
+    { "cron": "30 4 1,15 * *",   "at": { "y": 2026, "mo": 1, "d": 15, "h": 4,  "mi": 31 }, "expect": false },
+    { "cron": "0 0 * * 0",       "at": { "y": 2026, "mo": 1, "d": 4,  "h": 0,  "mi": 0 },  "expect": true },
+    { "cron": "0 0 * * 7",       "at": { "y": 2026, "mo": 1, "d": 4,  "h": 0,  "mi": 0 },  "expect": true },
+    { "cron": "0 0 1 * 1",       "at": { "y": 2026, "mo": 1, "d": 5,  "h": 0,  "mi": 0 },  "expect": true },
+    { "cron": "5 3 * * 2",       "at": { "y": 2026, "mo": 1, "d": 6,  "h": 3,  "mi": 5 },  "expect": true }
   ]
 }
