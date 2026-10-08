@@ -40,6 +40,11 @@ pub fn plan_update(
     validate_condition(condition)?;
     // §11.4（D2）：写路径条件与读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
     validate_condition_shape(schema, condition, registry.profile())?;
+    // 触发器探针字段：onFields ∪ {{before.*}} 引用（update 事件；Host 据探针结果
+    // 判定字段级命中并替换 before 占位符 —— A3/A4）
+    let extra = crate::command::triggers::before_probe_fields(
+        schema.triggers.get("update").map(|v| v.as_slice()).unwrap_or(&[]),
+    );
     if let Some(cmd) = check_write_perm(
         registry,
         schema,
@@ -48,7 +53,7 @@ pub fn plan_update(
         ERR_NO_WRITE,
         probe,
         WriteAction::Update,
-        &[],
+        &extra,
     )? {
         return Ok(json!({ "needsProbe": cmd }));
     }
@@ -73,13 +78,17 @@ pub fn plan_update(
         &update_doc,
         &find_one_and_update_options(options),
     );
+    // 触发链展开（update 事件；text2query 档下含触发器即 Err —— A9）
+    let triggers = crate::command::triggers::expand_triggers(registry, ctx, schema_name, "update")?;
+    let mut plan = json!({ "command": command });
+    // 未配置触发器时不出现 triggers 键（A2 零回归）
+    if !triggers.is_empty() {
+        plan.as_object_mut()
+            .expect("plan_update：plan 必为对象")
+            .insert("triggers".to_string(), json!(triggers));
+    }
     // 写链路附接（仅 `{command}` 分支；`{needsProbe}` 分支尚未执行写，不接线）
-    attach_write_links(
-        json!({ "command": command }),
-        registry,
-        &[schema_name],
-        registry.write_link_policy(),
-    )
+    attach_write_links(plan, registry, &[schema_name], registry.write_link_policy())
 }
 
 /// 删除计划（对应 JS `remove`）：
