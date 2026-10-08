@@ -10,8 +10,10 @@ use serde_json::{Map, Value};
 
 use crate::types::str_list;
 
-/// 事件名（insert / update / remove；其余键注册期 Err）
-pub const EVENTS: [&str; 3] = ["insert", "update", "remove"];
+/// 事件名（insert / update / remove / schedule；其余键注册期 Err）。
+/// `schedule` 仅注册期接受 —— 写链永不 expand("schedule")，由宿主定时任务插件
+/// 经 [`crate::command::triggers::expand_schedule_triggers`] 枚举执行。
+pub const EVENTS: [&str; 4] = ["insert", "update", "remove", "schedule"];
 
 /// 命令式触发支持的 op 白名单（首批不含 upsert）
 pub const OPS: [&str; 3] = ["insert", "update", "remove"];
@@ -27,6 +29,8 @@ pub struct TriggerDef {
     pub when: Option<Value>,
     /// 字段级：仅这些字段「值真的变化」才进入判定；空 = 记录级
     pub on_fields: Vec<String>,
+    /// 5 段 cron（分 时 日 月 周）；仅 `schedule` 事件必填，其余事件禁给
+    pub cron: Option<String>,
     pub body: TriggerBody,
 }
 
@@ -54,7 +58,9 @@ pub enum TriggerBody {
 ///  6. 命令式缺 `data`（`op=remove` 相反：出现 `data` 即 Err），或 `op=update`/`op=remove` 缺 `condition`；
 ///  7. `onFields` 非字符串数组，或字段未在 `fields` 中声明（`$` 前缀键除外）；
 ///  8. `when` 非对象；出现 `cascade` 键（首批不支持级联）；
-///  9. 命令式 `data` 的键未在**目标 schema** 中声明（在展开期校验，见 `command::triggers`）。
+///  9. 命令式 `data` 的键未在**目标 schema** 中声明（在展开期校验，见 `command::triggers`）；
+/// 10. `schedule` 事件缺 `cron` / cron 非法，或 body/when 出现 `{{root.`/`{{before.`
+///     （schedule 无 root/before 上下文，只允许 `{{now}}`）；非 `schedule` 事件出现 `cron` 键。
 pub fn parse_triggers(
     obj: &Map<String, Value>,
     owner: &str,
@@ -67,7 +73,7 @@ pub fn parse_triggers(
     for (event, val) in tm {
         if !EVENTS.contains(&event.as_str()) {
             return Err(format!(
-                "schema \"{owner}\" 的 triggers 事件键 \"{event}\" 非法（仅 insert/update/remove）"
+                "schema \"{owner}\" 的 triggers 事件键 \"{event}\" 非法（仅 insert/update/remove/schedule）"
             ));
         }
         let arr = val
@@ -114,6 +120,31 @@ fn parse_one(
     }
     if to.contains_key("cascade") {
         return Err(format!("{at} 不支持 cascade（首批触发链只展开一层）"));
+    }
+    // cron 键判定：schedule 必填且须合法 5 段；其余事件禁给（避免歧义）
+    let cron = match to.get("cron") {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(_) => return Err(format!("{at} 的 cron 必须是字符串")),
+        None => None,
+    };
+    if event == "schedule" {
+        let c = cron
+            .as_deref()
+            .ok_or_else(|| format!("{at} 的 schedule 触发器缺少 cron"))?;
+        validate_cron(c).map_err(|e| format!("{at} 的 cron \"{c}\" 非法：{e}"))?;
+        // schedule 无 root/before 上下文（只有 {{now}}）——出现即注册期 Err，禁运行时留空替换
+        forbid_root_before_refs(to.get("when"), &at)?;
+        if let Some(w) = to.get("args") {
+            forbid_root_before_refs(Some(w), &at)?;
+        }
+        if let Some(d) = to.get("data") {
+            forbid_root_before_refs(Some(d), &at)?;
+        }
+        if let Some(c) = to.get("condition") {
+            forbid_root_before_refs(Some(c), &at)?;
+        }
+    } else if cron.is_some() {
+        return Err(format!("{at} 的 cron 仅 schedule 事件可配"));
     }
     let name = to
         .get("name")
@@ -178,6 +209,94 @@ fn parse_one(
         name,
         when: to.get("when").cloned(),
         on_fields,
+        cron,
         body,
     })
+}
+
+/// 5 段 cron（分 时 日 月 周）校验：段内仅 `*` `,` `-` `/` 与数字；数字范围分校验；步进须为正整数。
+pub fn validate_cron(expr: &str) -> Result<(), String> {
+    let parts: Vec<&str> = expr.split_whitespace().collect();
+    if parts.len() != 5 {
+        return Err(format!(
+            "必须为 5 段（分 时 日 月 周），实为 {} 段",
+            parts.len()
+        ));
+    }
+    // (min, max)：分(0-59) 时(0-23) 日(1-31) 月(1-12) 周(0-7，0/7 均为周日)
+    let ranges = [(0i64, 59), (0, 23), (1, 31), (1, 12), (0, 7)];
+    for (seg, (lo, hi)) in parts.iter().zip(ranges) {
+        if !seg
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '*' | ',' | '-' | '/'))
+        {
+            return Err(format!("段 \"{seg}\" 含非法字符（仅 * , - / 与数字）"));
+        }
+        for piece in seg.split(',') {
+            if piece.is_empty() {
+                return Err(format!("段 \"{seg}\" 存在空列表项"));
+            }
+            let body = match piece.split_once('/') {
+                Some((b, s)) => {
+                    if s.is_empty() || !s.chars().all(|c| c.is_ascii_digit()) {
+                        return Err(format!("段 \"{seg}\" 的步进 \"{s}\" 须为正整数"));
+                    }
+                    let n: i64 = s
+                        .parse()
+                        .map_err(|_| format!("段 \"{seg}\" 的步进 \"{s}\" 越界"))?;
+                    if n <= 0 {
+                        return Err(format!("段 \"{seg}\" 的步进 \"{s}\" 须为正整数"));
+                    }
+                    b
+                }
+                None => piece,
+            };
+            if body == "*" {
+                continue;
+            }
+            let (a, b) = match body.split_once('-') {
+                Some((x, y)) => (x, y),
+                None => (body, body),
+            };
+            let parse_bound = |s: &str| -> Result<i64, String> {
+                if s.is_empty() || !s.chars().all(|c| c.is_ascii_digit()) {
+                    return Err(format!("段 \"{seg}\" 含非法形态 \"{piece}\""));
+                }
+                let n: i64 = s
+                    .parse()
+                    .map_err(|_| format!("段 \"{seg}\" 的 \"{s}\" 越界"))?;
+                if n < lo || n > hi {
+                    return Err(format!("段 \"{seg}\" 的 {n} 超出范围 {lo}-{hi}"));
+                }
+                Ok(n)
+            };
+            let x = parse_bound(a)?;
+            let y = parse_bound(b)?;
+            if x > y {
+                return Err(format!("段 \"{seg}\" 区间 \"{piece}\" 起点大于终点"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// schedule body/when 递归禁 `{{root.` / `{{before.`（只允许 `{{now}}`）
+fn forbid_root_before_refs(v: Option<&Value>, at: &str) -> Result<(), String> {
+    match v {
+        Some(Value::String(s)) => {
+            if s.contains("{{root.") || s.contains("{{before.") {
+                return Err(format!(
+                    "{at} 的 schedule 触发器不支持 {{{{root.}}}}/{{{{before.}}}} 占位符（仅 {{{{now}}}}）"
+                ));
+            }
+            Ok(())
+        }
+        Some(Value::Array(a)) => a
+            .iter()
+            .try_for_each(|x| forbid_root_before_refs(Some(x), at)),
+        Some(Value::Object(o)) => o
+            .values()
+            .try_for_each(|x| forbid_root_before_refs(Some(x), at)),
+        _ => Ok(()),
+    }
 }

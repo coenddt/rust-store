@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 use serde_json::Value;
 
 use rust_store_core::command::{
+    expand_schedule_triggers as core_expand_schedule_triggers,
     plan_archive_docs as core_plan_archive_docs, plan_insert as core_plan_insert,
     plan_insert_many as core_plan_insert_many, plan_mutation as core_plan_mutation,
     plan_remove as core_plan_remove, plan_update as core_plan_update,
@@ -262,6 +263,20 @@ impl Registry {
             py,
             with_route_override(out, ro.as_ref(), &self.core).map_err(err)?,
         )
+    }
+
+    /// 枚举全 registry 的 schedule 触发器：`[{schema, name, cron, step}]`。
+    /// 宿主定时任务插件启动时拉取，按 cron 到点执行 step（占位符仅 `{{now}}`）。
+    #[pyo3(signature = (ctx=None))]
+    fn expand_schedule_triggers(
+        &self,
+        py: Python<'_>,
+        ctx: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let context = ctx_from(ctx)?;
+        let list =
+            core_expand_schedule_triggers(&self.core, context.as_ref()).map_err(err)?;
+        to_py(py, Value::Array(list))
     }
 
     /// 归档文档命令：源文档补 `deletedAt` 后批量写入 `<collection>_deleted`

@@ -11,9 +11,11 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
-use rust_store_core::command::{before_probe_fields, plan_insert, plan_remove, plan_update, Probe};
+use rust_store_core::command::{
+    before_probe_fields, expand_schedule_triggers, plan_insert, plan_remove, plan_update, Probe,
+};
 use rust_store_core::permission::Context;
-use rust_store_core::schema::{Profile, Registry};
+use rust_store_core::schema::{validate_cron, Profile, Registry};
 
 // ─── fixtures ────────────────────────────────────────────────
 
@@ -443,6 +445,173 @@ fn plan_remove_without_triggers_has_no_key() {
     // 结构与改动前一致
     assert!(plan.get("archiveCollection").is_some());
     assert!(plan.get("deleteCommand").is_some());
+}
+
+// ─── A3/A4：schedule 触发器（cron + expand_schedule_triggers） ─
+
+#[test]
+fn schedule_event_registers_with_cron() {
+    let defn = json!({
+        "name": "Job", "collection": "jobs", "idPrefix": "j",
+        "fields": { "at": { "type": "number" } },
+        "triggers": { "schedule": [
+            { "name": "nightly", "cron": "0 2 * * *",
+              "fnRef": "onNightly", "args": { "at": "{{now}}" } }
+        ] }
+    });
+    let mut reg = Registry::new();
+    reg.register(&defn).expect("合法 schedule 触发器应注册成功");
+    let s = reg.get("Job").unwrap();
+    let list = s.triggers.get("schedule").expect("应有 schedule 列表");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].cron.as_deref(), Some("0 2 * * *"));
+}
+
+#[test]
+fn schedule_edge_cron_is_err() {
+    // errCases（fixture）之外的边界：步进 0 / 区间倒置 / 周越界
+    for (cron, want) in [
+        ("*/0 * * * *", "正整数"),
+        ("5-1 * * * *", "起点大于终点"),
+        ("* * * * 8", "超出范围"),
+    ] {
+        let defn = json!({
+            "name": "T", "collection": "t", "idPrefix": "t",
+            "fields": { "a": { "type": "string" } },
+            "triggers": { "schedule": [ { "cron": cron, "fnRef": "f" } ] }
+        });
+        let err = Registry::new()
+            .register(&defn)
+            .expect_err("非法 cron 应注册期 Err");
+        assert!(err.contains(want), "cron \"{cron}\"：{err}");
+    }
+}
+
+#[test]
+fn non_schedule_with_cron_is_err() {
+    let defn = json!({
+        "name": "T", "collection": "t", "idPrefix": "t",
+        "fields": { "a": { "type": "string" } },
+        "triggers": { "insert": [ { "cron": "* * * * *", "fnRef": "f" } ] }
+    });
+    let err = Registry::new().register(&defn).expect_err("非 schedule 带 cron 应 Err");
+    assert!(err.contains("仅 schedule 事件可配"), "{err}");
+}
+
+#[test]
+fn validate_cron_accepts_common_forms() {
+    for c in [
+        "* * * * *",
+        "0 2 * * *",
+        "*/10 * * * *",
+        "0,30 * * * *",
+        "0 0 1 1 0",
+        "30 8-18 * * 1-5",
+    ] {
+        validate_cron(c).unwrap_or_else(|e| panic!("\"{c}\" 应合法：{e}"));
+    }
+}
+
+#[test]
+fn expand_schedule_triggers_output_shape() {
+    let job = json!({
+        "name": "Job", "collection": "jobs", "idPrefix": "j",
+        "fields": { "at": { "type": "number" } },
+        "triggers": { "schedule": [
+            { "name": "nightly", "cron": "0 2 * * *",
+              "into": "Audit", "op": "insert", "data": { "note": "nightly {{now}}" } },
+            { "name": "hourly", "cron": "0 * * * *",
+              "fnRef": "onHourly", "args": { "at": "{{now}}" } }
+        ] }
+    });
+    let reg = registry_with(&[audit_schema(), job]);
+    let list = expand_schedule_triggers(&reg, None).expect("展开应成功");
+    assert_eq!(list.len(), 2);
+    // [{schema, name, cron, step}] 形状 + 声明顺序稳定
+    assert_eq!(list[0]["schema"], "Job");
+    assert_eq!(list[0]["name"], "Job.schedule.nightly");
+    assert_eq!(list[0]["cron"], "0 2 * * *");
+    let step = &list[0]["step"];
+    assert_eq!(step["name"], "Job.schedule.nightly");
+    assert!(step.get("onFields").is_some(), "step 应含 onFields");
+    assert!(step.get("when").is_some(), "step 应含 when");
+    let cmd = step.get("command").expect("命令式 step 应含 command");
+    assert_eq!(cmd["kind"], "insertOne");
+    assert_eq!(cmd["collection"], "audits");
+    assert_eq!(list[1]["name"], "Job.schedule.hourly");
+    assert_eq!(list[1]["cron"], "0 * * * *");
+    let cb = list[1]["step"]
+        .get("callback")
+        .expect("回调式 step 应含 callback");
+    assert_eq!(cb["fnRef"], "onHourly");
+    assert_eq!(cb["args"]["at"], "{{now}}");
+}
+
+#[test]
+fn expand_schedule_triggers_empty_without_schedule() {
+    let reg = registry_with(&[audit_schema(), task_schema()]);
+    let list = expand_schedule_triggers(&reg, None).expect("展开应成功");
+    assert!(list.is_empty(), "无 schedule 声明应为空数组");
+}
+
+#[test]
+fn text2query_rejects_schedule_expand() {
+    let job = json!({
+        "name": "Job", "collection": "jobs", "idPrefix": "j",
+        "fields": { "at": { "type": "number" } },
+        "triggers": { "schedule": [
+            { "cron": "0 2 * * *", "fnRef": "onNightly", "args": { "at": "{{now}}" } }
+        ] }
+    });
+    let mut reg = registry_with(&[job]);
+    reg.set_profile(Profile::Text2Query);
+    let err = expand_schedule_triggers(&reg, None)
+        .expect_err("text2query 档含 schedule 触发器应 Err");
+    assert!(err.starts_with("ERR_TEXT2QUERY:"), "{err}");
+}
+
+// ─── fixture golden：schedule 展开 + 非法 cron errCases ───────
+
+#[test]
+fn fixture_err_cases_and_schedule_expand() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("core 目录应有上级目录")
+        .join("fixtures")
+        .join("triggers")
+        .join("cases.json");
+    let fx: Value = serde_json::from_str(&fs::read_to_string(&path).expect("读 fixture 应成功"))
+        .expect("解析 fixture 应成功");
+
+    // errCases：逐项注册期 Err 且错误含期望子串（零静默）
+    for (i, ec) in fx["errCases"].as_array().expect("errCases 应为数组").iter().enumerate() {
+        let want = ec["err"].as_str().expect("errCases 项应含 err 子串");
+        let err = Registry::new()
+            .register(&ec["defn"])
+            .expect_err("errCases 项应注册期 Err");
+        assert!(err.contains(want), "errCases[{i}] 期望含 \"{want}\"，实为：{err}");
+    }
+
+    // schedule 展开：Order 的 2 条声明（命令式 expireLogs + 回调式 dailyReport）
+    let mut reg = Registry::new();
+    for s in fx["schemas"].as_array().expect("schemas 应为数组") {
+        reg.register(s).expect("fixture schema 注册应成功");
+    }
+    let list = expand_schedule_triggers(&reg, None).expect("schedule 展开应成功");
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0]["name"], "Order.schedule.expireLogs");
+    assert_eq!(list[0]["cron"], "0 2 * * *");
+    let cmd = list[0]["step"].get("command").expect("expireLogs 应为命令式");
+    assert_eq!(cmd["kind"], "deleteMany");
+    assert_eq!(cmd["collection"], "StockLog");
+    assert_eq!(cmd["filter"]["at"]["$lt"], "{{now}}");
+    assert_eq!(list[1]["name"], "Order.schedule.dailyReport");
+    assert_eq!(list[1]["cron"], "*/10 * * * *");
+    let cb = list[1]["step"]
+        .get("callback")
+        .expect("dailyReport 应为回调式");
+    assert_eq!(cb["fnRef"], "onDailyReport");
+    assert_eq!(cb["args"]["at"], "{{now}}");
 }
 
 // ─── before_probe_fields ─────────────────────────────────────

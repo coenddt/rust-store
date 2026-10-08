@@ -105,6 +105,48 @@ pub fn expand_triggers(
     Ok(out)
 }
 
+/// 枚举全 registry 的 `schedule` 触发器（宿主定时任务插件消费）。
+///
+/// 产出 `[{ "schema", "name", "cron", "step" }]`；`step` 与写链触发步骤同构
+/// （`{ name, onFields, when, command|callback }`），占位符仅 `{{now}}`
+/// （root/before 已在注册期拒，见 `schema::triggers::parse_triggers`）。
+/// 按 `registry.list()` 顺序枚举、每 schema 按声明顺序，输出稳定可对拍。
+pub fn expand_schedule_triggers(
+    registry: &Registry,
+    ctx: Option<&Context>,
+) -> Result<Vec<Value>, String> {
+    let mut out = Vec::new();
+    let mut t2q_checked = false;
+    for owner in registry.list() {
+        let schema = registry.get(&owner)?;
+        let Some(list) = schema.triggers.get("schedule") else {
+            continue;
+        };
+        if list.is_empty() {
+            continue;
+        }
+        // text2query 档：写法副作用不得由 AI 问数触发（A9），幂等防重
+        if !t2q_checked {
+            forbid_t2q(registry, "triggers")?;
+            t2q_checked = true;
+        }
+        for (i, td) in list.iter().enumerate() {
+            let step = build_trigger_step(registry, ctx, &owner, "schedule", i, td)?;
+            let name = step
+                .get("name")
+                .cloned()
+                .unwrap_or(Value::Null);
+            out.push(json!({
+                "schema": owner,
+                "name": name,
+                "cron": td.cron,
+                "step": step,
+            }));
+        }
+    }
+    Ok(out)
+}
+
 fn build_trigger_step(
     registry: &Registry,
     ctx: Option<&Context>,

@@ -134,6 +134,11 @@ export declare class Registry {
    * deleteCommand。creator 探针语义同 planUpdate。
    */
   planRemove(model: string, condition: any, ctx?: any | undefined | null, probeFound?: boolean | undefined | null, probeDoc?: any | undefined | null, routeOverride?: any | undefined | null): any
+  /**
+   * 枚举全 registry 的 schedule 触发器：`[{schema, name, cron, step}]`。
+   * 宿主定时任务插件启动时拉取，按 cron 到点执行 step（占位符仅 `{{now}}`）。
+   */
+  expandScheduleTriggers(ctx?: any | undefined | null): any
   /** 归档文档命令：源文档补 `deletedAt` 后批量写入 `<collection>_deleted` */
   planArchiveDocs(model: string, docs: Array<any>, now: number, routeOverride?: any | undefined | null): any
   /**

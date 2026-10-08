@@ -6,6 +6,7 @@ use napi_derive::napi;
 use serde_json::Value;
 
 use rust_store_core::command::{
+    expand_schedule_triggers as core_expand_schedule_triggers,
     plan_archive_docs as core_plan_archive_docs, plan_insert as core_plan_insert,
     plan_insert_many as core_plan_insert_many, plan_mutation as core_plan_mutation,
     plan_remove as core_plan_remove, plan_update as core_plan_update,
@@ -168,6 +169,15 @@ impl Registry {
         )
         .map_err(err)?;
         with_route_override(plan, &route_override, &self.core)
+    }
+
+    /// 枚举全 registry 的 schedule 触发器：`[{schema, name, cron, step}]`。
+    /// 宿主定时任务插件启动时拉取，按 cron 到点执行 step（占位符仅 `{{now}}`）。
+    #[napi]
+    pub fn expand_schedule_triggers(&self, ctx: Option<Value>) -> Result<Value> {
+        let context = ctx.as_ref().and_then(context_from_value);
+        let list = core_expand_schedule_triggers(&self.core, context.as_ref()).map_err(err)?;
+        Ok(Value::Array(list))
     }
 
     /// 归档文档命令：源文档补 `deletedAt` 后批量写入 `<collection>_deleted`

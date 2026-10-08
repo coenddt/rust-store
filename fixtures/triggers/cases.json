@@ -23,6 +23,12 @@
             "condition": { "orderId": "{{before._id}}" } },
           { "name": "onRemoved", "fnRef": "onOrderRemoved",
             "args": { "id": "{{before._id}}", "amount": "{{before.amount}}" } }
+        ],
+        "schedule": [
+          { "name": "expireLogs", "cron": "0 2 * * *", "into": "StockLog", "op": "remove",
+            "condition": { "at": { "$lt": "{{now}}" } } },
+          { "name": "dailyReport", "cron": "*/10 * * * *", "fnRef": "onDailyReport",
+            "args": { "at": "{{now}}" } }
         ]
       }
     },
@@ -35,5 +41,33 @@
     { "fn": "planUpdate", "schema": "Order", "now": 1730000000000,
       "condition": { "_id": "o_fix1" }, "input": { "status": "paid" },
       "found": true, "doc": { "_id": "o_fix1", "status": "new" } }
+  ],
+  "errCases": [
+    { "err": "缺少 cron",
+      "defn": { "name": "E1", "collection": "e1", "idPrefix": "e",
+                "fields": { "a": { "type": "string" } },
+                "triggers": { "schedule": [ { "fnRef": "f" } ] } } },
+    { "err": "必须为 5 段",
+      "defn": { "name": "E2", "collection": "e2", "idPrefix": "e",
+                "fields": { "a": { "type": "string" } },
+                "triggers": { "schedule": [ { "cron": "* * * *", "fnRef": "f" } ] } } },
+    { "err": "超出范围",
+      "defn": { "name": "E3", "collection": "e3", "idPrefix": "e",
+                "fields": { "a": { "type": "string" } },
+                "triggers": { "schedule": [ { "cron": "99 * * * *", "fnRef": "f" } ] } } },
+    { "err": "非法字符",
+      "defn": { "name": "E4", "collection": "e4", "idPrefix": "e",
+                "fields": { "a": { "type": "string" } },
+                "triggers": { "schedule": [ { "cron": "a * * * *", "fnRef": "f" } ] } } },
+    { "err": "不支持",
+      "defn": { "name": "E5", "collection": "e5", "idPrefix": "e",
+                "fields": { "a": { "type": "string" } },
+                "triggers": { "schedule": [ { "cron": "* * * * *", "fnRef": "f",
+                                              "args": { "x": "{{root._id}}" } } ] } } },
+    { "err": "不支持",
+      "defn": { "name": "E6", "collection": "e6", "idPrefix": "e",
+                "fields": { "a": { "type": "string" } },
+                "triggers": { "schedule": [ { "cron": "* * * * *", "fnRef": "f",
+                                              "when": { "x": "{{before.a}}" } } ] } } }
   ]
 }
