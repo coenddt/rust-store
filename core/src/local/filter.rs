@@ -15,22 +15,34 @@ use regex::Regex;
 use serde_json::{Map, Value};
 
 use crate::bson;
-use crate::local::value::{compare, matches_value, resolve_path_candidates};
+use crate::local::value::{compare, eval_expr, matches_value, resolve_path_candidates};
 
 // ---------------------------------------------------------------------------
 // 顶层入口
 // ---------------------------------------------------------------------------
 
-/// 文档是否命中过滤条件。
+/// 文档是否命中过滤条件（无变量上下文）。
 ///
 /// - `Value::Null` / 空对象 `{}` → 匹配全部（与 mongo 路径「null 表示无过滤」一致）；
-/// - 对象 → 逐键：逻辑组（`$and` / `$or` / `$nor`）与字段条件**统一 AND**；
+/// - 对象 → 逐键：逻辑组（`$and` / `$or` / `$nor`）、`$expr` 与字段条件**统一 AND**；
 /// - 其余类型（字符串 / 数字 / 布尔 / 数组）→ `Err`（拒绝静默按「无过滤」处理，
 ///   对齐 SQL 侧 `dialect/filter` 的 B-10-1 精神）。
 pub fn matches(doc: &Value, filter: &Value) -> Result<bool, String> {
+    matches_with_vars(doc, filter, &Map::new())
+}
+
+/// 带变量上下文的过滤求值：`vars` 供 `$lookup` 子管道 `$match.$expr` 里的 `$$var` 引用。
+///
+/// 语义与 [`matches`] 完全一致，仅额外注入 `$$let` 变量（core 的关系 `$lookup` 子管道
+/// 以 `{$expr: {$eq: ["$fk", "$$rel_x"]}}` 形态做外键匹配，故本层必须支持 `$expr`）。
+pub fn matches_with_vars(
+    doc: &Value,
+    filter: &Value,
+    vars: &Map<String, Value>,
+) -> Result<bool, String> {
     match filter {
         Value::Null => Ok(true),
-        Value::Object(map) => matches_object(doc, map),
+        Value::Object(map) => matches_object(doc, map, vars),
         other => Err(format!(
             "filter 必须是对象或 null，收到 {}（拒绝静默按「无过滤」处理）",
             type_name(other)
@@ -38,22 +50,41 @@ pub fn matches(doc: &Value, filter: &Value) -> Result<bool, String> {
     }
 }
 
-/// 对象 filter：先逻辑组（固定顺序 `$and → $or → $nor`，确定性），再字段条件；任一为假即短路。
-fn matches_object(doc: &Value, map: &Map<String, Value>) -> Result<bool, String> {
+/// 对象 filter：先逻辑组（固定顺序 `$and → $or → $nor`）与 `$expr`，再字段条件；任一为假即短路。
+fn matches_object(
+    doc: &Value,
+    map: &Map<String, Value>,
+    vars: &Map<String, Value>,
+) -> Result<bool, String> {
     for op in ["$and", "$or", "$nor"] {
         if let Some(v) = map.get(op) {
-            if !logical_hit(op, v, doc)? {
+            if !logical_hit(op, v, doc, vars)? {
                 return Ok(false);
+            }
+        }
+    }
+    if let Some(expr) = map.get("$expr") {
+        match eval_expr(expr, doc, vars)? {
+            Value::Bool(b) => {
+                if !b {
+                    return Ok(false);
+                }
+            }
+            other => {
+                return Err(format!(
+                    "$expr 必须求值为布尔，收到 {}（拒绝静默按真值处理）",
+                    type_name(&other)
+                ));
             }
         }
     }
     for (field, cond) in map {
         if let Some(op) = field.strip_prefix('$') {
-            if matches!(op, "and" | "or" | "nor") {
+            if matches!(op, "and" | "or" | "nor" | "expr") {
                 continue;
             }
             return Err(format!(
-                "不支持的过滤操作符: ${op}（本地求值器仅支持顶层 $and/$or/$nor，拒绝静默丢弃）"
+                "不支持的过滤操作符: ${op}（本地求值器仅支持顶层 $and/$or/$nor/$expr，拒绝静默丢弃）"
             ));
         }
         if !field_matches(doc, field, cond)? {
@@ -67,12 +98,17 @@ fn matches_object(doc: &Value, map: &Map<String, Value>) -> Result<bool, String>
 ///
 /// 空数组行为对齐 Mongo 定义：`$and: []` → `true`、`$or: []` → `false`；
 /// `$nor: []` → `Err`（对齐 `dialect/filter/mod.rs` 第 179 行既有约定）。
-fn logical_hit(op: &str, v: &Value, doc: &Value) -> Result<bool, String> {
+fn logical_hit(
+    op: &str,
+    v: &Value,
+    doc: &Value,
+    vars: &Map<String, Value>,
+) -> Result<bool, String> {
     let arr = v.as_array().ok_or_else(|| format!("{op} 需要数组"))?;
     match op {
         "$and" => {
             for f in arr {
-                if !matches(doc, f)? {
+                if !matches_with_vars(doc, f, vars)? {
                     return Ok(false);
                 }
             }
@@ -80,7 +116,7 @@ fn logical_hit(op: &str, v: &Value, doc: &Value) -> Result<bool, String> {
         }
         "$or" => {
             for f in arr {
-                if matches(doc, f)? {
+                if matches_with_vars(doc, f, vars)? {
                     return Ok(true);
                 }
             }
@@ -91,7 +127,7 @@ fn logical_hit(op: &str, v: &Value, doc: &Value) -> Result<bool, String> {
                 return Err("$nor 需要非空数组".to_string());
             }
             for f in arr {
-                if matches(doc, f)? {
+                if matches_with_vars(doc, f, vars)? {
                     return Ok(false);
                 }
             }

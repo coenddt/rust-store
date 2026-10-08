@@ -189,21 +189,29 @@ fn compare_numbers(a: &Value, b: &Value) -> Ordering {
         .unwrap_or(Ordering::Equal)
 }
 
-/// 数字的数值形式（普通 JSON number / 扩展 `$numberLong` / `$numberDecimal` 统一为 f64）。
-fn numeric_value(v: &Value) -> f64 {
+/// 数字取值（普通 JSON number / 扩展 `$numberLong` / `$numberDecimal` 统一为 f64）；非数字 → `None`。
+///
+/// 与 [`numeric_value`] 的差别：本函数对非数字返回 `None`（供聚合累积器判定「是否忽略该值」），
+/// 后者返回 `0.0`（供比较排序，任何值都可参与）。
+pub fn as_number(v: &Value) -> Option<f64> {
     match v {
-        Value::Number(n) => n.as_f64().unwrap_or(0.0),
+        Value::Number(n) => n.as_f64(),
         Value::Object(o) => {
             if let Some(s) = o.get("$numberLong").and_then(Value::as_str) {
-                s.parse::<f64>().unwrap_or(0.0)
-            } else if let Some(s) = o.get("$numberDecimal").and_then(Value::as_str) {
-                s.parse::<f64>().unwrap_or(0.0)
+                s.parse::<f64>().ok()
             } else {
-                0.0
+                o.get("$numberDecimal")
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.parse::<f64>().ok())
             }
         }
-        _ => 0.0,
+        _ => None,
     }
+}
+
+/// 数字的数值形式（普通 JSON number / 扩展 `$numberLong` / `$numberDecimal` 统一为 f64）。
+fn numeric_value(v: &Value) -> f64 {
+    as_number(v).unwrap_or(0.0)
 }
 
 fn bool_rank(v: &Value) -> u8 {
@@ -386,8 +394,51 @@ fn eval_operator(
                 Ok(v)
             }
         }
+        // `$cond`：core 的 `$lookup.let`（数组外键守卫）与 `$group` 的 `$count` 字段形态
+        // 均发射该算子，故必须支持；数组形态 `[if, then, else]` 与对象形态 `{if,then,else}` 均可。
+        "cond" => {
+            let (c, t, e) = cond_operands(arg)?;
+            if truthy(&eval_expr(c, doc, vars)?) {
+                eval_expr(t, doc, vars)
+            } else {
+                eval_expr(e, doc, vars)
+            }
+        }
+        "isArray" => Ok(Value::Bool(eval_expr(arg, doc, vars)?.is_array())),
+        // `$in`：core 数组外键关系发射 `{$expr: {$in: ["$fk", "$$let"]}}`
+        "in" => {
+            let (needle, hay) = two_operands("$in", arg)?;
+            let needle = eval_expr(needle, doc, vars)?;
+            let hay = eval_expr(hay, doc, vars)?;
+            let items = hay
+                .as_array()
+                .ok_or_else(|| "$in 的第二个操作数必须是数组".to_string())?;
+            let hit = match &needle {
+                Value::Array(a) => a
+                    .iter()
+                    .any(|n| items.iter().any(|c| values_equal(n, c))),
+                other => items.iter().any(|c| values_equal(other, c)),
+            };
+            Ok(Value::Bool(hit))
+        }
+        // `$arrayElemAt`：core 的全表单组空集护栏（`$facet` + `$replaceRoot`）使用
+        "arrayElemAt" => {
+            let (arr_e, idx_e) = two_operands("$arrayElemAt", arg)?;
+            let arr = eval_expr(arr_e, doc, vars)?;
+            let idx_v = eval_expr(idx_e, doc, vars)?;
+            let idx = idx_v
+                .as_i64()
+                .ok_or_else(|| "$arrayElemAt 的下标必须是整数".to_string())?;
+            let items = arr
+                .as_array()
+                .ok_or_else(|| "$arrayElemAt 的第一个操作数必须是数组".to_string())?;
+            let len = items.len() as i64;
+            let i = if idx < 0 { len + idx } else { idx };
+            // 越界 → `null`（Mongo 为 missing，在 `$ifNull` 兜底语境下等价）
+            Ok(items.get(i as usize).cloned().unwrap_or(Value::Null))
+        }
         other => Err(format!(
-            "不支持的聚合表达式算子: ${other}（本地求值器仅支持 $eq/$and/$or/$ifNull，拒绝静默）"
+            "不支持的聚合表达式算子: ${other}（本地求值器仅支持 $eq/$and/$or/$ifNull/$cond/$isArray/$in/$arrayElemAt，拒绝静默）"
         )),
     }
 }
@@ -406,6 +457,24 @@ fn array_operands<'a>(name: &str, arg: &'a Value) -> Result<&'a [Value], String>
     arg.as_array()
         .map(Vec::as_slice)
         .ok_or_else(|| format!("{name} 需要操作数数组"))
+}
+
+/// `$cond` 操作数：数组形态 `[if, then, else]` 或对象形态 `{if, then, else}`。
+fn cond_operands(arg: &Value) -> Result<(&Value, &Value, &Value), String> {
+    if let Some(a) = arg.as_array() {
+        if a.len() != 3 {
+            return Err(format!("$cond 数组形态需要 3 个操作数，收到 {}", a.len()));
+        }
+        return Ok((&a[0], &a[1], &a[2]));
+    }
+    if let Some(o) = arg.as_object() {
+        let pick = |k: &str| {
+            o.get(k)
+                .ok_or_else(|| format!("$cond 对象形态缺少 \"{k}\""))
+        };
+        return Ok((pick("if")?, pick("then")?, pick("else")?));
+    }
+    Err("$cond 需要数组 [if, then, else] 或对象 {if, then, else}".to_string())
 }
 
 /// Mongo 聚合布尔真值：`false` / `null` / `0` 为假，其余为真。
@@ -499,7 +568,7 @@ pub fn apply_projection(doc: &Value, projection: &Value) -> Result<Value, String
     } else {
         let mut out = doc.clone();
         for path in &exclude_paths {
-            remove_path(&mut out, &segments(path));
+            remove_segments(&mut out, &segments(path));
         }
         if id == Some(false) {
             if let Value::Object(m) = &mut out {
@@ -552,8 +621,15 @@ fn project_included(doc: &Value, segs: &[&str]) -> Option<Value> {
     }
 }
 
+/// 包含式取字段（点号路径，嵌套还原）；路径不存在 → `None`。
+///
+/// 供聚合投影（`$project` 含表达式值）按路径并入输出文档使用。
+pub fn project_include(doc: &Value, path: &str) -> Option<Value> {
+    project_included(doc, &segments(path))
+}
+
 /// 把投影子树并入输出文档；同名对象递归合并，其余覆盖。
-fn merge_into(dst: &mut Map<String, Value>, src: Value) {
+pub fn merge_into(dst: &mut Map<String, Value>, src: Value) {
     let Value::Object(src) = src else {
         return;
     };
@@ -570,7 +646,35 @@ fn merge_into(dst: &mut Map<String, Value>, src: Value) {
 }
 
 /// 按段做排除投影（原地）；遇数组对每个元素继续。
-fn remove_path(doc: &mut Value, segs: &[&str]) {
+pub fn remove_path(doc: &mut Value, path: &str) {
+    remove_segments(doc, &segments(path));
+}
+
+/// 按段路径写入值（`$addFields` / `$unwind` 用）：中间层不存在或非对象时补建为对象。
+pub fn set_path(doc: &mut Value, path: &str, val: Value) {
+    set_segments(doc, &segments(path), val);
+}
+
+fn set_segments(cur: &mut Value, segs: &[&str], val: Value) {
+    if segs.is_empty() {
+        *cur = val;
+        return;
+    }
+    if !cur.is_object() {
+        *cur = Value::Object(Map::new());
+    }
+    let Value::Object(o) = cur else { return };
+    if segs.len() == 1 {
+        o.insert(segs[0].to_string(), val);
+        return;
+    }
+    let entry = o
+        .entry(segs[0].to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    set_segments(entry, &segs[1..], val);
+}
+
+fn remove_segments(doc: &mut Value, segs: &[&str]) {
     if segs.is_empty() {
         return;
     }
@@ -579,12 +683,12 @@ fn remove_path(doc: &mut Value, segs: &[&str]) {
             if segs.len() == 1 {
                 o.remove(segs[0]);
             } else if let Some(v) = o.get_mut(segs[0]) {
-                remove_path(v, &segs[1..]);
+                remove_segments(v, &segs[1..]);
             }
         }
         Value::Array(a) => {
             for el in a {
-                remove_path(el, segs);
+                remove_segments(el, segs);
             }
         }
         _ => {}

@@ -5,4 +5,5 @@
 //! 最终模块形态见执行文档 §4.1。
 
 pub mod filter;
+pub mod pipeline;
 pub mod value;
