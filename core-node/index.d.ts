@@ -81,6 +81,8 @@ export declare class Registry {
   planLoad(config: any, files: any): any
   /** 带定位批量注册（D13 批次唯一）；`items` = `[{defn, location}]`，`ctx` 缺省 = 无上下文。 */
   registerBatch(items: any, ctx?: any | undefined | null): void
+  /** 本地磁盘数据源纯求值（宿主提供集合快照 → 返回 `{result, changed, collections}`） */
+  localEval(collections: any, command: any): any
   canRead(model: string, ctx?: any | undefined | null): boolean
   canWrite(model: string, ctx?: any | undefined | null): boolean
   shouldInjectOwner(model: string, ctx?: any | undefined | null): boolean
