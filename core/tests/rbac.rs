@@ -391,6 +391,84 @@ fn static_condition_merges_with_rbac_row_condition() {
     );
 }
 
+// ─── N2：`$group` 关系路径 `$lookup` 与普通关系下钻同源注入行条件 ──
+
+/// 关系目标 schema：静态 `read: ["creator"]`（owner-only）
+fn author_owner_schema() -> Value {
+    json!({
+        "name": "Author",
+        "collection": "authors",
+        "timestamps": false,
+        "fields": { "name": { "type": "string" } },
+        "relations": {},
+        "read": ["creator"],
+    })
+}
+
+fn post_with_author_schema() -> Value {
+    json!({
+        "name": "Post",
+        "collection": "posts",
+        "timestamps": false,
+        "fields": { "title": { "type": "string" }, "authorId": { "type": "string" } },
+        "relations": {
+            "author": { "model": "Author", "type": "one", "localField": "authorId", "foreignField": "_id" }
+        },
+    })
+}
+
+/// 取 aggregate 形态命令中 `as == rel` 的 `$lookup` 内层 `$match`
+fn lookup_inner_match(cmd: &Value, rel: &str) -> Option<Value> {
+    cmd.get("pipeline")?.as_array()?.iter().find_map(|s| {
+        let lk = s.get("$lookup")?;
+        if lk.get("as").and_then(|v| v.as_str()) != Some(rel) {
+            return None;
+        }
+        lk.get("pipeline")?
+            .as_array()?
+            .iter()
+            .find_map(|x| x.get("$match").cloned())
+    })
+}
+
+/// N2：同一 ownerOnly 模型下，「普通关系下钻」看不到他人行，则「`$group` by 关系路径」
+/// 也必须注入同一行条件——否则可借 `$group`/`$count` 把他人行纳入统计（行级权限旁路）。
+#[test]
+fn group_relation_path_injects_same_row_condition_as_relation_lookup() {
+    let reg = registry_with(&[post_with_author_schema(), author_owner_schema()]);
+    let r = ctx_of("u1", &["member"]);
+
+    // ① 普通关系下钻：author 的 `$lookup` 内层 `$match` 必含 owner 行条件
+    let rel_plan = plan_query(
+        "Post{ title, author{ name } }",
+        &params_of(json!({})),
+        &reg,
+        Some(&r),
+    )
+    .expect("普通关系查询应放行");
+    let rel_match =
+        lookup_inner_match(&rel_plan.commands[0], "author").expect("应有 author 的 $lookup");
+    assert!(
+        rel_match.to_string().contains("createdBy"),
+        "普通关系下钻应注入 author 行条件: {rel_match}"
+    );
+
+    // ② $group by 关系路径：同源注入同一行条件（N2 修复前此处缺失）
+    let group_plan = plan_query(
+        "Post($group:@g0){ author.name, n }",
+        &params_of(json!({ "g0": { "by": ["author.name"], "agg": { "n": { "$count": "*" } } } })),
+        &reg,
+        Some(&r),
+    )
+    .expect("$group 关系路径应放行");
+    let group_match =
+        lookup_inner_match(&group_plan.commands[0], "author").expect("应有 author 的 $lookup");
+    assert!(
+        group_match.to_string().contains("createdBy"),
+        "$group 关系路径 $lookup 应注入与普通关系下钻同源的行条件: {group_match}"
+    );
+}
+
 #[test]
 fn count_injects_owner_row_condition() {
     let mut reg = registry_with(&[post_schema()]);

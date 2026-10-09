@@ -297,6 +297,7 @@ pub fn build_stages(
     limit: Option<&Value>,
     schema: &Schema,
     registry: &Registry,
+    ctx: Option<&Context>,
 ) -> Result<Vec<Value>, String> {
     if !relations_empty {
         return Err(
@@ -375,14 +376,20 @@ pub fn build_stages(
             let mut inner = Map::new();
             inner.insert("from".to_string(), json!(rel_schema.collection));
             inner.insert("let".to_string(), Value::Object(let_map));
-            // 外键匹配：one 关系 local 是标量，`$$g_<head>` 直接等值
-            inner.insert(
-                "pipeline".to_string(),
-                json!([{ "$match": { "$expr": { "$eq": [
-                    format!("${}", foreign),
-                    format!("$$g_{}", head)
-                ] } } }]),
-            );
+            // 外键匹配：one 关系 local 是标量，`$$g_<head>` 直接等值；
+            // 关系目标行条件（静态 owner ∨ RBAC）与 `pipeline/lookup.rs` 同源注入（N2 补漏）——
+            // 复用 `push_row_conditions`，勿复制实现（复制即再造双端漂移）。
+            let mut ands: Vec<Value> = vec![json!({ "$expr": { "$eq": [
+                format!("${}", foreign),
+                format!("$$g_{}", head)
+            ] } })];
+            super::lookup::push_row_conditions(&mut ands, rel_schema, registry, ctx);
+            let match_doc = if ands.len() == 1 {
+                ands.remove(0)
+            } else {
+                json!({ "$and": ands })
+            };
+            inner.insert("pipeline".to_string(), json!([{ "$match": match_doc }]));
             inner.insert("as".to_string(), json!(head));
             stages.push(json!({ "$lookup": Value::Object(inner) }));
             stages.push(json!({

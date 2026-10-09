@@ -211,6 +211,7 @@ pub fn build_pipeline(
             non_nullish(root_limit.as_ref()),
             schema,
             registry,
+            ctx,
         )?;
         return Ok(Value::Array(stages));
     }
