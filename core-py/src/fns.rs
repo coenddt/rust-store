@@ -15,7 +15,7 @@ use crate::convert::{json_to_py, py_to_json};
 
 pub(crate) struct PyFnBridge<'a> {
     pub(crate) py: Python<'a>,
-    pub(crate) fns: &'a HashMap<String, Py<PyAny>>,
+    pub(crate) fns: std::sync::MutexGuard<'a, HashMap<String, Py<PyAny>>>,
 }
 
 impl FnRegistry for PyFnBridge<'_> {

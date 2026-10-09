@@ -60,7 +60,7 @@ impl Registry {
         };
         let bridge = PyFnBridge {
             py,
-            fns: &self.sync_fns,
+            fns: self.sync_fns.lock().unwrap(),
         };
         let out = core_plan_insert(
             &model,
@@ -108,7 +108,7 @@ impl Registry {
         };
         let bridge = PyFnBridge {
             py,
-            fns: &self.sync_fns,
+            fns: self.sync_fns.lock().unwrap(),
         };
         let out = core_plan_insert_many(
             &model,
@@ -404,7 +404,7 @@ impl Registry {
         let doc = py_to_json(doc)?;
         let bridge = PyFnBridge {
             py,
-            fns: &self.sync_fns,
+            fns: self.sync_fns.lock().unwrap(),
         };
         let out = core_apply_defaults(&doc, schema, Some(&bridge)).map_err(err)?;
         to_py(py, out)

@@ -34,7 +34,7 @@ impl Registry {
         let context = ctx_from(ctx)?;
         let bridge = PyFnBridge {
             py,
-            fns: &self.sync_fns,
+            fns: self.sync_fns.lock().unwrap(),
         };
         let mut doc = py_to_json(doc)?;
 
@@ -115,7 +115,7 @@ impl Registry {
         let context = ctx_from(ctx)?;
         let bridge = PyFnBridge {
             py,
-            fns: &self.sync_fns,
+            fns: self.sync_fns.lock().unwrap(),
         };
         let mut items = match py_to_json(items)? {
             Value::Array(a) => a,

@@ -19,6 +19,7 @@
 //! `multiple-pymethods` feature）；通用转换见 [`convert`]，回调适配见 [`fns`]。
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use pyo3::prelude::*;
 
@@ -35,7 +36,7 @@ mod methods;
 #[pyclass]
 pub struct Registry {
     core: CoreRegistry,
-    sync_fns: HashMap<String, Py<PyAny>>,
+    sync_fns: Arc<Mutex<HashMap<String, Py<PyAny>>>>,
 }
 
 #[pymethods]
@@ -44,7 +45,7 @@ impl Registry {
     fn new() -> Self {
         Self {
             core: CoreRegistry::new(),
-            sync_fns: HashMap::new(),
+            sync_fns: Default::default(),
         }
     }
 
@@ -68,11 +69,26 @@ impl Registry {
 
     /// 注册同步计算列回调（schema 里 `fn: true` 的 `fnRef`，缺省为计算列名）
     fn set_fn(&mut self, fn_ref: String, callback: Py<PyAny>) {
-        self.sync_fns.insert(fn_ref, callback);
+        self.sync_fns.lock().unwrap().insert(fn_ref, callback);
     }
 
     fn clear_fns(&mut self) {
-        self.sync_fns.clear();
+        self.sync_fns.lock().unwrap().clear();
+    }
+
+    /// 派生策略视图（与 core-node 同构；策略解析唯一在 core `from_value`）。
+    /// 视图上注册/清空 schema 抛 `ERR_POLICY_VIEW_READONLY:`（守卫在 core）。
+    fn with_policy(&self, py: Python<'_>, policy: &Bound<'_, PyAny>) -> PyResult<Py<Registry>> {
+        let overrides =
+            rust_store_core::schema::PolicyOverrides::from_value(&py_to_json(policy)?)
+                .map_err(|e| err(e.message().to_owned()))?;
+        Py::new(
+            py,
+            Registry {
+                core: self.core.with_policy(&overrides),
+                sync_fns: Arc::clone(&self.sync_fns),
+            },
+        )
     }
 
     /// 开关「上下文强制」（默认关闭 = fail-open，保持 JS parity）。
