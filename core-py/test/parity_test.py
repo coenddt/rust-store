@@ -811,3 +811,43 @@ def test_invalid_gql_and_unknown_model_raise():
         reg.plan_query("Ghost{_id}", {}, None)
     with pytest.raises(RuntimeError, match="位置 0"):
         reg.build_pipeline("@@@", {}, None)
+
+
+# ─── local（本地磁盘数据源求值，py ↔ node ↔ MongoDB 驱动语义） ──
+#
+# 回放 `fixtures/local/{cases,expected}.json`：核心输入来自 core 规划产出的
+# Mongo 命令（形状与 mongo 路径同），黄金基准按 MongoDB 驱动语义手写。
+# 与 core-node/test/parity.test.js::'core-node parity: local' 共用同一 fixtures ——
+# 两侧都必须与黄金基准逐条深比较，从而保证 py 与 node 绑定输出逐字节相同。
+
+
+def test_local():
+    cases = load("local/cases.json")
+    goldens = load("local/expected.json")
+    assert len(cases) == len(goldens), "输入与黄金基准用例数不一致"
+
+    reg = Registry()
+    failures = []
+
+    for fx, g in zip(cases, goldens):
+        assert fx["name"] == g["name"], "用例顺序不一致"
+
+        if fx.get("expect_error"):
+            with pytest.raises(RuntimeError):
+                reg.local_eval(fx["collections"], fx["command"])
+            continue
+
+        try:
+            actual = reg.local_eval(fx["collections"], fx["command"])
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"[{fx['name']}] 绑定报错: {e}")
+            continue
+
+        want = {
+            "result": g.get("result"),
+            "changed": g["changed"],
+            "collections": g["collections"],
+        }
+        expect_deep_equal(failures, fx["name"], actual, want)
+
+    assert not failures, f"local 对拍失败 {len(failures)} 项:\n" + "\n".join(failures)

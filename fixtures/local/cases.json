@@ -1,0 +1,157 @@
+[
+  {
+    "name": "local-find-equality",
+    "collections": {
+      "users": [
+        { "_id": "u1", "name": "Ada", "age": 36 },
+        { "_id": "u2", "name": "Bob", "age": 20 }
+      ]
+    },
+    "command": { "kind": "find", "collection": "users", "filter": { "name": "Ada" } }
+  },
+  {
+    "name": "local-find-null-tri-state",
+    "collections": {
+      "docs": [
+        { "_id": 1, "x": null },
+        { "_id": 2 }
+      ]
+    },
+    "command": { "kind": "find", "collection": "docs", "filter": { "x": null } }
+  },
+  {
+    "name": "local-find-projection-include-exclude",
+    "collections": {
+      "users": [{ "_id": "u1", "name": "Ada", "age": 36 }]
+    },
+    "command": {
+      "kind": "find",
+      "collection": "users",
+      "filter": null,
+      "projection": { "name": 1, "_id": 0 }
+    }
+  },
+  {
+    "name": "local-count-gte",
+    "collections": {
+      "users": [
+        { "_id": "u1", "age": 36 },
+        { "_id": "u2", "age": 20 }
+      ]
+    },
+    "command": { "kind": "countDocuments", "collection": "users", "filter": { "age": { "$gte": 20 } } }
+  },
+  {
+    "name": "local-findOne-miss-null",
+    "collections": { "users": [{ "_id": "u1" }] },
+    "command": { "kind": "findOne", "collection": "users", "filter": { "_id": "nope" } }
+  },
+  {
+    "name": "local-aggregate-relation-lookup",
+    "collections": {
+      "probeUsers": [
+        { "_id": "pu1", "name": "Ada" },
+        { "_id": "pu2", "name": "Bob" }
+      ],
+      "probePosts": [
+        { "_id": "pp1", "title": "P1", "userId": "pu1" },
+        { "_id": "pp2", "title": "P2", "userId": "pu2" }
+      ]
+    },
+    "command": {
+      "kind": "aggregate",
+      "collection": "probePosts",
+      "pipeline": [
+        { "$match": {} },
+        {
+          "$lookup": {
+            "as": "author",
+            "from": "probeUsers",
+            "let": { "rel_userId": { "$ifNull": ["$userId", null] } },
+            "pipeline": [
+              { "$match": { "$expr": { "$eq": ["$_id", "$$rel_userId"] } } },
+              { "$project": { "_id": 1, "name": 1 } }
+            ]
+          }
+        },
+        { "$unwind": { "path": "$author", "preserveNullAndEmptyArrays": true } },
+        { "$project": { "_id": 1, "author": 1, "title": 1 } }
+      ]
+    }
+  },
+  {
+    "name": "local-aggregate-group-sum",
+    "collections": {
+      "users": [
+        { "_id": "u1", "age": 36 },
+        { "_id": "u2", "age": 20 }
+      ]
+    },
+    "command": {
+      "kind": "aggregate",
+      "collection": "users",
+      "pipeline": [{ "$group": { "_id": null, "total": { "$sum": "$age" } } }]
+    }
+  },
+  {
+    "name": "local-aggregate-sort-skip-limit",
+    "collections": {
+      "users": [
+        { "_id": "u1", "age": 36 },
+        { "_id": "u2", "age": 20 },
+        { "_id": "u3", "age": 28 }
+      ]
+    },
+    "command": {
+      "kind": "aggregate",
+      "collection": "users",
+      "pipeline": [{ "$sort": { "age": 1 } }, { "$skip": 1 }, { "$limit": 1 }]
+    }
+  },
+  {
+    "name": "local-insertOne",
+    "collections": { "users": [] },
+    "command": { "kind": "insertOne", "collection": "users", "doc": { "_id": "u9", "name": "Zoe" } }
+  },
+  {
+    "name": "local-updateMany-set",
+    "collections": {
+      "posts": [
+        { "_id": "p1", "userId": "u1" },
+        { "_id": "p2", "userId": "u2" }
+      ]
+    },
+    "command": {
+      "kind": "updateMany",
+      "collection": "posts",
+      "filter": { "userId": "u1" },
+      "update": { "$set": { "seen": true } }
+    }
+  },
+  {
+    "name": "local-deleteMany",
+    "collections": {
+      "posts": [
+        { "_id": "p1" },
+        { "_id": "p2" }
+      ]
+    },
+    "command": { "kind": "deleteMany", "collection": "posts", "filter": { "_id": "p1" } }
+  },
+  {
+    "name": "local-insertMany-upsert-by-id-archive",
+    "collections": { "usersDeleted": [] },
+    "command": {
+      "kind": "insertMany",
+      "collection": "usersDeleted",
+      "upsertById": true,
+      "docs": [{ "_id": "u1", "deletedAt": 100 }]
+    }
+  },
+  {
+    "name": "local-error-unknown-command",
+    "collections": {},
+    "command": { "kind": "drop", "collection": "users" },
+    "expect_error": true
+  }
+]

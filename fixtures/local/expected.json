@@ -1,0 +1,123 @@
+[
+  {
+    "name": "local-find-equality",
+    "result": [{ "_id": "u1", "name": "Ada", "age": 36 }],
+    "changed": [],
+    "collections": {
+      "users": [
+        { "_id": "u1", "name": "Ada", "age": 36 },
+        { "_id": "u2", "name": "Bob", "age": 20 }
+      ]
+    }
+  },
+  {
+    "name": "local-find-null-tri-state",
+    "result": [{ "_id": 1, "x": null }],
+    "changed": [],
+    "collections": {
+      "docs": [
+        { "_id": 1, "x": null },
+        { "_id": 2 }
+      ]
+    }
+  },
+  {
+    "name": "local-find-projection-include-exclude",
+    "result": [{ "name": "Ada" }],
+    "changed": [],
+    "collections": {
+      "users": [{ "_id": "u1", "name": "Ada", "age": 36 }]
+    }
+  },
+  {
+    "name": "local-count-gte",
+    "result": 2,
+    "changed": [],
+    "collections": {
+      "users": [
+        { "_id": "u1", "age": 36 },
+        { "_id": "u2", "age": 20 }
+      ]
+    }
+  },
+  {
+    "name": "local-findOne-miss-null",
+    "result": null,
+    "changed": [],
+    "collections": { "users": [{ "_id": "u1" }] }
+  },
+  {
+    "name": "local-aggregate-relation-lookup",
+    "result": [
+      { "_id": "pp1", "author": { "_id": "pu1", "name": "Ada" }, "title": "P1" },
+      { "_id": "pp2", "author": { "_id": "pu2", "name": "Bob" }, "title": "P2" }
+    ],
+    "changed": [],
+    "collections": {
+      "probeUsers": [
+        { "_id": "pu1", "name": "Ada" },
+        { "_id": "pu2", "name": "Bob" }
+      ],
+      "probePosts": [
+        { "_id": "pp1", "title": "P1", "userId": "pu1" },
+        { "_id": "pp2", "title": "P2", "userId": "pu2" }
+      ]
+    }
+  },
+  {
+    "name": "local-aggregate-group-sum",
+    "result": [{ "_id": null, "total": 56 }],
+    "changed": [],
+    "collections": {
+      "users": [
+        { "_id": "u1", "age": 36 },
+        { "_id": "u2", "age": 20 }
+      ]
+    }
+  },
+  {
+    "name": "local-aggregate-sort-skip-limit",
+    "result": [{ "_id": "u3", "age": 28 }],
+    "changed": [],
+    "collections": {
+      "users": [
+        { "_id": "u1", "age": 36 },
+        { "_id": "u2", "age": 20 },
+        { "_id": "u3", "age": 28 }
+      ]
+    }
+  },
+  {
+    "name": "local-insertOne",
+    "result": { "_id": "u9", "name": "Zoe" },
+    "changed": ["users"],
+    "collections": { "users": [{ "_id": "u9", "name": "Zoe" }] }
+  },
+  {
+    "name": "local-updateMany-set",
+    "result": { "modifiedCount": 1 },
+    "changed": ["posts"],
+    "collections": {
+      "posts": [
+        { "_id": "p1", "userId": "u1", "seen": true },
+        { "_id": "p2", "userId": "u2" }
+      ]
+    }
+  },
+  {
+    "name": "local-deleteMany",
+    "result": { "deletedCount": 1 },
+    "changed": ["posts"],
+    "collections": { "posts": [{ "_id": "p2" }] }
+  },
+  {
+    "name": "local-insertMany-upsert-by-id-archive",
+    "result": { "insertedCount": 1 },
+    "changed": ["usersDeleted"],
+    "collections": { "usersDeleted": [{ "_id": "u1", "deletedAt": 100 }] }
+  },
+  {
+    "name": "local-error-unknown-command",
+    "error": true
+  }
+]

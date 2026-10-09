@@ -538,3 +538,48 @@ test('core-node: 非法 GQL / 未注册 model 以异常抛出', () => {
   );
 });
 
+// ─── local（本地磁盘数据源求值，node ↔ py ↔ MongoDB 驱动语义） ──
+//
+// 回放 `fixtures/local/{cases,expected}.json`：核心输入来自 core 规划产出的
+// Mongo 命令（形状与 mongo 路径同），黄金基准按 MongoDB 驱动语义手写。
+// 与 core-py/test/parity_test.py::test_local 共用同一 fixtures —— 两侧都必须
+// 与黄金基准逐条深比较，从而保证 node 与 py 绑定输出逐字节相同。
+
+test('core-node parity: local', () => {
+  const cases = load(path.join(FIXTURES, 'local', 'cases.json'));
+  const goldens = load(path.join(FIXTURES, 'local', 'expected.json'));
+  assert.equal(cases.length, goldens.length, '输入与黄金基准用例数不一致');
+
+  const reg = new Registry();
+  const failures = [];
+
+  cases.forEach((fx, i) => {
+    const g = goldens[i];
+    assert.equal(fx.name, g.name, '用例顺序不一致');
+
+    let actual = null;
+    let err = null;
+    try {
+      actual = reg.localEval(fx.collections, fx.command);
+    } catch (e) {
+      err = e;
+    }
+
+    if (fx.expect_error) {
+      if (!err) failures.push(`[${fx.name}] 期望报错，但绑定未报错: ${fmt(actual)}`);
+      return;
+    }
+    if (err) {
+      failures.push(`[${fx.name}] 绑定报错: ${err.message}`);
+      return;
+    }
+
+    const want = g.error === true
+      ? { error: true }
+      : { result: has(g, 'result') ? g.result : null, changed: g.changed, collections: g.collections };
+    expectDeepEqual(failures, `${fx.name}`, actual, want);
+  });
+
+  assert.equal(failures.length, 0, `local 对拍失败 ${failures.length} 项:\n${failures.join('\n')}`);
+});
+
