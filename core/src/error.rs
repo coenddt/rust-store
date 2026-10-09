@@ -15,6 +15,10 @@
 
 use crate::command::{ERR_NO_CONTEXT, ERR_PERM_PREFIX};
 
+/// 策略视图只读守卫的稳定错误前缀：非 base 视图禁止注册 / 清空 schema（目录唯一真源在 base）。
+/// 归入 [`CoreError::Other`]（非权限族），Host 按前缀识别即可（对齐 `no-error-masking`）。
+pub const ERR_POLICY_VIEW_READONLY: &str = "ERR_POLICY_VIEW_READONLY:";
+
 /// core 错误（FFI 边界可程序化穷举）。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CoreError {

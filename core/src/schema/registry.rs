@@ -1,6 +1,7 @@
 //! Schema 注册表：注册/定位/配置（数据结构与规范化见 [`super::definition`]）。
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
 
@@ -9,6 +10,7 @@ use crate::types::{is_truthy, str_list, AGG_OPS};
 use super::definition::{normalize_fields, ComputeDef, FieldDef, Location, RelationDef, Schema};
 
 use crate::command::WriteLinkPolicy;
+use crate::error::ERR_POLICY_VIEW_READONLY;
 
 /// 查询档位：判决唯一在 core（照 [`Registry::require_context`] 既有范式）。
 ///
@@ -208,29 +210,72 @@ fn batch_err_to_msg(e: BatchError) -> String {
     }
 }
 
+/// schema 目录快照：全局唯一真源的数据体（注册一次，派生视图共享同一 `Arc`）。
 #[derive(Debug, Clone, Default)]
-pub struct Registry {
+pub struct Catalog {
     entries: HashMap<String, Entry>,
     order: Vec<String>,
+}
+
+/// 策略束：六项策略的载体（base 可变；视图为派生时点快照，`set` 只影响自身）。
+#[derive(Debug, Clone, Default)]
+pub struct PolicyBundle {
     /// 上下文强制开关（默认关闭 = fail-open，与 JS 原版 parity）；
     /// 开启后所有 plan 入口对 `ctx: None` 显式报错（fail-secure，见 `permission` 模块文档）。
     /// 内部调用请传显式系统上下文（JSON `{"internal": true}` / `Context::system()`）。
-    require_context: bool,
+    pub(crate) require_context: bool,
     /// 查询档位（默认 [`Profile::Standard`]；text2query 由 AI 问数链路显式进入）。
-    profile: Profile,
+    pub(crate) profile: Profile,
     /// RBAC 动态策略（`None` = 未启用，判决原语直通、行为与现状一致）。见 [`crate::rbac`]
-    rbac: Option<crate::rbac::RbacPolicy>,
+    pub(crate) rbac: Option<crate::rbac::RbacPolicy>,
     /// 角色清单与未配置姿态（豁免 / 拒写 / Open|Closed，默认 []/[]/Open）。见 [`crate::permission::RoleRules`]
-    role_rules: crate::permission::RoleRules,
+    pub(crate) role_rules: crate::permission::RoleRules,
     /// 定义层门禁策略（默认 Open —— 全放行，保持既有 parity）。见 [`crate::permission::MetaPolicy`]
-    meta_policy: crate::permission::MetaPolicy,
+    pub(crate) meta_policy: crate::permission::MetaPolicy,
     /// 跨连接写策略（默认 [`WriteLinkPolicy::Reject`]）。见 [`crate::command::write_links`]
-    write_link_policy: WriteLinkPolicy,
+    pub(crate) write_link_policy: WriteLinkPolicy,
+}
+
+/// Schema 注册表：**共享目录快照**（`Arc<Catalog>`）+ **策略束**（`PolicyBundle`）。
+///
+/// - `is_base = true`：目录唯一真源，注册 / 清空写路径仅在此开放；
+/// - 派生视图（`with_policy` 产出）持同一 `Arc<Catalog>` 快照 + 叠加策略，`is_base = false`。
+#[derive(Debug, Clone)]
+pub struct Registry {
+    catalog: Arc<Catalog>,
+    policy: PolicyBundle,
+    /// 是否目录唯一真源（`Default` 即 base）；派生视图为 `false`。
+    is_base: bool,
+}
+
+// `is_base` 不允许 derive 默认（`false` = 视图是错误语义），手写 Default（即 base）。
+impl Default for Registry {
+    fn default() -> Self {
+        Self {
+            catalog: Arc::new(Catalog::default()),
+            policy: PolicyBundle::default(),
+            is_base: true,
+        }
+    }
 }
 
 impl Registry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 视图只读守卫：非 base 视图禁止写目录（模型唯一真源在 base Registry）。
+    ///
+    /// 拦截必须显式报错、禁静默降级（对齐 `no-error-masking`）。返回 `Err` 供
+    /// 注册类入口 `?` 直通；`clear`（返回 `()`，受「公开签名零改动」约束）调用本
+    /// 函数并在 `Err` 时 `panic!`（消息同源，携带 [`ERR_POLICY_VIEW_READONLY`] 前缀）。
+    fn ensure_base_catalog(&self) -> Result<(), String> {
+        if !self.is_base {
+            return Err(format!(
+                "{ERR_POLICY_VIEW_READONLY} 非 base 策略视图禁止注册/清空 schema（目录唯一真源在 base Registry）"
+            ));
+        }
+        Ok(())
     }
 
     /// 注册一个 schema（含自动注册 `<Name>Deleted` 归档表），对应 JS `register`。
@@ -270,13 +315,14 @@ impl Registry {
         items: &[(Value, Location)],
         ctx: Option<&crate::permission::Context>,
     ) -> Result<(), String> {
+        self.ensure_base_catalog()?; // 视图只读守卫：目录唯一真源在 base
         // ── 1：判据单点（分组 / 主唯一 / 批内四元组冲突），与 plan_load 同源 ──
         let class = classify_batch(items).map_err(batch_err_to_msg)?;
 
         // 定义层门禁：判决先于 build_schema —— 拒绝即返回，绝不部分写入
         for (defn, _loc) in items {
             let name = defn.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            if !crate::permission::can_register(&self.meta_policy, ctx) {
+            if !crate::permission::can_register(&self.policy.meta_policy, ctx) {
                 return Err(format!("ERR_PERMISSION: 无权注册或覆盖定义 {name}"));
             }
         }
@@ -322,7 +368,7 @@ impl Registry {
                 }
             } else {
                 // 0 主：只能是对既有 entry 追加从链路（跨批演进）
-                let Some(existing) = self.entries.get(name) else {
+                let Some(existing) = self.catalog.entries.get(name) else {
                     return Err(format!(
                         "未找到主 schema: {}（从定义 `replica` 必须伴随同批主定义，或该 name 已注册）",
                         name
@@ -342,7 +388,7 @@ impl Registry {
         let batch_names: std::collections::HashSet<&str> =
             planned.iter().map(|p| p.name.as_str()).collect();
         let mut quads: Vec<(String, String, Location)> = Vec::new();
-        for (n, e) in &self.entries {
+        for (n, e) in &self.catalog.entries {
             if batch_names.contains(n.as_str()) {
                 continue; // 本批将整体替换该名，旧链路不参与冲突判定
             }
@@ -363,13 +409,14 @@ impl Registry {
         }
 
         // ── 4：提交（命中既有 ⇒ version + 1 且 order 位置不变；新名 ⇒ version = 1 + push） ──
+        let catalog = Arc::make_mut(&mut self.catalog); // 写时复制（仅 base 走到此）
         for p in planned {
-            if let Some(e) = self.entries.get_mut(&p.name) {
+            if let Some(e) = catalog.entries.get_mut(&p.name) {
                 e.schema = p.schema;
                 e.links = p.links;
                 e.version += 1;
             } else {
-                self.entries.insert(
+                catalog.entries.insert(
                     p.name.clone(),
                     Entry {
                         schema: p.schema,
@@ -377,7 +424,7 @@ impl Registry {
                         version: 1,
                     },
                 );
-                self.order.push(p.name);
+                catalog.order.push(p.name);
             }
         }
 
@@ -403,7 +450,8 @@ impl Registry {
     }
 
     fn get_entry(&self, name: &str) -> Result<&Entry, String> {
-        self.entries
+        self.catalog
+            .entries
             .get(name)
             .ok_or_else(|| format!("Schema 未注册: {}", name))
     }
@@ -414,7 +462,7 @@ impl Registry {
     }
 
     pub fn has(&self, name: &str) -> bool {
-        self.entries.contains_key(name)
+        self.catalog.entries.contains_key(name)
     }
 
     /// 清空 schema 注册表（`schemas` + `order`），对应绑定层的测试隔离 / 动态重建场景。
@@ -422,21 +470,28 @@ impl Registry {
     /// 只清 schema，**不动**配置开关（`require_context` / `profile` / `rbac` /
     /// `role_rules`）与回调表（`clear_fns` 对称：各清各的）——开关生命周期属
     /// Registry 配置面，不随 schema 集合重建而丢。
+    ///
+    /// 非 base 视图调用即 `panic!`（消息携带 [`ERR_POLICY_VIEW_READONLY`] 前缀）——
+    /// 本方法返回 `()`（受「core 公开签名零改动」约束，无法回 `Result`），守卫仍显式、不静默。
     pub fn clear(&mut self) {
-        self.entries.clear();
-        self.order.clear();
+        if let Err(e) = self.ensure_base_catalog() {
+            panic!("{e}");
+        }
+        let catalog = Arc::make_mut(&mut self.catalog);
+        catalog.entries.clear();
+        catalog.order.clear();
     }
 
     /// 开关「上下文强制」（默认关闭 = fail-open，保持 JS parity）。
     /// 开启后：plan 入口遇 `ctx: None` 报 `ERR_NO_CONTEXT`（fail-secure）。
     /// 内部调用须显式传系统上下文（`{"internal": true}`）。
     pub fn set_require_context(&mut self, require: bool) {
-        self.require_context = require;
+        self.policy.require_context = require;
     }
 
     /// 「上下文强制」开关当前值
     pub fn require_context(&self) -> bool {
-        self.require_context
+        self.policy.require_context
     }
 
     /// 设置查询档位（`standard` / `text2query`）。
@@ -444,43 +499,43 @@ impl Registry {
     /// 档位为**单值状态**（非栈）：由 Host 的 `text2query()` 上下文管理器负责
     /// 进入时设档、退出时恢复（见 `py-store` / `nodejs-store` 门面）。判决一律在 core。
     pub fn set_profile(&mut self, profile: Profile) {
-        self.profile = profile;
+        self.policy.profile = profile;
     }
 
     /// 当前查询档位
     pub fn profile(&self) -> Profile {
-        self.profile
+        self.policy.profile
     }
 
     /// 豁免角色清单：命中者在一切判决环节（静态 + RBAC）直接放行。默认空——无豁免。
     pub fn set_exempt_roles(&mut self, roles: Vec<String>) {
-        self.role_rules.exempt_roles = roles;
+        self.policy.role_rules.exempt_roles = roles;
     }
 
     /// 拒写角色清单：命中者一切写路径拒绝（读不受影响）。默认空——无拒写。
     pub fn set_deny_write_roles(&mut self, roles: Vec<String>) {
-        self.role_rules.deny_write_roles = roles;
+        self.policy.role_rules.deny_write_roles = roles;
     }
 
     /// schema 白名单缺失/为空时的默认姿态。默认 Open（保持现状语义）。
     pub fn set_unconfigured_policy(&mut self, policy: crate::permission::UnconfiguredPolicy) {
-        self.role_rules.unconfigured = policy;
+        self.policy.role_rules.unconfigured = policy;
     }
 
     /// 当前角色规则（静态判决函数与 RBAC decide 的共用取参入口）
     pub fn role_rules(&self) -> &crate::permission::RoleRules {
-        &self.role_rules
+        &self.policy.role_rules
     }
 
     /// 定义层门禁策略（`closed=true` 时仅 internal 或 `roles` 白名单可注册/覆盖）。
     /// 默认 Open —— 全放行（保持既有 parity；须在首次业务注册前调用方生效于该次注册）。
     pub fn set_meta_policy(&mut self, closed: bool, roles: Vec<String>) {
-        self.meta_policy = crate::permission::MetaPolicy { closed, roles };
+        self.policy.meta_policy = crate::permission::MetaPolicy { closed, roles };
     }
 
     /// 当前定义层门禁策略
     pub fn meta_policy(&self) -> &crate::permission::MetaPolicy {
-        &self.meta_policy
+        &self.policy.meta_policy
     }
 
     /// 设置跨连接写策略（默认 [`WriteLinkPolicy::Reject`]）。
@@ -488,12 +543,12 @@ impl Registry {
     /// 判决唯一在 core（[`crate::command::write_links::resolve_write_links`]）；
     /// 宿主仅需在初始化期把它透传到 registry。
     pub fn set_write_link_policy(&mut self, policy: WriteLinkPolicy) {
-        self.write_link_policy = policy;
+        self.policy.write_link_policy = policy;
     }
 
     /// 当前跨连接写策略
     pub fn write_link_policy(&self) -> WriteLinkPolicy {
-        self.write_link_policy
+        self.policy.write_link_policy
     }
 
     /// 只读定义层判决（`workflow` 等宿主侧定义面复用同一门禁；判决唯一在 core）。
@@ -502,7 +557,7 @@ impl Registry {
     /// 语义与 [`Self::register_with_ctx`] 的门禁判据**完全一致**（同一
     /// [`can_register`](crate::permission::can_register)），仅作只读暴露。
     pub fn can_register(&self, ctx: Option<&crate::permission::Context>) -> bool {
-        crate::permission::can_register(&self.meta_policy, ctx)
+        crate::permission::can_register(&self.policy.meta_policy, ctx)
     }
 
     /// 注入/清除 RBAC 动态策略；`None` = 关闭（判决原语直通）。
@@ -510,12 +565,12 @@ impl Registry {
     pub fn set_rbac(&mut self, policy: Option<&Value>) -> Result<(), String> {
         match policy {
             None => {
-                self.rbac = None;
+                self.policy.rbac = None;
                 Ok(())
             }
             Some(v) => {
                 let p = crate::rbac::RbacPolicy::from_json(v)?;
-                self.rbac = Some(p);
+                self.policy.rbac = Some(p);
                 Ok(())
             }
         }
@@ -523,7 +578,7 @@ impl Registry {
 
     /// 当前 RBAC 策略（`None` = 未启用）
     pub fn rbac(&self) -> Option<&crate::rbac::RbacPolicy> {
-        self.rbac.as_ref()
+        self.policy.rbac.as_ref()
     }
 
     /// 按定位四元组精确获取 schema（命令路由的唯一定位入口）
@@ -539,7 +594,8 @@ impl Registry {
     ) -> Result<&Schema, String> {
         let db = database.filter(|s| !s.is_empty());
         let sc = schema.filter(|s| !s.is_empty());
-        self.entries
+        self.catalog
+            .entries
             .values()
             .find(|e| {
                 e.schema.collection == collection
@@ -575,6 +631,7 @@ impl Registry {
             return Ok(s);
         }
         let candidates: Vec<&Entry> = self
+            .catalog
             .entries
             .values()
             .filter(|e| {
@@ -598,7 +655,7 @@ impl Registry {
     }
 
     pub fn list(&self) -> Vec<String> {
-        self.order.clone()
+        self.catalog.order.clone()
     }
 
     /// schema 绑定的数据源名（= 主链路 source；`default` → `None`）
