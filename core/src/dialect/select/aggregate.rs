@@ -329,7 +329,7 @@ pub(super) fn translate_aggregate(
                     // - 关系点号路径（`rel.field`）且已存在同名 JOIN → `r{i}.<col>`
                     // - 其余（未知字段 / object·array 整值 / 关系名本身 / 无对应 $lookup）
                     //   → **不生成 SQL**，告警 + 标记 unsupported 交由 Host 兜底排序。
-                    let json_expr = |col: &str, path: &[String]| -> String {
+                    let json_expr = |col: &str, path: &[String]| -> Result<String, String> {
                         let base = format!("t.{}", backend.pcol(col));
                         let segs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
                         backend.json_extract_scalar(&base, &segs)
@@ -346,7 +346,7 @@ pub(super) fn translate_aggregate(
                                 // 对象点号路径（U4）：standard 档 JSON 提取；整值 object 排序不支持
                                 match crate::dialect::field_column_ref(schema, k) {
                                     Some(ColumnRef::JsonPath(col, path)) => {
-                                        Some(json_expr(&col, &path))
+                                        Some(json_expr(&col, &path)?)
                                     }
                                     _ => None,
                                 }
@@ -364,7 +364,7 @@ pub(super) fn translate_aggregate(
                                     // 整值 object/array 排序无意义 → 不下推
                                     Some(ColumnRef::Json(..)) => None,
                                     Some(ColumnRef::JsonPath(col, path)) => {
-                                        Some(json_expr(&col, &path))
+                                        Some(json_expr(&col, &path)?)
                                     }
                                     None => None,
                                 }
@@ -531,11 +531,8 @@ pub(super) fn translate_aggregate(
                 let base = format!("t.{}", backend.pcol(&c));
                 let segs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
                 let alias = f.replace('.', "_");
-                cols_sql.push(format!(
-                    "{} AS {}",
-                    backend.json_extract_scalar(&base, &segs),
-                    q(backend, &alias)
-                ));
+                let expr = backend.json_extract_scalar(&base, &segs)?;
+                cols_sql.push(format!("{} AS {}", expr, q(backend, &alias)));
                 columns.push(RowCol::scalar(&alias, &f.split('.').collect::<Vec<_>>()));
             }
             None => {}

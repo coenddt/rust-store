@@ -257,15 +257,26 @@ impl Backend {
     ///
     /// 三者统一为「提取后标量（数值/字符串）」，供比较与 `ORDER BY` 使用；
     /// `col` 须为已按后端引号化的**列标识符**，`path` 为点号各段（不含列名）。
-    pub fn json_extract_scalar(&self, col: &str, path: &[&str]) -> String {
+    ///
+    /// **注入防护（N1）**：每段先过 [`validate_json_path_seg`] 白名单校验，段含
+    /// `'` / `\` / `"` / `,` / 控制字符等 → 显式 `Err`（前缀 `ERR_GQL_PARSE:`），
+    /// 绝不静默丢弃/替换；输出层再按后端字面量口径转义（纵深防御）。
+    pub fn json_extract_scalar(&self, col: &str, path: &[&str]) -> Result<String, String> {
+        for seg in path {
+            validate_json_path_seg(seg)?;
+        }
         match self {
-            Backend::Mysql => format!(
+            Backend::Mysql => Ok(format!(
                 "JSON_UNQUOTE(JSON_EXTRACT({}, '{}'))",
                 col,
-                json_path_dollar(path)
-            ),
-            Backend::Postgres => format!("({} #>> '{{{}}}')", col, path.join(",")),
-            Backend::Sqlite => format!("json_extract({}, '{}')", col, json_path_dollar(path)),
+                json_path_dollar(path)?
+            )),
+            // PG `#>>` 为数组字面量：段逐个按 PG 数组字面量规则转义后 join
+            Backend::Postgres => {
+                let segs: Vec<String> = path.iter().map(|s| pg_array_literal_seg(s)).collect();
+                Ok(format!("({} #>> '{{{}}}')", col, segs.join(",")))
+            }
+            Backend::Sqlite => Ok(format!("json_extract({}, '{}')", col, json_path_dollar(path)?)),
         }
     }
 
@@ -306,12 +317,67 @@ impl Backend {
     }
 }
 
+/// JSON 点号路径段白名单校验（N1 注入防护唯一收口点）。
+///
+/// 路径段语义 = 字段名段，仅允许字母/数字/`_`/`-`/中文（CJK）等字段名常用字符；
+/// 含 `'`、`"`、`\`、`` ` ``、`{`、`}`、`,`、`[`、`]`、`$`、空格、控制字符等 → 显式 `Err`
+/// （前缀 `ERR_GQL_PARSE:`，沿用既有解析类前缀）。**禁静默丢弃/替换**。
+fn validate_json_path_seg(seg: &str) -> Result<(), String> {
+    if seg.is_empty() {
+        return Err("ERR_GQL_PARSE:JSON 点号路径段为空（非法路径段）".to_string());
+    }
+    let ok = seg.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || c == '_'
+            || c == '-'
+            || ('\u{4e00}'..='\u{9fff}').contains(&c)
+    });
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "ERR_GQL_PARSE:JSON 点号路径段 \"{seg}\" 含非法字符（仅允许字母/数字/下划线/连字符/中文）"
+        ))
+    }
+}
+
+/// PG `#>>` 数组字面量元素转义：段内含 `"` / `\` / `,` / `{` / `}` / 空白或为空时，
+/// 须以双引号包裹（PG 数组字面量规则），段内 `"` / `\` 反斜杠转义。
+fn pg_array_literal_seg(seg: &str) -> String {
+    let needs_quote = seg.is_empty()
+        || seg
+            .chars()
+            .any(|c| matches!(c, '"' | '\\' | ',' | '{' | '}' | ' '));
+    if !needs_quote {
+        return seg.to_string();
+    }
+    let mut out = String::from("\"");
+    for ch in seg.chars() {
+        if ch == '"' || ch == '\\' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('"');
+    out
+}
+
 /// 点号路径 → MySQL/SQLite `JSON_EXTRACT` 的 `$` 路径字面量（`["a","b"]` → `$.a.b`）
-fn json_path_dollar(path: &[&str]) -> String {
+///
+/// 每段先过 [`validate_json_path_seg`]（非法即 `Err`）；输出层再按 MySQL/SQLite 单引号
+/// 字面量口径转义（`'` → `''`、`\` → `\\`）作纵深防御。
+fn json_path_dollar(path: &[&str]) -> Result<String, String> {
     let mut s = String::from("$");
     for seg in path {
+        validate_json_path_seg(seg)?;
         s.push('.');
-        s.push_str(seg);
+        for ch in seg.chars() {
+            match ch {
+                '\'' => s.push_str("''"),
+                '\\' => s.push_str("\\\\"),
+                _ => s.push(ch),
+            }
+        }
     }
-    s
+    Ok(s)
 }

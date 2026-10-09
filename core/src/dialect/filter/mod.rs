@@ -267,7 +267,7 @@ impl Ctx<'_> {
             ColumnRef::JsonPath(c, path) => {
                 let base = self.ident_of(c);
                 let segs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
-                Ok(self.backend.json_extract_scalar(&base, &segs))
+                self.backend.json_extract_scalar(&base, &segs)
             }
         }
     }

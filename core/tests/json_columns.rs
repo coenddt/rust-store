@@ -40,15 +40,21 @@ fn json_type_name_per_backend() {
 #[test]
 fn json_extract_scalar_multi_segment() {
     assert_eq!(
-        Backend::Mysql.json_extract_scalar("`meta`", &["a", "b"]),
+        Backend::Mysql
+            .json_extract_scalar("`meta`", &["a", "b"])
+            .unwrap(),
         "JSON_UNQUOTE(JSON_EXTRACT(`meta`, '$.a.b'))"
     );
     assert_eq!(
-        Backend::Postgres.json_extract_scalar("\"meta\"", &["a", "b"]),
+        Backend::Postgres
+            .json_extract_scalar("\"meta\"", &["a", "b"])
+            .unwrap(),
         "(\"meta\" #>> '{a,b}')"
     );
     assert_eq!(
-        Backend::Sqlite.json_extract_scalar("\"meta\"", &["a", "b"]),
+        Backend::Sqlite
+            .json_extract_scalar("\"meta\"", &["a", "b"])
+            .unwrap(),
         "json_extract(\"meta\", '$.a.b')"
     );
 }
@@ -56,17 +62,37 @@ fn json_extract_scalar_multi_segment() {
 #[test]
 fn json_extract_scalar_single_segment() {
     assert_eq!(
-        Backend::Mysql.json_extract_scalar("`meta`", &["title"]),
+        Backend::Mysql.json_extract_scalar("`meta`", &["title"]).unwrap(),
         "JSON_UNQUOTE(JSON_EXTRACT(`meta`, '$.title'))"
     );
     assert_eq!(
-        Backend::Postgres.json_extract_scalar("\"meta\"", &["title"]),
+        Backend::Postgres
+            .json_extract_scalar("\"meta\"", &["title"])
+            .unwrap(),
         "(\"meta\" #>> '{title}')"
     );
     assert_eq!(
-        Backend::Sqlite.json_extract_scalar("\"meta\"", &["title"]),
+        Backend::Sqlite
+            .json_extract_scalar("\"meta\"", &["title"])
+            .unwrap(),
         "json_extract(\"meta\", '$.title')"
     );
+}
+
+/// N1 注入防护：段含 `'` / `\` / 空格 / `$` 等非法字符 → 三后端一律显式 `Err`（禁静默改写）
+#[test]
+fn json_extract_scalar_rejects_illegal_segment() {
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        for bad in ["a'b", "a\\b", "a b", "$x", "a{b", "a,b", ""] {
+            let err = backend
+                .json_extract_scalar("`meta`", &[bad])
+                .expect_err("非法路径段应显式 Err（禁静默改写）");
+            assert!(
+                err.starts_with("ERR_GQL_PARSE:"),
+                "错误前缀应为 ERR_GQL_PARSE:（实际 {err}）"
+            );
+        }
+    }
 }
 
 /// U3：对象点号路径过滤 → 各方言 JSON 标量提取下推（standard 档放开）

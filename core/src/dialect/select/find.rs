@@ -60,11 +60,8 @@ pub(super) fn translate_find(
                 let base = format!("t.{}", backend.pcol(&c));
                 let segs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
                 let alias = f.replace('.', "_");
-                cols_sql.push(format!(
-                    "{} AS {}",
-                    backend.json_extract_scalar(&base, &segs),
-                    q(backend, &alias)
-                ));
+                let expr = backend.json_extract_scalar(&base, &segs)?;
+                cols_sql.push(format!("{} AS {}", expr, q(backend, &alias)));
                 columns.push(RowCol::scalar(&alias, &f.split('.').collect::<Vec<_>>()));
             }
             None => {}
