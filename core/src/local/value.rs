@@ -12,6 +12,8 @@ use serde_json::{Map, Value};
 
 use crate::bson;
 
+use super::pipeline::{float_of, number_of};
+
 /// 单集合文档数护栏：超限一律 `Err`（禁静默截断，见执行文档 §4.1 / §8.4）。
 pub const MAX_LOCAL_COLLECTION_DOCS: usize = 100_000;
 
@@ -322,6 +324,8 @@ fn regex_parts(v: &Value) -> (String, String) {
 /// - `"$field.path"`：从 `doc` 严格取值，缺失 → `null`；
 /// - `"$$var"` / `"$$var.path"`：从 `vars` 取值，缺失 → `null`（供 `$lookup.let` 注入）；
 /// - `{ "$eq": [a, b] }`、`{ "$and": [...] }`、`{ "$or": [...] }`、`{ "$ifNull": [a, b] }`；
+/// - `{ "$size": <数组> }`、`{ "$sum/$avg/$min/$max": <数组或单值> }`
+///   （core 关系聚合计算列 `$addFields` 的表达式形态，语义对齐 `pipeline.rs::accumulate`）；
 /// - 普通对象 `{k: <expr>, …}` 逐键求值构造新文档；普通数组逐元素求值。
 ///
 /// 未知算子一律 `Err`（禁静默）。
@@ -437,9 +441,93 @@ fn eval_operator(
             // 越界 → `null`（Mongo 为 missing，在 `$ifNull` 兜底语境下等价）
             Ok(items.get(i as usize).cloned().unwrap_or(Value::Null))
         }
+        // `$size`：数组长度（core 关系聚合计算列 `$count` 发射 `{$size: {$ifNull: [..., []]}}`）
+        "size" => {
+            let arr = eval_expr(arg, doc, vars)?;
+            let items = arr
+                .as_array()
+                .ok_or_else(|| format!("$size 的操作数必须是数组，收到 {}", value_type_name(&arr)))?;
+            Ok(Value::from(items.len() as i64))
+        }
+        // `$sum` / `$avg` / `$min` / `$max`：数组聚合表达式形态（core 关系聚合计算列
+        // `$addFields` 发射 `{$sum/$avg/$min/$max: "$as.field"}`，`as` 为 `$lookup` 结果数组）。
+        // 语义对齐 `pipeline.rs::accumulate`（$sum 忽略非数值、整数值→整数形态；$avg 恒浮点；
+        // $min/$max 按 BSON 序、忽略 null；空集 → $sum=0 / 其余 null）。单值形态 = 单元素数组。
+        "sum" | "avg" | "min" | "max" => {
+            let v = eval_expr(arg, doc, vars)?;
+            match v {
+                Value::Array(items) => accumulate_expr(op, &items),
+                other => accumulate_expr(op, std::slice::from_ref(&other)),
+            }
+        }
         other => Err(format!(
-            "不支持的聚合表达式算子: ${other}（本地求值器仅支持 $eq/$and/$or/$ifNull/$cond/$isArray/$in/$arrayElemAt，拒绝静默）"
+            "不支持的聚合表达式算子: ${other}（本地求值器仅支持 $eq/$and/$or/$ifNull/$cond/$isArray/$in/$arrayElemAt/$size/$sum/$avg/$min/$max，拒绝静默）"
         )),
+    }
+}
+
+/// 数组聚合（`$sum` / `$avg` / `$min` / `$max` 的表达式形态）——语义镜像
+/// [`super::pipeline::accumulate`]，保证「关系聚合计算列」与「根级 `$group`」数值形态一致。
+fn accumulate_expr(op: &str, items: &[Value]) -> Result<Value, String> {
+    match op {
+        "sum" => {
+            let mut sum = 0.0_f64;
+            for v in items {
+                if let Some(n) = as_number(v) {
+                    sum += n;
+                }
+            }
+            Ok(number_of(sum))
+        }
+        "avg" => {
+            let (mut sum, mut count) = (0.0_f64, 0_usize);
+            for v in items {
+                if let Some(n) = as_number(v) {
+                    sum += n;
+                    count += 1;
+                }
+            }
+            Ok(if count == 0 {
+                Value::Null
+            } else {
+                float_of(sum / count as f64)
+            })
+        }
+        _ => {
+            let mut best: Option<&Value> = None;
+            for v in items {
+                if v.is_null() {
+                    continue;
+                }
+                best = Some(match best {
+                    None => v,
+                    Some(cur) => {
+                        let take = if op == "min" {
+                            compare(v, cur) == Ordering::Less
+                        } else {
+                            compare(v, cur) == Ordering::Greater
+                        };
+                        if take {
+                            v
+                        } else {
+                            cur
+                        }
+                    }
+                });
+            }
+            Ok(best.cloned().unwrap_or(Value::Null))
+        }
+    }
+}
+
+fn value_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
@@ -836,6 +924,49 @@ mod tests {
         );
         // 未知算子 → Err（禁静默）
         assert!(eval_expr(&json!({ "$mul": [1, 2] }), &doc, &vars).is_err());
+    }
+
+    #[test]
+    fn expr_size() {
+        let vars = Map::new();
+        let doc = json!({ "arr": [1, 2, 3], "empty": [], "n": 5 });
+        assert_eq!(eval_expr(&json!({ "$size": "$arr" }), &doc, &vars).unwrap(), json!(3));
+        assert_eq!(eval_expr(&json!({ "$size": "$empty" }), &doc, &vars).unwrap(), json!(0));
+        // 非数组 → Err（Mongo 同样抛错，禁静默）
+        assert!(eval_expr(&json!({ "$size": "$n" }), &doc, &vars).is_err());
+        assert!(eval_expr(&json!({ "$size": "$missing" }), &doc, &vars).is_err());
+    }
+
+    #[test]
+    fn expr_sum_avg_min_max_array_form() {
+        let vars = Map::new();
+        let doc = json!({
+            "scores": [3, 7, 5],
+            "mixed": [1, "x", 4, null],
+            "empty": [],
+            "gone": null,
+            "one": 9
+        });
+        // $sum：整数值 → 整数形态（对齐 pipeline.rs::accumulate 的 number_of）
+        assert_eq!(eval_expr(&json!({ "$sum": "$scores" }), &doc, &vars).unwrap(), json!(15));
+        // 忽略非数值与 null；空数组 → 0；缺失/null → 0
+        assert_eq!(eval_expr(&json!({ "$sum": "$mixed" }), &doc, &vars).unwrap(), json!(5));
+        assert_eq!(eval_expr(&json!({ "$sum": "$empty" }), &doc, &vars).unwrap(), json!(0));
+        assert_eq!(eval_expr(&json!({ "$sum": "$gone" }), &doc, &vars).unwrap(), json!(0));
+        assert_eq!(eval_expr(&json!({ "$sum": "$missing" }), &doc, &vars).unwrap(), json!(0));
+        // $avg：恒浮点；空集/无可用值 → null
+        assert_eq!(eval_expr(&json!({ "$avg": "$scores" }), &doc, &vars).unwrap(), json!(5.0));
+        assert_eq!(eval_expr(&json!({ "$avg": "$empty" }), &doc, &vars).unwrap(), Value::Null);
+        assert_eq!(eval_expr(&json!({ "$avg": "$missing" }), &doc, &vars).unwrap(), Value::Null);
+        // $min / $max：BSON 序极值，忽略 null；空集 → null
+        assert_eq!(eval_expr(&json!({ "$min": "$scores" }), &doc, &vars).unwrap(), json!(3));
+        assert_eq!(eval_expr(&json!({ "$max": "$scores" }), &doc, &vars).unwrap(), json!(7));
+        assert_eq!(eval_expr(&json!({ "$min": "$mixed" }), &doc, &vars).unwrap(), json!(1));
+        assert_eq!(eval_expr(&json!({ "$min": "$empty" }), &doc, &vars).unwrap(), Value::Null);
+        // 单值形态 = 单元素数组（$sum(9) → 9 整数；$avg(9) → 9.0 浮点）
+        assert_eq!(eval_expr(&json!({ "$sum": "$one" }), &doc, &vars).unwrap(), json!(9));
+        assert_eq!(eval_expr(&json!({ "$avg": "$one" }), &doc, &vars).unwrap(), json!(9.0));
+        assert_eq!(eval_expr(&json!({ "$min": "$one" }), &doc, &vars).unwrap(), json!(9));
     }
 
     #[test]

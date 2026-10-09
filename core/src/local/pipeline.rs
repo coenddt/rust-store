@@ -552,7 +552,8 @@ fn canonical(v: &Value) -> String {
 }
 
 /// 数值输出：整数值用整数形态（对齐 Mongo `$sum` 的 int 结果），否则浮点。
-fn number_of(f: f64) -> Value {
+/// 供 `local/value.rs` 的数组聚合表达式算子（`$sum` 表达式形态）复用。
+pub(crate) fn number_of(f: f64) -> Value {
     if f.fract() == 0.0 && f.abs() <= 9_007_199_254_740_992.0 {
         Value::from(f as i64)
     } else {
@@ -560,7 +561,7 @@ fn number_of(f: f64) -> Value {
     }
 }
 
-fn float_of(f: f64) -> Value {
+pub(crate) fn float_of(f: f64) -> Value {
     serde_json::Number::from_f64(f)
         .map(Value::Number)
         .unwrap_or(Value::Null)
