@@ -13,7 +13,7 @@ mod triggers;
 
 pub use definition::{map_of, ComputeDef, FieldDef, Location, RelationDef, Schema};
 pub use load::{depth_layered, locate, plan_load, LoadConfig, SourceDecl};
-pub use registry::{Profile, Registry};
+pub use registry::{PolicyOverrides, Profile, Registry};
 pub use triggers::{
     parse_triggers, validate_cron, TriggerBody, TriggerDef, Triggers, EVENTS, OPS,
 };

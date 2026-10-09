@@ -20,6 +20,7 @@
 //! 回调适配见 [`fns`]。
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use napi::bindgen_prelude::{Env, FunctionRef};
 use napi::Result;
@@ -37,14 +38,14 @@ mod methods;
 #[napi]
 pub struct Registry {
     core: CoreRegistry,
-    sync_fns: HashMap<String, FunctionRef<Value, Value>>,
+    sync_fns: Arc<Mutex<HashMap<String, FunctionRef<Value, Value>>>>,
 }
 
 impl Registry {
     pub(crate) fn bridge<'a>(&'a self, env: &'a Env) -> SyncFnBridge<'a> {
         SyncFnBridge {
             env,
-            fns: &self.sync_fns,
+            fns: self.sync_fns.lock().unwrap(),
         }
     }
 
@@ -65,7 +66,7 @@ impl Registry {
     pub fn new() -> Self {
         Self {
             core: CoreRegistry::new(),
-            sync_fns: HashMap::new(),
+            sync_fns: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -94,12 +95,24 @@ impl Registry {
     /// 注册同步计算列回调（schema 里 `fn: true` 的 `fnRef`，缺省为计算列名）
     #[napi]
     pub fn set_fn(&mut self, fn_ref: String, callback: FunctionRef<Value, Value>) {
-        self.sync_fns.insert(fn_ref, callback);
+        self.sync_fns.lock().unwrap().insert(fn_ref, callback);
     }
 
     #[napi]
     pub fn clear_fns(&mut self) {
-        self.sync_fns.clear();
+        self.sync_fns.lock().unwrap().clear();
+    }
+
+    /// 派生策略视图：共享目录快照与回调池，策略覆盖经 core 单点解析（零绑定侧解析）。
+    /// 视图上注册/清空 schema 会抛 `ERR_POLICY_VIEW_READONLY:`（守卫在 core）。
+    #[napi]
+    pub fn with_policy(&self, policy: Value) -> Result<Registry> {
+        let overrides = rust_store_core::schema::PolicyOverrides::from_value(&policy)
+            .map_err(|e| convert::err(e.message().to_owned()))?;
+        Ok(Registry {
+            core: self.core.with_policy(&overrides),
+            sync_fns: Arc::clone(&self.sync_fns),
+        })
     }
 
     /// 开关「上下文强制」（默认关闭 = fail-open，保持 JS parity）。

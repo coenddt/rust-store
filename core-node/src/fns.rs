@@ -13,7 +13,7 @@ use rust_store_core::permission::Context;
 
 pub(crate) struct SyncFnBridge<'a> {
     pub(crate) env: &'a Env,
-    pub(crate) fns: &'a HashMap<String, FunctionRef<Value, Value>>,
+    pub(crate) fns: std::sync::MutexGuard<'a, HashMap<String, FunctionRef<Value, Value>>>,
 }
 
 impl FnRegistry for SyncFnBridge<'_> {
