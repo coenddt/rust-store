@@ -10,7 +10,7 @@ use crate::types::{is_truthy, str_list, AGG_OPS};
 use super::definition::{normalize_fields, ComputeDef, FieldDef, Location, RelationDef, Schema};
 
 use crate::command::WriteLinkPolicy;
-use crate::error::ERR_POLICY_VIEW_READONLY;
+use crate::error::{CoreError, ERR_POLICY_VIEW_READONLY};
 
 /// 查询档位：判决唯一在 core（照 [`Registry::require_context`] 既有范式）。
 ///
@@ -259,9 +259,192 @@ impl Default for Registry {
     }
 }
 
+/// 策略覆盖项（派生视图的差分输入）：`None` = 继承来源视图；
+/// `rbac` 的 `Some(None)` = 显式清除（其余字段无「清除」语义）。
+#[derive(Debug, Clone, Default)]
+pub struct PolicyOverrides {
+    require_context: Option<bool>,
+    profile: Option<Profile>,
+    rbac: Option<Option<crate::rbac::RbacPolicy>>,
+    role_rules: Option<crate::permission::RoleRules>,
+    meta_policy: Option<crate::permission::MetaPolicy>,
+    write_link_policy: Option<WriteLinkPolicy>,
+}
+
+impl PolicyOverrides {
+    /// JSON → 覆盖项（**唯一策略 JSON 解析点**，02 双绑定共用；禁在别处重复解析策略配置）。
+    ///
+    /// 已知键（camelCase，与宿主 config 键风格一致）：`profile` / `requireContext` /
+    /// `rbac` / `roleRules` / `metaPolicy` / `writeLinkPolicy`；空对象 = 无覆盖。
+    /// 未知键 **Err**（禁静默忽略，对齐 `no-error-masking`）。
+    pub fn from_value(v: &Value) -> Result<Self, CoreError> {
+        let obj = v
+            .as_object()
+            .ok_or_else(|| CoreError::Other("策略覆盖必须是 JSON 对象".to_string()))?;
+        let mut o = PolicyOverrides::default();
+        for (k, val) in obj {
+            match k.as_str() {
+                "profile" => {
+                    let s = val
+                        .as_str()
+                        .ok_or_else(|| CoreError::Other("profile 必须是字符串".to_string()))?;
+                    o.profile = Some(Profile::from_str_or_err(s).map_err(CoreError::Other)?);
+                }
+                "requireContext" => {
+                    o.require_context = Some(val.as_bool().ok_or_else(|| {
+                        CoreError::Other("requireContext 必须是布尔".to_string())
+                    })?);
+                }
+                "rbac" => {
+                    // 对象 = 注入；null = 显式清除（Some(None)，与缺键 None 区分）
+                    o.rbac = Some(match val {
+                        Value::Null => None,
+                        other => Some(
+                            crate::rbac::RbacPolicy::from_json(other).map_err(CoreError::Other)?,
+                        ),
+                    });
+                }
+                "roleRules" => {
+                    o.role_rules = Some(parse_role_rules(val)?);
+                }
+                "metaPolicy" => {
+                    o.meta_policy = Some(parse_meta_policy(val)?);
+                }
+                "writeLinkPolicy" => {
+                    let s = val.as_str().ok_or_else(|| {
+                        CoreError::Other("writeLinkPolicy 必须是字符串".to_string())
+                    })?;
+                    o.write_link_policy = Some(match s {
+                        "reject" => WriteLinkPolicy::Reject,
+                        "primaryOnly" => WriteLinkPolicy::PrimaryOnly,
+                        other => {
+                            return Err(CoreError::Other(format!(
+                                "未知 writeLinkPolicy: {other}（仅 reject / primaryOnly）"
+                            )))
+                        }
+                    });
+                }
+                other => {
+                    return Err(CoreError::Other(format!(
+                        "{ERR_POLICY_VIEW_READONLY} 未知策略覆盖键 `{other}`"
+                    )))
+                }
+            }
+        }
+        Ok(o)
+    }
+}
+
+/// `roleRules` 覆盖解析（复用 `UnconfiguredPolicy::from_str_or_err`；未知子键 Err）。
+fn parse_role_rules(v: &Value) -> Result<crate::permission::RoleRules, CoreError> {
+    let obj = v
+        .as_object()
+        .ok_or_else(|| CoreError::Other("roleRules 必须是 JSON 对象".to_string()))?;
+    let mut rr = crate::permission::RoleRules::default();
+    for (k, val) in obj {
+        match k.as_str() {
+            "exemptRoles" => rr.exempt_roles = str_list_strict(val, "roleRules.exemptRoles")?,
+            "denyWriteRoles" => {
+                rr.deny_write_roles = str_list_strict(val, "roleRules.denyWriteRoles")?
+            }
+            "unconfigured" => {
+                let s = val.as_str().ok_or_else(|| {
+                    CoreError::Other("roleRules.unconfigured 必须是字符串".to_string())
+                })?;
+                rr.unconfigured = crate::permission::UnconfiguredPolicy::from_str_or_err(s)
+                    .map_err(CoreError::Other)?;
+            }
+            other => {
+                return Err(CoreError::Other(format!(
+                    "{ERR_POLICY_VIEW_READONLY} 未知 roleRules 键 `{other}`"
+                )))
+            }
+        }
+    }
+    Ok(rr)
+}
+
+/// `metaPolicy` 覆盖解析（未知子键 Err）。
+fn parse_meta_policy(v: &Value) -> Result<crate::permission::MetaPolicy, CoreError> {
+    let obj = v
+        .as_object()
+        .ok_or_else(|| CoreError::Other("metaPolicy 必须是 JSON 对象".to_string()))?;
+    let mut mp = crate::permission::MetaPolicy::default();
+    for (k, val) in obj {
+        match k.as_str() {
+            "closed" => {
+                mp.closed = val
+                    .as_bool()
+                    .ok_or_else(|| CoreError::Other("metaPolicy.closed 必须是布尔".to_string()))?;
+            }
+            "roles" => mp.roles = str_list_strict(val, "metaPolicy.roles")?,
+            other => {
+                return Err(CoreError::Other(format!(
+                    "{ERR_POLICY_VIEW_READONLY} 未知 metaPolicy 键 `{other}`"
+                )))
+            }
+        }
+    }
+    Ok(mp)
+}
+
+/// 严格字符串数组解析（既有 `str_list` 会静默丢弃非字符串元素，此处显式 Err）。
+fn str_list_strict(v: &Value, key: &str) -> Result<Vec<String>, CoreError> {
+    let arr = v
+        .as_array()
+        .ok_or_else(|| CoreError::Other(format!("{key} 必须是字符串数组")))?;
+    arr.iter()
+        .map(|x| {
+            x.as_str()
+                .map(String::from)
+                .ok_or_else(|| CoreError::Other(format!("{key} 的元素必须都是字符串")))
+        })
+        .collect()
+}
+
+impl PolicyBundle {
+    /// 叠加覆盖项：`None` 继承自身；`rbac` 特例——`Some(v)`（含 `Some(None)` = 显式清除）。
+    fn overridden(&self, o: &PolicyOverrides) -> PolicyBundle {
+        PolicyBundle {
+            require_context: o.require_context.unwrap_or(self.require_context),
+            profile: o.profile.unwrap_or(self.profile),
+            rbac: match &o.rbac {
+                Some(v) => v.clone(),
+                None => self.rbac.clone(),
+            },
+            role_rules: o
+                .role_rules
+                .clone()
+                .unwrap_or_else(|| self.role_rules.clone()),
+            meta_policy: o
+                .meta_policy
+                .clone()
+                .unwrap_or_else(|| self.meta_policy.clone()),
+            write_link_policy: o.write_link_policy.unwrap_or(self.write_link_policy),
+        }
+    }
+}
+
 impl Registry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 派生策略视图（**O(1)**）：共享目录快照 `Arc<Catalog>` + 叠加策略覆盖；派生视图 `is_base = false`。
+    ///
+    /// 快照语义：视图持**派生时点**目录，base 后续注册经 `Arc::make_mut` 写时复制，对**后续派生**
+    /// 视图即时可见，对在途视图不承诺（与 S2 现状口径一致：`store-api/spec/01-routing.md` 运行期新注册不做承诺）。
+    pub fn with_policy(&self, overrides: &PolicyOverrides) -> Registry {
+        Registry {
+            catalog: Arc::clone(&self.catalog),
+            policy: self.policy.overridden(overrides),
+            is_base: false,
+        }
+    }
+
+    /// 是否派生视图（`false` = base 目录唯一真源）
+    pub fn is_view(&self) -> bool {
+        !self.is_base
     }
 
     /// 视图只读守卫：非 base 视图禁止写目录（模型唯一真源在 base Registry）。
@@ -933,5 +1116,155 @@ mod tests {
         assert_eq!(r2.write_link_policy(), WriteLinkPolicy::Reject);
         r2.set_write_link_policy(WriteLinkPolicy::PrimaryOnly);
         assert_eq!(r2.write_link_policy(), WriteLinkPolicy::PrimaryOnly);
+    }
+
+    // ─── R2 D1：目录快照 + 策略束 + 派生视图（V4 落地） ──────────────
+
+    use crate::permission::UnconfiguredPolicy;
+
+    /// T1 全覆盖覆盖项（六字段悉数改写；`rbac: null` = 显式清除）
+    fn overrides_all() -> PolicyOverrides {
+        PolicyOverrides::from_value(&json!({
+            "profile": "standard",
+            "requireContext": false,
+            "rbac": null,
+            "roleRules": { "exemptRoles": ["x"], "denyWriteRoles": ["y"], "unconfigured": "open" },
+            "metaPolicy": { "closed": false, "roles": [] },
+            "writeLinkPolicy": "reject"
+        }))
+        .expect("合法覆盖 JSON")
+    }
+
+    /// T1：with_policy 覆盖矩阵——「缺省继承」与「全覆盖」两态 + base 零污染
+    #[test]
+    fn with_policy_override_matrix() {
+        let mut base = Registry::new();
+        base.set_require_context(true);
+        base.set_profile(Profile::Text2Query);
+        base.set_rbac(Some(&json!({}))).expect("合法 RBAC");
+        base.set_exempt_roles(vec!["a".to_string()]);
+        base.set_deny_write_roles(vec!["b".to_string()]);
+        base.set_unconfigured_policy(UnconfiguredPolicy::Closed);
+        base.set_meta_policy(true, vec!["m".to_string()]);
+        base.set_write_link_policy(WriteLinkPolicy::PrimaryOnly);
+
+        // 缺省继承态：空覆盖 = 全继承来源视图
+        let inherit = base.with_policy(&PolicyOverrides::default());
+        assert!(inherit.is_view(), "派生视图 is_view 应为真");
+        assert!(inherit.require_context());
+        assert_eq!(inherit.profile(), Profile::Text2Query);
+        assert!(inherit.rbac().is_some());
+        assert_eq!(inherit.role_rules().exempt_roles, vec!["a".to_string()]);
+        assert_eq!(inherit.role_rules().deny_write_roles, vec!["b".to_string()]);
+        assert_eq!(inherit.role_rules().unconfigured, UnconfiguredPolicy::Closed);
+        assert!(inherit.meta_policy().closed);
+        assert_eq!(inherit.meta_policy().roles, vec!["m".to_string()]);
+        assert_eq!(inherit.write_link_policy(), WriteLinkPolicy::PrimaryOnly);
+
+        // 全覆盖态：六字段全部改写（rbac 走 Some(None) 清除）
+        let full = base.with_policy(&overrides_all());
+        assert!(!full.require_context());
+        assert_eq!(full.profile(), Profile::Standard);
+        assert!(full.rbac().is_none(), "rbac:null 应清除");
+        assert_eq!(full.role_rules().exempt_roles, vec!["x".to_string()]);
+        assert_eq!(full.role_rules().deny_write_roles, vec!["y".to_string()]);
+        assert_eq!(full.role_rules().unconfigured, UnconfiguredPolicy::Open);
+        assert!(!full.meta_policy().closed);
+        assert_eq!(full.write_link_policy(), WriteLinkPolicy::Reject);
+
+        // base 零污染
+        assert!(base.require_context());
+        assert_eq!(base.profile(), Profile::Text2Query);
+        assert!(base.rbac().is_some());
+        assert!(base.meta_policy().closed);
+    }
+
+    /// T2a：视图注册类方法报 `ERR_POLICY_VIEW_READONLY`（前缀可匹配）
+    #[test]
+    fn view_register_is_readonly_err() {
+        let base = Registry::new();
+        let mut view = base.with_policy(&PolicyOverrides::default());
+        let err = view
+            .register(&json!({ "name": "A", "fields": {} }))
+            .expect_err("视图注册应 Err");
+        assert!(
+            err.starts_with(ERR_POLICY_VIEW_READONLY),
+            "前缀可匹配: {err}"
+        );
+        let err2 = view
+            .register_with_ctx(&json!({ "name": "A", "fields": {} }), None)
+            .expect_err("视图注册应 Err");
+        assert!(err2.starts_with(ERR_POLICY_VIEW_READONLY), "前缀可匹配: {err2}");
+        let err3 = view
+            .register_batch(&[(json!({ "name": "A", "fields": {} }), Location::default())], None)
+            .expect_err("视图批量注册应 Err");
+        assert!(err3.starts_with(ERR_POLICY_VIEW_READONLY), "前缀可匹配: {err3}");
+    }
+
+    /// T2b：视图 `clear`（返回 `()`，受签名零改动约束）以 panic 显式守卫
+    #[test]
+    #[should_panic(expected = "ERR_POLICY_VIEW_READONLY")]
+    fn view_clear_panics_readonly() {
+        let base = Registry::new();
+        let mut view = base.with_policy(&PolicyOverrides::default());
+        view.clear();
+    }
+
+    /// T3：目录快照——派生视图见 base 已注册目录；快照不承诺 base 后续注册可见
+    #[test]
+    fn view_sees_catalog_snapshot() {
+        let mut base = Registry::new();
+        base.register(&json!({ "name": "A", "fields": { "x": { "type": "number" } } }))
+            .expect("base 注册成功");
+        let view = base.with_policy(&PolicyOverrides::default());
+        assert!(view.has("A"), "派生视图应见 base 已注册目录");
+        assert_eq!(view.get("A").expect("视图可取").name, "A");
+        assert_eq!(view.list(), base.list());
+
+        // 快照语义：在途视图不承诺看到 base 后续注册；新派生视图可见
+        let mut base2 = Registry::new();
+        base2.register(&json!({ "name": "A", "fields": {} })).unwrap();
+        let snap = base2.with_policy(&PolicyOverrides::default());
+        base2.register(&json!({ "name": "B", "fields": {} })).unwrap();
+        assert!(snap.has("A"), "在途视图仍持其快照");
+        let fresh = base2.with_policy(&PolicyOverrides::default());
+        assert!(fresh.has("B"), "新派生视图应见 base 后续注册");
+    }
+
+    /// T4：视图 `set_*` 只影响自身（base 与兄弟视图不受影响）
+    #[test]
+    fn view_policy_set_isolated() {
+        let base = Registry::new();
+        let mut view = base.with_policy(&PolicyOverrides::default());
+        view.set_profile(Profile::Text2Query);
+        assert_eq!(view.profile(), Profile::Text2Query);
+        assert_eq!(base.profile(), Profile::Standard, "视图 set 不影响 base");
+        let sibling = base.with_policy(&PolicyOverrides::default());
+        assert_eq!(sibling.profile(), Profile::Standard, "不影响兄弟视图");
+    }
+
+    /// T5：`from_value` 未知键 / 非法值 Err；`rbac:null` 清除、缺键继承、空对象合法
+    #[test]
+    fn from_value_unknown_key_and_rbac_null() {
+        let e = PolicyOverrides::from_value(&json!({ "nope": 1 })).expect_err("未知键应 Err");
+        assert!(e.to_string().starts_with(ERR_POLICY_VIEW_READONLY), "{e}");
+        assert!(
+            PolicyOverrides::from_value(&json!({ "profile": "bogus" })).is_err(),
+            "非法 profile 应 Err（禁静默回落）"
+        );
+        assert!(
+            PolicyOverrides::from_value(&json!({ "writeLinkPolicy": "bogus" })).is_err(),
+            "非法 writeLinkPolicy 应 Err"
+        );
+        assert!(PolicyOverrides::from_value(&json!({})).is_ok(), "空对象合法");
+
+        let mut base = Registry::new();
+        base.set_rbac(Some(&json!({}))).unwrap();
+        let cleared =
+            base.with_policy(&PolicyOverrides::from_value(&json!({ "rbac": null })).unwrap());
+        assert!(cleared.rbac().is_none(), "rbac:null 应清除");
+        let kept = base.with_policy(&PolicyOverrides::from_value(&json!({})).unwrap());
+        assert!(kept.rbac().is_some(), "缺键应继承");
+        assert!(base.rbac().is_some(), "base 不受影响");
     }
 }
