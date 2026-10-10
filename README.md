@@ -29,6 +29,7 @@
 - [GQL capabilities](#gql-capabilities)
 - [Backends and dialects](#backends-and-dialects)
 - [Permission model](#permission-model)
+- [Triggers](#triggers)
 - [Testing and parity](#testing-and-parity)
 - [Transactional capabilities](#transactional-capabilities)
 - [Boundaries and gotchas](#boundaries-and-gotchas)
@@ -102,8 +103,10 @@ If you only want to *use* the data layer, install `nodejs-store` or `storepy` �
 | `core/` | `rust-store-core` | Language-agnostic core: GQL / permissions / computed columns / command planning. Pure logic, no IO. |
 | `core-node/` | `rust-store-node` | Node binding (napi-rs) → `dist/rust-store-node.node`. Published to npm as `rust-store-node`. |
 | `core-py/` | `rust-store-py` | Python binding (PyO3) → `dist/rust_store_py.pyd`. Published to PyPI as `rust-store-py`. |
+| `core-ffi/` | `rust-store-ffi` | C ABI surface for `go-store` (version 0.1.0, `publish = false`). |
+| `host/` | `rust-store` | Pure-Rust host (version 0.1.0, not published). |
 
-The workspace shares a single root `target/` and root `Cargo.lock`. All three crates are `publish = false` (nothing is published to crates.io; the bindings ship through npm and PyPI).
+The workspace shares a single root `target/` and root `Cargo.lock`. `rust-store-core` is published to crates.io (`cargo add rust-store-core`); the binding crates (`rust-store-node` / `rust-store-py`) are `publish = false` and ship through npm and PyPI instead. `core-ffi` and `host` are versioned independently at 0.1.0 and are not published.
 
 Internal modules worth knowing: `pipeline/` (GQL parse → AST → `$lookup`/`$group` build), `command/` (query/count/write/mutation planners), `dialect/` (filter, select, write, row rehydration, introspection, overlay), `computes/` (sync / async / agg), `permission.rs`, `federation/`, `schema/`.
 
@@ -203,7 +206,7 @@ Notes:
 - `planUpdateMany` rejects guest / unauthorised callers outright and **does not** use the creator probe.
 - `planRemove` returns an archive `findCommand` plus a `deleteCommand`; archived documents are written to `<collection>_deleted` with a `deletedAt` field.
 - `planMutation` expands into an ordered step sequence; parent/child dependencies are expressed with `{{step.<N>._id}}` placeholders that the host fills in.
-- Every plan method takes an optional trailing `routeOverride` / `route_override` (`{source, namespace}`).
+- Every plan method takes an optional trailing `routeOverride` / `route_override` (`{source, database, schema}`).
 
 ### Permissions
 
@@ -286,8 +289,9 @@ Declared in the schema; three forms:
 - **MySQL** — parameterized SQL, `information_schema` introspection.
 - **SQLite** — parameterized SQL (`?`), `sqlite_master` + `PRAGMA` introspection.
 - **PostgreSQL** — parameterized SQL (`$n`), `RETURNING` for read-after-write.
+- **local** — collections persisted as JSON files on local disk; commands evaluated directly by the core's local evaluator (no driver, no SQL), zero external services.
 
-Datasource registration: the host passes `dsConfig = { "sources": { "<name>": "<kind>" } }` (`null` = single-source Mongo). SQL joins across namespaces of the same source are still pushed down (qualified `JOIN`); Mongo cross-database relations degrade to in-memory federation.
+Datasource registration: the host passes `dsConfig = { "sources": { "<name>": "<kind>" } }` (`null` = single-source Mongo). SQL joins across databases of the same source are still pushed down (qualified `JOIN`); Mongo cross-database relations degrade to in-memory federation.
 
 Cross-backend translations: root `$group` / `$having` → `GROUP BY` / `HAVING`; the `$count`/`$sum`/`$avg`/`$min`/`$max` whitelist; relation aggregate predicates → `EXISTS` / `NOT EXISTS` (`WHERE EXISTS (SELECT 1 … GROUP BY fk HAVING …)`); relation-rolling `agg` computed columns → derived table `LEFT JOIN (… GROUP BY fk)`; per-parent top-N (`$sort`/`$skip`/`$limit` inside a relation) → `ROW_NUMBER() OVER (PARTITION BY fk ORDER BY …)`.
 
@@ -304,6 +308,51 @@ Schema-level `read` / `write`, field-level `field.read` / `field.write`, relatio
 - The permission context is an **explicit parameter** (`ctx`) — this is a deliberate difference from older implicit `AsyncLocalStorage`-style designs.
 
 Guarding helpers for AI query hosts: `timestamps` value validation (only `true` / `false` / `"ms"` / `"s"`, invalid values fail at registration) and federation `degraded` events (`{code, layer, message, hint}`, returned in `plan.degraded`) so non-pushdownable cross-source pagination/sort never blocks a query silently. See `core/tests/guards.rs`.
+
+## Triggers
+
+Declarative trigger chains on a schema: write events (`insert` / `update` / `remove`) are expanded, at plan time, into an ordered list of side-effect steps returned alongside the write command (`plan.triggers`) for the host to run inside the same atomic envelope. The core owns parsing, validation and expansion (`core/src/command/triggers.rs`); the host executors live in nodejs-store `src/crud/triggers.js` and py-store `py_store/crud/triggers.py` (both hosts expand the same fixture byte-for-byte identically — golden coverage in `core/tests/triggers.rs` + `fixtures/triggers/cases.json`).
+
+**Declaration form** (top-level schema `triggers` field):
+
+```json
+{
+  "triggers": {
+    "insert": [
+      { "name": "decStock", "into": "Product", "op": "update",
+        "condition": { "_id": "{{root.productId}}" },
+        "data": { "$inc": { "stock": -1 } } },
+      { "name": "stockLog", "into": "StockLog", "op": "insert",
+        "data": { "orderId": "{{root._id}}", "delta": -1, "at": "{{now}}" } }
+    ],
+    "update": [
+      { "name": "onPaid", "onFields": ["status"],
+        "when": { "eq": ["{{root.status}}", "paid"] },
+        "fnRef": "grantPoints",
+        "args": { "userId": "{{root.userId}}", "amount": "{{root.amount}}" } }
+    ]
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `name` | Step name; de-duplicated by `(name, _id)` within one top-level call (at most one execution) |
+| `into` | Target schema (command steps) |
+| `op` | `insert` / `update` / `remove` (whitelist, validated at registration) |
+| `onFields` | Field-level hit list for the `update` event; must be declared schema fields |
+| `when` | Post-hit condition guard (minimal grammar: `eq/ne/gt/gte/lt/lte/in/and/or/not`) |
+| `condition` / `data` | Write target condition and data for command steps (`update` / `remove` require `condition`; `remove` forbids `data`) |
+| `fnRef` / `args` | Host implementation and args for callback steps (a missing implementation at startup ⇒ `ERR_TRIGGER_FN_MISSING`) |
+| `cron` | 5-field cron for the `schedule` event (required there, forbidden on every other event) |
+
+Trigger events are `insert` / `update` / `remove` / `schedule`; any other event key is a registration-time `Err`.
+
+**Placeholders**: `{{root.<field>}}` (event-source document field; for `update` = the post-change value), `{{before.<field>}}` (pre-change value), `{{now}}` (host clock). A placeholder must occupy the whole string value (whole-value substitution only); embedding it inside a string (e.g. `"order-{{root._id}}"`) raises `ERR_TRIGGER_PLACEHOLDER` — no silent drift.
+
+**Evaluation**: an `update` event first checks that the `onFields` values actually changed (structural deep compare, no-op suppression — an unchanged value does not fire), then the `when` guard. `insert` has no `before` and skips the field-level check; `remove` uses the archived (pre-delete) document as root. System fields (`createdAt` / `updatedAt` / `deletedAt`) are excluded from the trigger probe projection, so their changes never fire. The `schedule` event (`cron`) is enumerated by the host scheduler plugin (`expandScheduleTriggers` / `expand_schedule_triggers`) and reuses the same trigger chain; it has no `root` / `before` context, so only `{{now}}` is allowed.
+
+**Boundaries**: trigger steps and the source write run inside the same `runAtomic` envelope → a single-source real transaction; touching a second datasource runs sequentially and declares `nonAtomic` through the feedback channel; cross-source writes inside `store.session()` fail closed. **No cascading** (a trigger write does not fire further triggers; declaring a `cascade` key is a registration-time `Err`); `updateMany` does not support field-level triggers (explicitly refused, no silent degradation); the command step `op: "upsert"` is a registration-time `Err` (no single-location semantics); declaring triggers under the `text2query` profile is an `Err` (pure-query hosts have no write path).
 
 ## Transactional capabilities
 
@@ -384,7 +433,7 @@ Root-level `$group` / `$having` map to `GROUP BY` / `HAVING`; relation aggregate
 The engine raises explicitly or emits an `unsupported` + warning event. It never produces SQL that silently omits a clause. MongoDB can still execute a few things SQL cannot (e.g. object dot-paths in `$group.by`), which is why those cases are errors only on the SQL side.
 
 **Can I use it from Rust directly?**
-Yes — `rust-store-core` is a plain Rust library (`publish = false`, so depend on it by path). You register schemas, plan queries and translate commands, then execute them with the driver of your choice.
+Yes — `rust-store-core` is a plain Rust library (published to crates.io, so `cargo add rust-store-core`, or depend on it by path from a checkout). You register schemas, plan queries and translate commands, then execute them with the driver of your choice.
 
 ## Related projects
 

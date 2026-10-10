@@ -5,7 +5,7 @@
 `rust-store` is the engine behind [`nodejs-store`](https://github.com/coenddt/nodejs-store) and [`py-store`](https://github.com/coenddt/py-store). It holds **no database driver and performs no IO**: it compiles GQL (and writes) into backend-agnostic MongoDB command JSON for the host to execute, and translates those commands into parameterized SQL for MySQL / PostgreSQL / SQLite. Same semantics in Node.js and Python by construction.
 
 - Crates: [`rust-store-core`](https://crates.io/crates/rust-store-core) (pure logic), `rust-store-node` (napi-rs → npm `rust-store-node`), `rust-store-py` (PyO3 → PyPI `rust-store-py`)
-- Backends: MongoDB, MySQL, SQLite, PostgreSQL
+- Backends: MongoDB, MySQL, SQLite, PostgreSQL, local (local disk)
 - License: MIT
 
 ## When to use it

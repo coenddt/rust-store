@@ -3,7 +3,7 @@
 > Source of truth: https://github.com/coenddt/rust-store
 > Crates: `rust-store-core` (pure logic), `rust-store-node` (napi-rs), `rust-store-py` (PyO3)
 > Bindings: npm `rust-store-node`, PyPI `rust-store-py` | MIT
-> Backends: MongoDB, MySQL, SQLite, PostgreSQL
+> Backends: MongoDB, MySQL, SQLite, PostgreSQL, local (local disk)
 
 This file is a single-file, plain-text snapshot of the rust-store documentation, intended for
 direct ingestion by language models. It mirrors README.md plus the FAQ.
@@ -52,9 +52,13 @@ A multi-backend data engine written once in Rust and shared by every host langua
 | `core/` | `rust-store-core` | Language-agnostic core: GQL / permissions / computed columns / command planning. Pure logic, no IO. |
 | `core-node/` | `rust-store-node` | Node binding (napi-rs) → `dist/rust-store-node.node`. Published to npm as `rust-store-node`. |
 | `core-py/` | `rust-store-py` | Python binding (PyO3) → `dist/rust_store_py.pyd`. Published to PyPI as `rust-store-py`. |
+| `core-ffi/` | `rust-store-ffi` | C ABI surface for `go-store` (version 0.1.0, `publish = false`). |
+| `host/` | `rust-store` | Pure-Rust host (version 0.1.0, not published). |
 
-The workspace shares a single root `target/` and root `Cargo.lock`. All three crates are
-`publish = false` (nothing goes to crates.io; bindings ship through npm and PyPI).
+The workspace shares a single root `target/` and root `Cargo.lock`. `rust-store-core` is
+published to crates.io (`cargo add rust-store-core`); the binding crates (`rust-store-node` /
+`rust-store-py`) are `publish = false` and ship through npm and PyPI instead. `core-ffi` and
+`host` are versioned independently at 0.1.0 and are not published.
 
 Internal modules: `pipeline/` (GQL parse → AST → `$lookup`/`$group` build), `command/`
 (query / count / write / mutation planners), `dialect/` (filter, select, write, row
@@ -82,7 +86,7 @@ npm i rust-store-node          # Node binding; platform natives ship as optional
 pip install rust-store-py      # Python binding (maturin wheel)
 ```
 
-Rust library (path dependency — the crates are not published to crates.io):
+Rust library (`rust-store-core` is published to crates.io; from a checkout, depend on it by path):
 
 ```toml
 [dependencies]
@@ -186,7 +190,7 @@ The binding `Registry` has **no** `get(name)` — hosts keep their own schema di
 - `planMutation` expands into an ordered step sequence; parent/child dependencies are
   expressed with `{{step.<N>._id}}` placeholders the host fills in.
 - Every plan method takes an optional trailing `routeOverride` / `route_override`
-  (`{source, namespace}`).
+  (`{source, database, schema}`).
 
 ### 5.4 Permissions
 
@@ -291,9 +295,10 @@ Filter parents by an aggregate over a relation — a semi-join with no fan-out:
 - **MySQL** — parameterized SQL, `information_schema` introspection.
 - **SQLite** — parameterized SQL (`?`), `sqlite_master` + `PRAGMA` introspection.
 - **PostgreSQL** — parameterized SQL (`$n`), `RETURNING` for read-after-write.
+- **local** — collections persisted as JSON files on local disk; commands evaluated directly by the core's local evaluator (no driver, no SQL).
 
 Datasource registration: host passes `dsConfig = { "sources": { "<name>": "<kind>" } }`
-(`null` = single-source Mongo). SQL joins across namespaces of the same source are pushed
+(`null` = single-source Mongo). SQL joins across databases of the same source are pushed
 down (qualified `JOIN`); Mongo cross-database relations degrade to in-memory federation.
 
 Cross-backend translations:
@@ -426,8 +431,7 @@ that silently omits a clause. MongoDB can still execute a few things SQL cannot 
 dot-paths in `$group.by`), which is why those cases are errors only on the SQL side.
 
 **Can I use it from Rust directly?**
-Yes — `rust-store-core` is a plain Rust library (`publish = false`, depend on it by path).
-Register schemas, plan queries, translate commands, then execute with your own driver.
+Yes — `rust-store-core` is a plain Rust library (published to crates.io, so `cargo add rust-store-core`, or depend on it by path from a checkout). Register schemas, plan queries, translate commands, then execute with your own driver.
 
 ---
 

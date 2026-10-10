@@ -4,6 +4,34 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 4.4.0 (2026-10-10)
+
+### Fixed（框架缺陷修复-新发现缺陷）
+
+- **N1 JSON 点号路径校验与转义**：JSON 列点号路径补校验与转义，避免路径歧义。
+- **N2 关系路径补行条件**：关系子查询路径补齐行级权限条件注入。
+- **N6a 联邦无条件注入行条件**：联邦（多源）路径无条件注入行条件。
+- **N6d 触发器写补行级探针**：触发器写入路径补行级探针。
+- **全量回归**：A2 五路径一致性矩阵，锁定各路径语义一致。
+
+### Added（错误语义档与 machine code 导出）
+
+- **core 错误语义档与 machine code**：core 错误按语义档归一，导出稳定 machine code（含 NoContext 档）。
+- **绑定导出 machine code**：`core-py` 暴露 `code` 属性；`core-ffi` 信封补 `code` 字段。
+
+## 4.3.0 (2026-10-09)
+
+### Added（本地磁盘数据源 local + R2 全局单值状态 + 触发器补齐）
+
+- **本地磁盘数据源 `local`**：`DataSource::Local` 与白名单放行，`local/` 子模块（`value.rs` 取值/
+  比较/投影、`filter.rs` 谓词求值、`pipeline.rs` 聚合阶段、`update.rs` 与 `eval.rs` 写算子与命令
+  分发），聚合补 `$size/$sum/$avg/$min/$max` 表达式算子；`core-node` 透出 `localEval`、`core-py`
+  透出 `local_eval`，绑定 parity 自测（local fixtures + 双端回放）。
+- **R2 进程级全局单值状态**：core 拆目录快照与策略束 + `with_policy` 基座（结构改造），派生视图与
+  覆盖解析 + 快照/覆盖单测（V4 落地），`core-node` / `core-py` 派生视图与回调共享池。
+- **schema 触发器补齐**：core `remove` 触发器、core schedule 触发器（cron）、cron 对拍用例
+  `cronCases`。
+
 ## 4.2.0 (2026-10-08)
 
 ### Added（触发器）
@@ -19,6 +47,20 @@
   字段级命中判定并替换 before 占位符。
 - **golden 守护**：`core/tests/triggers.rs`（含 `triggers_fixture_shape`）+ `fixtures/triggers/cases.json`；
   node / py 宿主对同一 fixture 的展开输出逐字节一致（`parity-triggers` / `parity_triggers` 对拍脚本）。
+
+## 4.1.1 (2026-10-08)
+
+### Fixed（格式门禁）
+
+- **core 资源模块 rustfmt 格式门禁修复**。
+
+## 4.1.0 (2026-10-05)
+
+### Added（资源数据驱动 core 侧）
+
+- **core 资源纯语义模块**：core 侧资源纯语义（schema / 计算列 / 级联）单测；`core-node` / `core-py`
+  绑定透出资源纯函数，双端资源纯函数对拍测试。
+- **修复**：core `fmt` 与 `clippy` 门禁（schema 装载代码格式化 + `BatchError` 变体装箱）。
 
 ## 4.0.0 (2026-10-04)
 

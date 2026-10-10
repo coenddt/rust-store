@@ -2,6 +2,7 @@
 
 **多后端数据访问的单一 Rust 核心引擎 —— GQL 解析、权限校验、计算列、命令规划与 SQL 方言翻译，经原生绑定同时服务 Node.js 与 Python。**
 
+![crates.io](https://img.shields.io/crates/v/rust-store-core)
 ![npm version](https://img.shields.io/npm/v/rust-store-node)
 ![PyPI version](https://img.shields.io/pypi/v/rust-store-py)
 ![license](https://img.shields.io/badge/license-MIT-blue)
@@ -100,8 +101,10 @@
 | `core/` | `rust-store-core` | 语言无关核心：GQL / 权限 / 计算列 / 命令规划。纯逻辑、无 IO。 |
 | `core-node/` | `rust-store-node` | Node 绑定（napi-rs）→ `dist/rust-store-node.node`。以 `rust-store-node` 发布到 npm。 |
 | `core-py/` | `rust-store-py` | Python 绑定（PyO3）→ `dist/rust_store_py.pyd`。以 `rust-store-py` 发布到 PyPI。 |
+| `core-ffi/` | `rust-store-ffi` | C ABI 层，供 `go-store` 使用（版本 0.1.0，`publish = false`）。 |
+| `host/` | `rust-store` | 纯 Rust 宿主（版本 0.1.0，不发布）。 |
 
-workspace 统一使用根目录 `target/` 与根 `Cargo.lock`。三个 crate 均 `publish = false`（不经 crates.io 发布，绑定分别走 npm 与 PyPI）。
+workspace 统一使用根目录 `target/` 与根 `Cargo.lock`。`rust-store-core` 已发布到 crates.io（`cargo add rust-store-core`）；绑定 crate（`rust-store-node` / `rust-store-py`）均 `publish = false`，分别走 npm 与 PyPI。`core-ffi` 与 `host` 版本独立为 0.1.0，不发布。
 
 值得了解的内部模块：`pipeline/`（GQL 解析 → AST → `$lookup`/`$group` 构建）、`command/`（query/count/write/mutation 规划器）、`dialect/`（filter、select、write、行还原、introspection、overlay）、`computes/`（sync / async / agg）、`permission.rs`、`federation/`、`schema/`。
 
@@ -114,12 +117,13 @@ npm i rust-store-node          # Node 绑定；平台原生二进制按 optional
 pip install rust-store-py      # Python 绑定（maturin 构建 wheel）
 ```
 
-Rust 库（path 依赖 —— crate 未发布到 crates.io）：
+Rust 库：
 
-```toml
-[dependencies]
-rust-store-core = { path = "path/to/rust-store/core" }
+```bash
+cargo add rust-store-core     # 纯逻辑：GQL → 命令 JSON → SQL，无 IO
 ```
+
+API 文档在 [docs.rs](https://docs.rs/rust-store-core) 自动构建。改用 checkout？按 path 依赖：`rust-store-core = { path = "path/to/rust-store/core" }`。
 
 开发期工具链：Rust stable（edition 2021），`cargo` / `clippy` / `rustfmt`；`core-node` 用 `napi-rs` CLI；`core-py` 用 `maturin >= 1.7, < 2.0`。
 
@@ -200,7 +204,7 @@ Node 名与 Python 名一一对应（camelCase ↔ snake_case）。下列方法�
 - `planUpdateMany` 对 guest / 无写授权直接拒绝，且**不走** creator 探针。
 - `planRemove` 返回归档 `findCommand` + `deleteCommand`；归档文档写入 `<collection>_deleted` 并补 `deletedAt` 字段。
 - `planMutation` 展开为有序步骤序列，父子依赖用 `{{step.<N>._id}}` 占位符表达，由 Host 依次执行并回填。
-- 每个 plan 方法尾参均为可选 `routeOverride` / `route_override`（`{source, namespace}`）。
+- 每个 plan 方法尾参均为可选 `routeOverride` / `route_override`（`{source, database, schema}`）。
 
 ### 权限
 
@@ -285,8 +289,9 @@ Course($condition:@c0, $group:@g0, $having:@h0, $sort:@s0, $skip:@sk, $limit:@l0
 | **MySQL** | 参数化 SQL，`information_schema` introspection。 |
 | **SQLite** | 参数化 SQL（`?`），`sqlite_master` + `PRAGMA` introspection。 |
 | **PostgreSQL** | 参数化 SQL（`$n`），`RETURNING` 写后回读。 |
+| **local** | 本地磁盘：集合以 JSON 文件落盘，core 本地求值器直接执行（无驱动、无 SQL），零外部服务。 |
 
-datasource 注册：Host 传 `dsConfig = { "sources": { "<name>": "<kind>" } }`（`null` = 单源 Mongo）。SQL 同源跨 namespace 仍下推（qualified `JOIN`）；Mongo 跨 db 关系剥离为内存联邦。
+datasource 注册：Host 传 `dsConfig = { "sources": { "<name>": "<kind>" } }`（`null` = 单源 Mongo）。SQL 同源跨库仍下推（qualified `JOIN`）；Mongo 跨 db 关系剥离为内存联邦。
 
 跨后端翻译：根级 `$group` / `$having` → `GROUP BY` / `HAVING`；`$count`/`$sum`/`$avg`/`$min`/`$max` 白名单；关系聚合谓词 → `EXISTS` / `NOT EXISTS`（`WHERE EXISTS (SELECT 1 … GROUP BY fk HAVING …)`）；关系滚动 `agg` 计算列 → 派生表 `LEFT JOIN (… GROUP BY fk)`；关系每父 top-N（关系块内 `$sort`/`$skip`/`$limit`）→ `ROW_NUMBER() OVER (PARTITION BY fk ORDER BY …)`。
 
@@ -306,7 +311,7 @@ schema 级 `read` / `write`、字段级 `field.read` / `field.write`、关系级
 
 ## 触发器
 
-schema 声明式触发链：写事件（首批 `insert` / `update`）在规划期展开为有序副作用步骤，随写命令一并返回（`plan.triggers`），由 Host 在同一原子包络内执行。core 负责解析校验与展开（`core/src/command/triggers.rs`）；Host 执行器见 nodejs-store `src/crud/triggers.js` 与 py-store `py_store/crud/triggers.py`（双宿主对同一 fixture 的展开输出逐字节一致，golden 见 `core/tests/triggers.rs` + `fixtures/triggers/cases.json`）。
+schema 声明式触发链：写事件（`insert` / `update` / `remove`）在规划期展开为有序副作用步骤，随写命令一并返回（`plan.triggers`），由 Host 在同一原子包络内执行。core 负责解析校验与展开（`core/src/command/triggers.rs`）；Host 执行器见 nodejs-store `src/crud/triggers.js` 与 py-store `py_store/crud/triggers.py`（双宿主对同一 fixture 的展开输出逐字节一致，golden 见 `core/tests/triggers.rs` + `fixtures/triggers/cases.json`）。
 
 **声明形态**（schema 顶层 `triggers` 字段）：
 
@@ -334,17 +339,20 @@ schema 声明式触发链：写事件（首批 `insert` / `update`）在规划�
 |---|---|
 | `name` | 步骤名；同一次顶层调用内 `(name, _id)` 去重，不重复执行 |
 | `into` | 目标 schema（命令式步骤） |
-| `op` | `insert` / `update`（白名单，注册期校验） |
+| `op` | `insert` / `update` / `remove`（白名单，注册期校验） |
 | `onFields` | update 事件的字段级命中名单，必须为 schema 已声明字段 |
 | `when` | 命中后的条件守卫（极简文法：`eq/ne/gt/gte/lt/lte/in/and/or/not`） |
-| `condition` / `data` | 命令式步骤的写目标条件与写数据 |
+| `condition` / `data` | 命令式步骤的写目标条件与写数据（`update` / `remove` 必填 `condition`；`remove` 禁 `data`） |
 | `fnRef` / `args` | 回调式步骤的宿主实现与参数（启动期缺实现 ⇒ `ERR_TRIGGER_FN_MISSING`） |
+| `cron` | `schedule` 事件的 5 段 cron（该事件必填，其他事件禁填） |
+
+触发事件为 `insert` / `update` / `remove` / `schedule`；其他事件键注册期 `Err`。
 
 **占位符**：`{{root.<field>}}`（事件源文档字段；update 时 = 变化后值）、`{{before.<field>}}`（变化前值）、`{{now}}`（宿主时钟）。占位符必须独占字符串值（只做整值替换），内嵌拼接（如 `"order-{{root._id}}"`）显式报 `ERR_TRIGGER_PLACEHOLDER`——禁静默漂移。
 
-**判定语义**：update 事件先判 `onFields 值真的变化`（结构深比较，no-op 抑制——值未变不触发）→ 再判 `when`。系统字段（`createdAt` / `updatedAt` / `deletedAt`）不进触发器探针投影，其变化天然不触发。
+**判定语义**：update 事件先判 `onFields 值真的变化`（结构深比较，no-op 抑制——值未变不触发）→ 再判 `when`。`insert` 无 before，跳过字段级检查；`remove` 以归档（删除前）文档为根。系统字段（`createdAt` / `updatedAt` / `deletedAt`）不进触发器探针投影，其变化天然不触发。`schedule` 事件（`cron`）由宿主定时任务插件（`expandScheduleTriggers` / `expand_schedule_triggers`）枚举并复用同一触发链；其无 `root` / `before` 上下文，占位符仅允许 `{{now}}`。
 
-**边界**：触发链步骤与源写落在同一 `runAtomic` 包络内 → 单源真事务；触及第二数据源按顺序执行并经反馈通道声明 `nonAtomic`；`store.session()` 内对跨源写 fail-closed。**不支持级联**（触发写不再触发任何触发器，声明 `cascade` 键注册期 `Err`）；`updateMany` 不支持字段级触发（显式拒绝，禁静默降级）；`remove` 事件与命令式步骤 `op: "upsert"` 注册期 `Err`（remove 触发语义不明，upsert 无单一定位语义）；text2query 档下声明触发器即 `Err`（纯查询宿主禁写路径能力）。
+**边界**：触发链步骤与源写落在同一 `runAtomic` 包络内 → 单源真事务；触及第二数据源按顺序执行并经反馈通道声明 `nonAtomic`；`store.session()` 内对跨源写 fail-closed。**不支持级联**（触发写不再触发任何触发器，声明 `cascade` 键注册期 `Err`）；`updateMany` 不支持字段级触发（显式拒绝，禁静默降级）；命令式步骤 `op: "upsert"` 注册期 `Err`（无单一定位语义）；text2query 档下声明触发器即 `Err`（纯查询宿主禁写路径能力）。
 
 ## 事务型能力
 
@@ -424,7 +432,7 @@ node tools/verify-fixtures.js
 引擎显式报错，或产出 `unsupported` + warning 事件。它绝不产出悄悄漏掉一段的 SQL。MongoDB 仍能执行少数 SQL 无法执行的东西（例如 `$group.by` 中的 object 点号路径），所以这些情况只在 SQL 侧是错误。
 
 **可以直接从 Rust 使用吗？**
-可以 —— `rust-store-core` 就是一个普通 Rust 库（`publish = false`，按 path 依赖）。注册 schema、规划查询、翻译命令，再用你选择的驱动执行。
+可以 —— `rust-store-core` 已发布到 crates.io（`cargo add rust-store-core`，亦可从 checkout 按 path 依赖）。注册 schema、规划查询、翻译命令，再用你选择的驱动执行。
 
 ## 相关项目
 
