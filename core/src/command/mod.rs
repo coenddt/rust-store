@@ -92,7 +92,10 @@ pub const ERR_NO_DELETE: &str = "ERR_PERMISSION:无删除权限";
 pub const ERR_NO_BATCH_WRITE: &str = "ERR_PERMISSION:无批量写入权限";
 
 /// `require_context` 开启时 ctx 缺失的拒绝哨兵（fail-secure；Host 按前缀识别，
-/// 一般映射为 500 配置/契约错误而非 403 —— 这是调用方合约违反，不是用户无权限）。
+/// 经 `CoreError::NoContext`（machine code `no_context`）映射对外语义 **403 / `PERMISSION_DENIED`**）。
+///
+/// 依据 `store-api/spec/04-context.md`：`requireContext` 开启且未注入上下文的请求按
+/// 权限类映射 403，适配层不加第二层判断（该档保留独立 machine code 便于宿主/皮区分与告警）。
 pub const ERR_NO_CONTEXT: &str =
     "ERR_NO_CONTEXT:require_context 已开启，调用必须携带用户上下文（内部调用请传 {\"internal\": true}）";
 
