@@ -7,8 +7,8 @@
 use serde_json::{json, Map, Value};
 
 use crate::command::cmd::{cmd_delete_many, cmd_insert_one, cmd_update_many};
-use crate::permission::{can_write_schema, Context};
-use crate::rbac::{ensure_write, WriteAction};
+use crate::permission::{can_write_schema, merge_owner_condition, Context};
+use crate::rbac::{ensure_write, merge_row_condition, WriteAction};
 use crate::schema::{Registry, TriggerBody, TriggerDef};
 
 use super::{forbid_t2q, ERR_NO_WRITE};
@@ -206,11 +206,26 @@ fn build_trigger_step(
                     }
                 }
             }
+            // update/remove 目标补行级探针：静态 owner 条件叠加 RBAC 行条件后并入
+            // filter（与写路径 `merge_row_condition` 同源；匹配不到即 0 行/拒绝），
+            // 杜绝触发器 update/remove 静默命中他人行。insert 的行级写覆盖由
+            // `cmd_insert_one`（filter_writable_data_overlay）承接，不在此叠加。
+            let base_condition = condition.as_ref().cloned().unwrap_or_else(|| json!({}));
+            let row_filtered = |action: &str| -> Value {
+                let owner_merged = merge_owner_condition(
+                    registry.role_rules(),
+                    target,
+                    ctx,
+                    Some(base_condition.clone()),
+                );
+                merge_row_condition(registry, target, ctx, action, owner_merged)
+                    .unwrap_or_else(|| json!({}))
+            };
             let command = match op.as_str() {
                 "insert" => cmd_insert_one(target, data),
-                "update" => cmd_update_many(target, condition.as_ref().unwrap_or(&json!({})), data),
+                "update" => cmd_update_many(target, &row_filtered("update"), data),
                 // remove：condition 圈定删除目标，无 data（parse 已拒）
-                "remove" => cmd_delete_many(target, condition.as_ref().unwrap_or(&json!({}))),
+                "remove" => cmd_delete_many(target, &row_filtered("remove")),
                 other => return Err(format!("触发器 \"{name}\" 的 op \"{other}\" 不支持")),
             };
             Ok(base(json!({ "command": command })))
