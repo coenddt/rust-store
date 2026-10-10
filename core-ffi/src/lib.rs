@@ -5,7 +5,7 @@
 //!   - 本 crate 只做三件事：Registry 句柄管理、`plan_*` / `translate` / 后处理两段式的
 //!     C ABI 转发、FnRegistry 回调桥（把 fn/asyncFn 执行体转交 Go 侧闭包）；
 //!   - 数据边界一律 UTF-8 JSON 字符串（core 出入参本就是 `serde_json::Value`）；
-//!   - 每个导出的返回值统一信封 `{"ok":true,"data":...}` / `{"ok":false,"error":"..."}`，
+//!   - 每个导出的返回值统一信封 `{"ok":true,"data":...}` / `{"ok":false,"error":"...","code":"..."}`，
 //!     由调用方（go-store）用 `rcore_free` 释放；
 //!   - 后处理走 core 钦定的 FFI 两段式（finalize.rs 文档）：
 //!     `prepare_query`（同步 fn 内联、返回待宿主执行的 asyncFn fnRef 列表）
@@ -223,14 +223,18 @@ fn ret_ok(data: Value) -> *mut c_char {
 }
 
 fn ret_err(msg: String) -> *mut c_char {
-    ret_envelope(&json!({ "ok": false, "error": msg }))
+    // 透出稳定 machine code：`CoreError::classify` 是 core 内唯一的前缀→档→码收口点，
+    // 消费端据此程序化区分错误档（`permission_denied` / `no_context` / `profile_blocked` / `other`），
+    // 不必解析中文文案或字符串前缀。`error` 原样保留（含哨兵前缀，禁改写）。
+    let code = rust_store_core::CoreError::classify(msg.clone()).code();
+    ret_envelope(&json!({ "ok": false, "error": msg, "code": code }))
 }
 
 fn ret_envelope(v: &Value) -> *mut c_char {
     // CString::new 只在含 NUL 时失败；JSON 字符串序列化后不含字面 NUL，unwrap 前已兜底为错误文本
     match CString::new(v.to_string()) {
         Ok(c) => c.into_raw(),
-        Err(_) => CString::new("{\"ok\":false,\"error\":\"FFI 信封序列化失败\"}")
+        Err(_) => CString::new("{\"ok\":false,\"error\":\"FFI 信封序列化失败\",\"code\":\"other\"}")
             .expect("固定错误文本不含 NUL")
             .into_raw(),
     }

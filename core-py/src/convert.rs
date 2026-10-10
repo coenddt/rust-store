@@ -18,13 +18,22 @@ use rust_store_core::permission::{context_from_value, Context};
 /// core 的 `String` 错误在 FFI 边界经 [`CoreError`] 归类——哨兵前缀匹配收口在
 /// `core::error::classify`（core 内唯一匹配点），绑定层只消费枚举。
 ///
-/// 三个变体统一映射 `RuntimeError` 且消息保留**完整原文**（含哨兵前缀）：
+/// 四个变体统一映射 `RuntimeError` 且消息保留**完整原文**（含哨兵前缀）：
 /// py-store 侧 `crud/exec.py` 捕获 `RuntimeError` 后按 `ERR_PERMISSION:` 前缀
 /// 剥离并映射为自有 `PermissionError`（继承 `Exception`）——若权限变体映射
-/// 内建 `PermissionError`（`OSError` 子类）反而绕过该捕获链，故刻意保持。
-/// 如需原生异常类型，在此 match [`CoreError`] 变体并同步调整 py-store。
+/// 内建 `PermissionError`（`OSError` 子类）反而绕过该捕获链，故**刻意保持异常类不变**。
+///
+/// 语义可程序化区分走异常实例上的 `code` 属性（[`CoreError::code`] 的稳定 machine code
+/// ——`permission_denied` / `no_context` / `profile_blocked` / `other`），宿主可读
+/// `e.code` 而不必解析前缀；异常类与消息均不改（零行为变更）。
 pub(crate) fn err(msg: String) -> PyErr {
-    PyRuntimeError::new_err(CoreError::from(msg).message().to_owned())
+    let e = CoreError::from(msg);
+    let err = PyRuntimeError::new_err(e.message().to_owned());
+    Python::attach(|py| {
+        // 内建异常实例支持自定义属性；失败（理论上不发生）不掩盖原错误——照常抛出
+        let _ = err.value(py).setattr("code", e.code());
+    });
+    err
 }
 
 /// `serde_json::Value` → Python 对象（None / bool / int / float / str / list / dict）
