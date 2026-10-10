@@ -176,7 +176,9 @@ fn parse_one(
             .ok_or_else(|| format!("{at} 缺少 op"))?
             .to_string();
         if !OPS.contains(&op.as_str()) {
-            return Err(format!("{at} 的 op \"{op}\" 不在白名单（insert/update/remove）"));
+            return Err(format!(
+                "{at} 的 op \"{op}\" 不在白名单（insert/update/remove）"
+            ));
         }
         let data = match op.as_str() {
             // remove：删除语义由 condition 圈定目标，不接受 data（出现即 Err，零静默）

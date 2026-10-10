@@ -132,10 +132,7 @@ pub fn expand_schedule_triggers(
         }
         for (i, td) in list.iter().enumerate() {
             let step = build_trigger_step(registry, ctx, &owner, "schedule", i, td)?;
-            let name = step
-                .get("name")
-                .cloned()
-                .unwrap_or(Value::Null);
+            let name = step.get("name").cloned().unwrap_or(Value::Null);
             out.push(json!({
                 "schema": owner,
                 "name": name,

@@ -276,7 +276,11 @@ impl Backend {
                 let segs: Vec<String> = path.iter().map(|s| pg_array_literal_seg(s)).collect();
                 Ok(format!("({} #>> '{{{}}}')", col, segs.join(",")))
             }
-            Backend::Sqlite => Ok(format!("json_extract({}, '{}')", col, json_path_dollar(path)?)),
+            Backend::Sqlite => Ok(format!(
+                "json_extract({}, '{}')",
+                col,
+                json_path_dollar(path)?
+            )),
         }
     }
 
@@ -327,10 +331,7 @@ fn validate_json_path_seg(seg: &str) -> Result<(), String> {
         return Err("ERR_GQL_PARSE:JSON 点号路径段为空（非法路径段）".to_string());
     }
     let ok = seg.chars().all(|c| {
-        c.is_ascii_alphanumeric()
-            || c == '_'
-            || c == '-'
-            || ('\u{4e00}'..='\u{9fff}').contains(&c)
+        c.is_ascii_alphanumeric() || c == '_' || c == '-' || ('\u{4e00}'..='\u{9fff}').contains(&c)
     });
     if ok {
         Ok(())

@@ -235,8 +235,13 @@ fn a2_five_paths_inject_same_owner_row_condition() {
         "g0".to_string(),
         json!({ "by": ["author.name"], "agg": { "n": { "$count": "*" } } }),
     );
-    let grp = plan_query("Post($group:@g0){ author.name, n }", &gparams, &reg, Some(&ctx))
-        .expect("$group 关系路径应放行");
+    let grp = plan_query(
+        "Post($group:@g0){ author.name, n }",
+        &gparams,
+        &reg,
+        Some(&ctx),
+    )
+    .expect("$group 关系路径应放行");
     let grp_match = lookup_inner_match(&grp.commands[0], "author").expect("应有 author 的 $lookup");
     assert!(
         grp_match.to_string().contains("createdBy"),

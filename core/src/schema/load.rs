@@ -138,8 +138,9 @@ impl LoadConfig {
 /// 语义层级深度：PG=2（L2=schema），Mongo/MySQL/SQLite=1（L2+ 打平）。
 /// kind 非法 ⇒ `Err`（禁回落默认）。
 pub fn depth_layered(kind: &str) -> Result<u8, String> {
-    let ds = DataSource::from_kind(kind)
-        .map_err(|_| format!("ERR:LOAD 连接 kind 非法: {kind}（仅 mongodb/mysql/pg/sqlite/local）"))?;
+    let ds = DataSource::from_kind(kind).map_err(|_| {
+        format!("ERR:LOAD 连接 kind 非法: {kind}（仅 mongodb/mysql/pg/sqlite/local）")
+    })?;
     Ok(match ds.backend() {
         Some(Backend::Postgres) => 2,
         _ => 1,

@@ -214,7 +214,12 @@ fn direction(stage: &str, field: &str, v: &Value) -> Result<i64, String> {
     let d = v
         .as_i64()
         .or_else(|| v.as_f64().map(|f| f as i64))
-        .ok_or_else(|| format!("{stage} 的方向必须是数字，字段 \"{field}\" 收到 {}", type_name(v)))?;
+        .ok_or_else(|| {
+            format!(
+                "{stage} 的方向必须是数字，字段 \"{field}\" 收到 {}",
+                type_name(v)
+            )
+        })?;
     Ok(if d < 0 { -1 } else { 1 })
 }
 
@@ -723,7 +728,12 @@ mod tests {
         .unwrap();
         assert_eq!(Value::Array(out), json!([{"_id": 1, "a": 1, "b": 2}]));
         // `$expr` 必须求值为布尔，否则 Err
-        assert!(run(&collections, "t", &stages(json!([{"$match": {"$expr": "$b"}}]))).is_err());
+        assert!(run(
+            &collections,
+            "t",
+            &stages(json!([{"$match": {"$expr": "$b"}}]))
+        )
+        .is_err());
     }
 
     #[test]
@@ -765,14 +775,20 @@ mod tests {
             &stages(json!([{"$sort": {"v": 1}}])),
         )
         .unwrap();
-        assert_eq!(Value::Array(arr), json!([{"_id": 1, "v": [5, 1]}, {"_id": 2, "v": [2]}]));
+        assert_eq!(
+            Value::Array(arr),
+            json!([{"_id": 1, "v": [5, 1]}, {"_id": 2, "v": [2]}])
+        );
     }
 
     #[test]
     fn sort_array_form_and_negative_skip_error() {
         let collections = json!({"t": [{"_id": 1, "v": 2}, {"_id": 2, "v": 1}]});
         let out = run(&collections, "t", &stages(json!([{"$sort": [["v", -1]]}]))).unwrap();
-        assert_eq!(Value::Array(out), json!([{"_id": 1, "v": 2}, {"_id": 2, "v": 1}]));
+        assert_eq!(
+            Value::Array(out),
+            json!([{"_id": 1, "v": 2}, {"_id": 2, "v": 1}])
+        );
         assert!(run(&collections, "t", &stages(json!([{"$sort": 5}]))).is_err());
         assert!(run(&collections, "t", &stages(json!([{"$skip": -1}]))).is_err());
     }
@@ -786,7 +802,12 @@ mod tests {
             {"_id": 4, "tags": null},
             {"_id": 5, "tags": "solo"}
         ]});
-        let dropped = run(&collections, "t", &stages(json!([{"$unwind": {"path": "$tags"}}]))).unwrap();
+        let dropped = run(
+            &collections,
+            "t",
+            &stages(json!([{"$unwind": {"path": "$tags"}}])),
+        )
+        .unwrap();
         assert_eq!(
             Value::Array(dropped),
             json!([{"_id": 1, "tags": "a"}, {"_id": 1, "tags": "b"}, {"_id": 5, "tags": "solo"}])
@@ -827,7 +848,12 @@ mod tests {
             ])
         );
         // 既无 localField 也无 pipeline → Err
-        assert!(run(&collections, "posts", &stages(json!([{"$lookup": {"from": "users", "as": "a"}}]))).is_err());
+        assert!(run(
+            &collections,
+            "posts",
+            &stages(json!([{"$lookup": {"from": "users", "as": "a"}}]))
+        )
+        .is_err());
     }
 
     #[test]
@@ -921,7 +947,10 @@ mod tests {
         );
         // `$set` 与 `$addFields` 同义
         let out2 = run(&collections, "t", &stages(json!([{"$set": {"b": 9}}]))).unwrap();
-        assert_eq!(Value::Array(out2), json!([{"_id": 1, "a": 2, "b": 9}, {"_id": 2, "b": 9}]));
+        assert_eq!(
+            Value::Array(out2),
+            json!([{"_id": 1, "a": 2, "b": 9}, {"_id": 2, "b": 9}])
+        );
     }
 
     #[test]
@@ -939,7 +968,12 @@ mod tests {
         .unwrap();
         assert_eq!(Value::Array(expr), json!([{"status": "x", "n": 5}]));
         // 非 _id 的包含与排除混用 → Err
-        assert!(run(&collections, "t", &stages(json!([{"$project": {"n": 1, "drop": 0}}]))).is_err());
+        assert!(run(
+            &collections,
+            "t",
+            &stages(json!([{"$project": {"n": 1, "drop": 0}}]))
+        )
+        .is_err());
     }
 
     #[test]
@@ -949,13 +983,33 @@ mod tests {
         assert!(run(&collections, "t", &stages(json!([{"$out": "x"}]))).is_err());
         assert!(run(&collections, "t", &stages(json!([{"$count": "n"}]))).is_err());
         // 阶段非单键
-        assert!(run(&collections, "t", &stages(json!([{"$match": {}, "$limit": 1}]))).is_err());
+        assert!(run(
+            &collections,
+            "t",
+            &stages(json!([{"$match": {}, "$limit": 1}]))
+        )
+        .is_err());
         assert!(run(&collections, "t", &stages(json!(["$match"]))).is_err());
         // `$replaceRoot` 结果非文档 → Err
-        assert!(run(&collections, "t", &stages(json!([{"$replaceRoot": {"newRoot": 5}}]))).is_err());
+        assert!(run(
+            &collections,
+            "t",
+            &stages(json!([{"$replaceRoot": {"newRoot": 5}}]))
+        )
+        .is_err());
         // `$group` 缺 `_id` / 未知累积器 → Err
-        assert!(run(&collections, "t", &stages(json!([{"$group": {"n": {"$sum": 1}}}]))).is_err());
-        assert!(run(&collections, "t", &stages(json!([{"$group": {"_id": null, "p": {"$push": "$x"}}}]))).is_err());
+        assert!(run(
+            &collections,
+            "t",
+            &stages(json!([{"$group": {"n": {"$sum": 1}}}]))
+        )
+        .is_err());
+        assert!(run(
+            &collections,
+            "t",
+            &stages(json!([{"$group": {"_id": null, "p": {"$push": "$x"}}}]))
+        )
+        .is_err());
         // `$facet` 子管道非数组 → Err
         assert!(run(&collections, "t", &stages(json!([{"$facet": 1}]))).is_err());
         // `$unwind` 缺 path → Err

@@ -255,9 +255,9 @@ fn regex_hit(
     pattern: &Value,
     options: Option<&Value>,
 ) -> Result<bool, String> {
-    let pat = pattern.as_str().ok_or_else(|| {
-        format!("$regex 需要字符串模式，收到 {}", type_name(pattern))
-    })?;
+    let pat = pattern
+        .as_str()
+        .ok_or_else(|| format!("$regex 需要字符串模式，收到 {}", type_name(pattern)))?;
     let flags = parse_regex_options(options)?;
     let re = compile_regex(pat, &flags)?;
     Ok(candidates.iter().any(|c| match c {
@@ -423,7 +423,11 @@ mod tests {
         assert!(!matches(&doc, &json!({ "a": { "$in": [1, 2] } })).unwrap());
         assert!(matches(&doc, &json!({ "a": { "$nin": [1, 2] } })).unwrap());
         // 数组字段：元素命中列表
-        assert!(matches(&json!({ "t": ["x", "y"] }), &json!({ "t": { "$in": ["y"] } })).unwrap());
+        assert!(matches(
+            &json!({ "t": ["x", "y"] }),
+            &json!({ "t": { "$in": ["y"] } })
+        )
+        .unwrap());
         // 缺失字段：$nin 命中
         assert!(matches(&json!({ "b": 1 }), &json!({ "a": { "$nin": [1] } })).unwrap());
     }
@@ -458,9 +462,17 @@ mod tests {
     fn not_op() {
         let doc = json!({ "n": 3 });
         assert!(matches(&doc, &json!({ "n": { "$not": { "$gt": 5 } } })).unwrap());
-        assert!(!matches(&json!({ "n": 10 }), &json!({ "n": { "$not": { "$gt": 5 } } })).unwrap());
+        assert!(!matches(
+            &json!({ "n": 10 }),
+            &json!({ "n": { "$not": { "$gt": 5 } } })
+        )
+        .unwrap());
         // 缺失字段 → 内层为假 → $not 为真
-        assert!(matches(&json!({ "x": 1 }), &json!({ "n": { "$not": { "$gt": 5 } } })).unwrap());
+        assert!(matches(
+            &json!({ "x": 1 }),
+            &json!({ "n": { "$not": { "$gt": 5 } } })
+        )
+        .unwrap());
     }
 
     // ---- $regex / $options -------------------------------------------------
@@ -471,7 +483,11 @@ mod tests {
         assert!(matches(&doc, &json!({ "s": { "$regex": "^Hello" } })).unwrap());
         assert!(!matches(&doc, &json!({ "s": { "$regex": "^hello" } })).unwrap());
         // i → 大小写不敏感
-        assert!(matches(&doc, &json!({ "s": { "$regex": "^hello", "$options": "i" } })).unwrap());
+        assert!(matches(
+            &doc,
+            &json!({ "s": { "$regex": "^hello", "$options": "i" } })
+        )
+        .unwrap());
         // 非字符串候选 → 不命中（不报错）
         assert!(!matches(&json!({ "n": 123 }), &json!({ "n": { "$regex": "1" } })).unwrap());
     }

@@ -274,8 +274,7 @@ impl Registry {
         ctx: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let context = ctx_from(ctx)?;
-        let list =
-            core_expand_schedule_triggers(&self.core, context.as_ref()).map_err(err)?;
+        let list = core_expand_schedule_triggers(&self.core, context.as_ref()).map_err(err)?;
         to_py(py, Value::Array(list))
     }
 

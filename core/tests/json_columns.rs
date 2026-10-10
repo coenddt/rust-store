@@ -62,7 +62,9 @@ fn json_extract_scalar_multi_segment() {
 #[test]
 fn json_extract_scalar_single_segment() {
     assert_eq!(
-        Backend::Mysql.json_extract_scalar("`meta`", &["title"]).unwrap(),
+        Backend::Mysql
+            .json_extract_scalar("`meta`", &["title"])
+            .unwrap(),
         "JSON_UNQUOTE(JSON_EXTRACT(`meta`, '$.title'))"
     );
     assert_eq!(

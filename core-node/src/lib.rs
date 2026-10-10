@@ -19,8 +19,9 @@
 //! 分块在 [`methods`]（同 struct 多个 `#[napi] impl` 块）；通用转换见 [`convert`]，
 //! 回调适配见 [`fns`]。
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
 
 use napi::bindgen_prelude::{Env, FunctionRef};
 use napi::Result;
@@ -38,14 +39,17 @@ mod methods;
 #[napi]
 pub struct Registry {
     core: CoreRegistry,
-    sync_fns: Arc<Mutex<HashMap<String, FunctionRef<Value, Value>>>>,
+    // 单线程语义（napi `Env` 线程本地）：`FunctionRef` 非 `Send`/`Sync`，仅作基座与
+    // 派生视图两处共享，故用 `Rc<RefCell<..>>` 而非 `Arc<Mutex<..>>`（后者会触发
+    // clippy::arc_with_non_send_sync，且跨线程保护在此并无意义）。
+    sync_fns: Rc<RefCell<HashMap<String, FunctionRef<Value, Value>>>>,
 }
 
 impl Registry {
     pub(crate) fn bridge<'a>(&'a self, env: &'a Env) -> SyncFnBridge<'a> {
         SyncFnBridge {
             env,
-            fns: self.sync_fns.lock().unwrap(),
+            fns: self.sync_fns.borrow_mut(),
         }
     }
 
@@ -66,7 +70,7 @@ impl Registry {
     pub fn new() -> Self {
         Self {
             core: CoreRegistry::new(),
-            sync_fns: Arc::new(Mutex::new(HashMap::new())),
+            sync_fns: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -95,12 +99,12 @@ impl Registry {
     /// 注册同步计算列回调（schema 里 `fn: true` 的 `fnRef`，缺省为计算列名）
     #[napi]
     pub fn set_fn(&mut self, fn_ref: String, callback: FunctionRef<Value, Value>) {
-        self.sync_fns.lock().unwrap().insert(fn_ref, callback);
+        self.sync_fns.borrow_mut().insert(fn_ref, callback);
     }
 
     #[napi]
     pub fn clear_fns(&mut self) {
-        self.sync_fns.lock().unwrap().clear();
+        self.sync_fns.borrow_mut().clear();
     }
 
     /// 派生策略视图：共享目录快照与回调池，策略覆盖经 core 单点解析（零绑定侧解析）。
@@ -111,7 +115,7 @@ impl Registry {
             .map_err(|e| convert::err(e.message().to_owned()))?;
         Ok(Registry {
             core: self.core.with_policy(&overrides),
-            sync_fns: Arc::clone(&self.sync_fns),
+            sync_fns: Rc::clone(&self.sync_fns),
         })
     }
 

@@ -499,7 +499,7 @@ impl Registry {
         ctx: Option<&crate::permission::Context>,
     ) -> Result<(), String> {
         self.ensure_base_catalog()?; // 视图只读守卫：目录唯一真源在 base
-        // ── 1：判据单点（分组 / 主唯一 / 批内四元组冲突），与 plan_load 同源 ──
+                                     // ── 1：判据单点（分组 / 主唯一 / 批内四元组冲突），与 plan_load 同源 ──
         let class = classify_batch(items).map_err(batch_err_to_msg)?;
 
         // 定义层门禁：判决先于 build_schema —— 拒绝即返回，绝不部分写入
@@ -1156,7 +1156,10 @@ mod tests {
         assert!(inherit.rbac().is_some());
         assert_eq!(inherit.role_rules().exempt_roles, vec!["a".to_string()]);
         assert_eq!(inherit.role_rules().deny_write_roles, vec!["b".to_string()]);
-        assert_eq!(inherit.role_rules().unconfigured, UnconfiguredPolicy::Closed);
+        assert_eq!(
+            inherit.role_rules().unconfigured,
+            UnconfiguredPolicy::Closed
+        );
         assert!(inherit.meta_policy().closed);
         assert_eq!(inherit.meta_policy().roles, vec!["m".to_string()]);
         assert_eq!(inherit.write_link_policy(), WriteLinkPolicy::PrimaryOnly);
@@ -1194,11 +1197,20 @@ mod tests {
         let err2 = view
             .register_with_ctx(&json!({ "name": "A", "fields": {} }), None)
             .expect_err("视图注册应 Err");
-        assert!(err2.starts_with(ERR_POLICY_VIEW_READONLY), "前缀可匹配: {err2}");
+        assert!(
+            err2.starts_with(ERR_POLICY_VIEW_READONLY),
+            "前缀可匹配: {err2}"
+        );
         let err3 = view
-            .register_batch(&[(json!({ "name": "A", "fields": {} }), Location::default())], None)
+            .register_batch(
+                &[(json!({ "name": "A", "fields": {} }), Location::default())],
+                None,
+            )
             .expect_err("视图批量注册应 Err");
-        assert!(err3.starts_with(ERR_POLICY_VIEW_READONLY), "前缀可匹配: {err3}");
+        assert!(
+            err3.starts_with(ERR_POLICY_VIEW_READONLY),
+            "前缀可匹配: {err3}"
+        );
     }
 
     /// T2b：视图 `clear`（返回 `()`，受签名零改动约束）以 panic 显式守卫
@@ -1223,9 +1235,13 @@ mod tests {
 
         // 快照语义：在途视图不承诺看到 base 后续注册；新派生视图可见
         let mut base2 = Registry::new();
-        base2.register(&json!({ "name": "A", "fields": {} })).unwrap();
+        base2
+            .register(&json!({ "name": "A", "fields": {} }))
+            .unwrap();
         let snap = base2.with_policy(&PolicyOverrides::default());
-        base2.register(&json!({ "name": "B", "fields": {} })).unwrap();
+        base2
+            .register(&json!({ "name": "B", "fields": {} }))
+            .unwrap();
         assert!(snap.has("A"), "在途视图仍持其快照");
         let fresh = base2.with_policy(&PolicyOverrides::default());
         assert!(fresh.has("B"), "新派生视图应见 base 后续注册");
@@ -1256,7 +1272,10 @@ mod tests {
             PolicyOverrides::from_value(&json!({ "writeLinkPolicy": "bogus" })).is_err(),
             "非法 writeLinkPolicy 应 Err"
         );
-        assert!(PolicyOverrides::from_value(&json!({})).is_ok(), "空对象合法");
+        assert!(
+            PolicyOverrides::from_value(&json!({})).is_ok(),
+            "空对象合法"
+        );
 
         let mut base = Registry::new();
         base.set_rbac(Some(&json!({}))).unwrap();

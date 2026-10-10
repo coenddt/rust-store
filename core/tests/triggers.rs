@@ -436,8 +436,14 @@ fn remove_op_with_data_is_err() {
 #[test]
 fn plan_remove_without_triggers_has_no_key() {
     let reg = registry_with(&[audit_schema()]);
-    let plan = plan_remove("Audit", &reg, None, &json!({ "_id": "a1" }), Probe::NotProbed)
-        .expect("plan_remove 应成功");
+    let plan = plan_remove(
+        "Audit",
+        &reg,
+        None,
+        &json!({ "_id": "a1" }),
+        Probe::NotProbed,
+    )
+    .expect("plan_remove 应成功");
     assert!(
         plan.get("triggers").is_none(),
         "未配置触发器不得出现 triggers 键"
@@ -494,7 +500,9 @@ fn non_schedule_with_cron_is_err() {
         "fields": { "a": { "type": "string" } },
         "triggers": { "insert": [ { "cron": "* * * * *", "fnRef": "f" } ] }
     });
-    let err = Registry::new().register(&defn).expect_err("非 schedule 带 cron 应 Err");
+    let err = Registry::new()
+        .register(&defn)
+        .expect_err("非 schedule 带 cron 应 Err");
     assert!(err.contains("仅 schedule 事件可配"), "{err}");
 }
 
@@ -565,8 +573,8 @@ fn text2query_rejects_schedule_expand() {
     });
     let mut reg = registry_with(&[job]);
     reg.set_profile(Profile::Text2Query);
-    let err = expand_schedule_triggers(&reg, None)
-        .expect_err("text2query 档含 schedule 触发器应 Err");
+    let err =
+        expand_schedule_triggers(&reg, None).expect_err("text2query 档含 schedule 触发器应 Err");
     assert!(err.starts_with("ERR_TEXT2QUERY:"), "{err}");
 }
 
@@ -584,12 +592,20 @@ fn fixture_err_cases_and_schedule_expand() {
         .expect("解析 fixture 应成功");
 
     // errCases：逐项注册期 Err 且错误含期望子串（零静默）
-    for (i, ec) in fx["errCases"].as_array().expect("errCases 应为数组").iter().enumerate() {
+    for (i, ec) in fx["errCases"]
+        .as_array()
+        .expect("errCases 应为数组")
+        .iter()
+        .enumerate()
+    {
         let want = ec["err"].as_str().expect("errCases 项应含 err 子串");
         let err = Registry::new()
             .register(&ec["defn"])
             .expect_err("errCases 项应注册期 Err");
-        assert!(err.contains(want), "errCases[{i}] 期望含 \"{want}\"，实为：{err}");
+        assert!(
+            err.contains(want),
+            "errCases[{i}] 期望含 \"{want}\"，实为：{err}"
+        );
     }
 
     // schedule 展开：Order 的 2 条声明（命令式 expireLogs + 回调式 dailyReport）
@@ -601,7 +617,9 @@ fn fixture_err_cases_and_schedule_expand() {
     assert_eq!(list.len(), 2);
     assert_eq!(list[0]["name"], "Order.schedule.expireLogs");
     assert_eq!(list[0]["cron"], "0 2 * * *");
-    let cmd = list[0]["step"].get("command").expect("expireLogs 应为命令式");
+    let cmd = list[0]["step"]
+        .get("command")
+        .expect("expireLogs 应为命令式");
     assert_eq!(cmd["kind"], "deleteMany");
     assert_eq!(cmd["collection"], "StockLog");
     assert_eq!(cmd["filter"]["at"]["$lt"], "{{now}}");

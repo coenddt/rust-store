@@ -33,10 +33,12 @@ pub fn eval_command(collections: &Value, command: &Value) -> Result<Value, Strin
         .get("collection")
         .and_then(Value::as_str)
         .ok_or_else(|| "command 缺少 collection".to_string())?;
-    let mut map = collections
-        .as_object()
-        .cloned()
-        .ok_or_else(|| format!("collections 必须是对象 {{集合名: [文档…]}}，收到 {}", type_name(collections)))?;
+    let mut map = collections.as_object().cloned().ok_or_else(|| {
+        format!(
+            "collections 必须是对象 {{集合名: [文档…]}}，收到 {}",
+            type_name(collections)
+        )
+    })?;
 
     // ── 读命令：changed 恒空、collections 原样回传 ──────────────────────────
     match kind {
@@ -135,7 +137,11 @@ pub fn eval_command(collections: &Value, command: &Value) -> Result<Value, Strin
 
     guard_docs(name, &rows)?;
     map.insert(name.to_string(), Value::Array(rows));
-    Ok(envelope(result, vec![name.to_string()], &Value::Object(map)))
+    Ok(envelope(
+        result,
+        vec![name.to_string()],
+        &Value::Object(map),
+    ))
 }
 
 /// 返回包络：`{ result, changed, collections }`。
@@ -204,7 +210,10 @@ mod tests {
             &json!({ "kind": "find", "collection": "users", "filter": { "age": { "$gt": 30 } } }),
         )
         .unwrap();
-        assert_eq!(out["result"], json!([{"_id": "u1", "name": "Ada", "age": 36}]));
+        assert_eq!(
+            out["result"],
+            json!([{"_id": "u1", "name": "Ada", "age": 36}])
+        );
         assert_eq!(out["changed"], json!([]));
         assert_eq!(out["collections"], collections);
         // countDocuments
@@ -368,7 +377,11 @@ mod tests {
         assert!(eval_command(&json!({}), &json!({ "collection": "t" })).is_err());
         assert!(eval_command(&json!({}), &json!({ "kind": "find" })).is_err());
         // 集合非数组 → Err（禁静默当空集合）
-        assert!(eval_command(&json!({ "t": 1 }), &json!({ "kind": "find", "collection": "t" })).is_err());
+        assert!(eval_command(
+            &json!({ "t": 1 }),
+            &json!({ "kind": "find", "collection": "t" })
+        )
+        .is_err());
         // collections 非对象 → Err
         assert!(eval_command(&json!(5), &json!({ "kind": "find", "collection": "t" })).is_err());
     }

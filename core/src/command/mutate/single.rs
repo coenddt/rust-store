@@ -131,7 +131,8 @@ pub fn plan_remove(
     // before 值来源 = 归档 findCommand 的完整文档（Host 端替换 `{{before.*}}`），
     // 故 findCommand 投影保持全字段（None）——归档需完整文档，extra 字段天然包含，
     // 不收窄投影（收窄会丢归档字段）。
-    let remove_triggers = crate::command::triggers::expand_triggers(registry, ctx, schema_name, "remove")?;
+    let remove_triggers =
+        crate::command::triggers::expand_triggers(registry, ctx, schema_name, "remove")?;
     // 关系谓词条件（阶段1 T1-04）：归一为 preCommand（aggregate 取命中 `_id`）+ `_id $in`。
     // 归档 find 也用改写后条件（`_id $in` 标量条件，Mongo/SQL 双侧直接可执行）。
     let has_rel_pred = condition
@@ -155,12 +156,7 @@ pub fn plan_remove(
                 .expect("plan_remove：plan 必为对象")
                 .insert("triggers".to_string(), json!(remove_triggers));
         }
-        return attach_write_links(
-            plan,
-            registry,
-            &[schema_name],
-            registry.write_link_policy(),
-        );
+        return attach_write_links(plan, registry, &[schema_name], registry.write_link_policy());
     } else {
         condition
     };
@@ -187,12 +183,7 @@ pub fn plan_remove(
             .expect("plan_remove：plan 必为对象")
             .insert("triggers".to_string(), json!(remove_triggers));
     }
-    attach_write_links(
-        plan,
-        registry,
-        &[schema_name],
-        registry.write_link_policy(),
-    )
+    attach_write_links(plan, registry, &[schema_name], registry.write_link_policy())
 }
 
 /// 归档表 schema 名（`<schema>Deleted`；plan_remove 主体与关系谓词分支共用）

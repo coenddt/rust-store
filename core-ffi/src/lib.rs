@@ -234,9 +234,11 @@ fn ret_envelope(v: &Value) -> *mut c_char {
     // CString::new 只在含 NUL 时失败；JSON 字符串序列化后不含字面 NUL，unwrap 前已兜底为错误文本
     match CString::new(v.to_string()) {
         Ok(c) => c.into_raw(),
-        Err(_) => CString::new("{\"ok\":false,\"error\":\"FFI 信封序列化失败\",\"code\":\"other\"}")
-            .expect("固定错误文本不含 NUL")
-            .into_raw(),
+        Err(_) => {
+            CString::new("{\"ok\":false,\"error\":\"FFI 信封序列化失败\",\"code\":\"other\"}")
+                .expect("固定错误文本不含 NUL")
+                .into_raw()
+        }
     }
 }
 

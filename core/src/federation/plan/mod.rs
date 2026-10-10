@@ -124,9 +124,11 @@ pub fn plan_federated(
             // GQL 未显式给 $condition：静态 owner 条件与 RBAC 行条件叠加后非空即
             // 注入合成条件为基准 $match，防越权读全表（RBAC 关闭时叠加直通 None，
             // 行为零变化）
-            let static_owner = merge_owner_condition(registry.role_rules(), &root_schema, ctx, None);
-            if let Some(owner) = merge_row_condition(registry, &root_schema, ctx, "read", static_owner)
-                .filter(|v| v.as_object().map(|o| !o.is_empty()).unwrap_or(false))
+            let static_owner =
+                merge_owner_condition(registry.role_rules(), &root_schema, ctx, None);
+            if let Some(owner) =
+                merge_row_condition(registry, &root_schema, ctx, "read", static_owner)
+                    .filter(|v| v.as_object().map(|o| !o.is_empty()).unwrap_or(false))
             {
                 ast.params
                     .insert("condition".to_string(), "@__core_owner__".to_string());

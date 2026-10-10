@@ -345,7 +345,12 @@ pub fn eval_expr(expr: &Value, doc: &Value, vars: &Map<String, Value>) -> Result
             if o.len() == 1 {
                 if let Some(op) = o.keys().next().map(String::as_str) {
                     if let Some(stripped) = op.strip_prefix('$') {
-                        return eval_operator(stripped, o.values().next().expect("len=1"), doc, vars);
+                        return eval_operator(
+                            stripped,
+                            o.values().next().expect("len=1"),
+                            doc,
+                            vars,
+                        );
                     }
                 }
             }
@@ -930,8 +935,14 @@ mod tests {
     fn expr_size() {
         let vars = Map::new();
         let doc = json!({ "arr": [1, 2, 3], "empty": [], "n": 5 });
-        assert_eq!(eval_expr(&json!({ "$size": "$arr" }), &doc, &vars).unwrap(), json!(3));
-        assert_eq!(eval_expr(&json!({ "$size": "$empty" }), &doc, &vars).unwrap(), json!(0));
+        assert_eq!(
+            eval_expr(&json!({ "$size": "$arr" }), &doc, &vars).unwrap(),
+            json!(3)
+        );
+        assert_eq!(
+            eval_expr(&json!({ "$size": "$empty" }), &doc, &vars).unwrap(),
+            json!(0)
+        );
         // 非数组 → Err（Mongo 同样抛错，禁静默）
         assert!(eval_expr(&json!({ "$size": "$n" }), &doc, &vars).is_err());
         assert!(eval_expr(&json!({ "$size": "$missing" }), &doc, &vars).is_err());
@@ -948,25 +959,70 @@ mod tests {
             "one": 9
         });
         // $sum：整数值 → 整数形态（对齐 pipeline.rs::accumulate 的 number_of）
-        assert_eq!(eval_expr(&json!({ "$sum": "$scores" }), &doc, &vars).unwrap(), json!(15));
+        assert_eq!(
+            eval_expr(&json!({ "$sum": "$scores" }), &doc, &vars).unwrap(),
+            json!(15)
+        );
         // 忽略非数值与 null；空数组 → 0；缺失/null → 0
-        assert_eq!(eval_expr(&json!({ "$sum": "$mixed" }), &doc, &vars).unwrap(), json!(5));
-        assert_eq!(eval_expr(&json!({ "$sum": "$empty" }), &doc, &vars).unwrap(), json!(0));
-        assert_eq!(eval_expr(&json!({ "$sum": "$gone" }), &doc, &vars).unwrap(), json!(0));
-        assert_eq!(eval_expr(&json!({ "$sum": "$missing" }), &doc, &vars).unwrap(), json!(0));
+        assert_eq!(
+            eval_expr(&json!({ "$sum": "$mixed" }), &doc, &vars).unwrap(),
+            json!(5)
+        );
+        assert_eq!(
+            eval_expr(&json!({ "$sum": "$empty" }), &doc, &vars).unwrap(),
+            json!(0)
+        );
+        assert_eq!(
+            eval_expr(&json!({ "$sum": "$gone" }), &doc, &vars).unwrap(),
+            json!(0)
+        );
+        assert_eq!(
+            eval_expr(&json!({ "$sum": "$missing" }), &doc, &vars).unwrap(),
+            json!(0)
+        );
         // $avg：恒浮点；空集/无可用值 → null
-        assert_eq!(eval_expr(&json!({ "$avg": "$scores" }), &doc, &vars).unwrap(), json!(5.0));
-        assert_eq!(eval_expr(&json!({ "$avg": "$empty" }), &doc, &vars).unwrap(), Value::Null);
-        assert_eq!(eval_expr(&json!({ "$avg": "$missing" }), &doc, &vars).unwrap(), Value::Null);
+        assert_eq!(
+            eval_expr(&json!({ "$avg": "$scores" }), &doc, &vars).unwrap(),
+            json!(5.0)
+        );
+        assert_eq!(
+            eval_expr(&json!({ "$avg": "$empty" }), &doc, &vars).unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            eval_expr(&json!({ "$avg": "$missing" }), &doc, &vars).unwrap(),
+            Value::Null
+        );
         // $min / $max：BSON 序极值，忽略 null；空集 → null
-        assert_eq!(eval_expr(&json!({ "$min": "$scores" }), &doc, &vars).unwrap(), json!(3));
-        assert_eq!(eval_expr(&json!({ "$max": "$scores" }), &doc, &vars).unwrap(), json!(7));
-        assert_eq!(eval_expr(&json!({ "$min": "$mixed" }), &doc, &vars).unwrap(), json!(1));
-        assert_eq!(eval_expr(&json!({ "$min": "$empty" }), &doc, &vars).unwrap(), Value::Null);
+        assert_eq!(
+            eval_expr(&json!({ "$min": "$scores" }), &doc, &vars).unwrap(),
+            json!(3)
+        );
+        assert_eq!(
+            eval_expr(&json!({ "$max": "$scores" }), &doc, &vars).unwrap(),
+            json!(7)
+        );
+        assert_eq!(
+            eval_expr(&json!({ "$min": "$mixed" }), &doc, &vars).unwrap(),
+            json!(1)
+        );
+        assert_eq!(
+            eval_expr(&json!({ "$min": "$empty" }), &doc, &vars).unwrap(),
+            Value::Null
+        );
         // 单值形态 = 单元素数组（$sum(9) → 9 整数；$avg(9) → 9.0 浮点）
-        assert_eq!(eval_expr(&json!({ "$sum": "$one" }), &doc, &vars).unwrap(), json!(9));
-        assert_eq!(eval_expr(&json!({ "$avg": "$one" }), &doc, &vars).unwrap(), json!(9.0));
-        assert_eq!(eval_expr(&json!({ "$min": "$one" }), &doc, &vars).unwrap(), json!(9));
+        assert_eq!(
+            eval_expr(&json!({ "$sum": "$one" }), &doc, &vars).unwrap(),
+            json!(9)
+        );
+        assert_eq!(
+            eval_expr(&json!({ "$avg": "$one" }), &doc, &vars).unwrap(),
+            json!(9.0)
+        );
+        assert_eq!(
+            eval_expr(&json!({ "$min": "$one" }), &doc, &vars).unwrap(),
+            json!(9)
+        );
     }
 
     #[test]

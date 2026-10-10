@@ -79,9 +79,8 @@ impl Registry {
     /// 派生策略视图（与 core-node 同构；策略解析唯一在 core `from_value`）。
     /// 视图上注册/清空 schema 抛 `ERR_POLICY_VIEW_READONLY:`（守卫在 core）。
     fn with_policy(&self, py: Python<'_>, policy: &Bound<'_, PyAny>) -> PyResult<Py<Registry>> {
-        let overrides =
-            rust_store_core::schema::PolicyOverrides::from_value(&py_to_json(policy)?)
-                .map_err(|e| err(e.message().to_owned()))?;
+        let overrides = rust_store_core::schema::PolicyOverrides::from_value(&py_to_json(policy)?)
+            .map_err(|e| err(e.message().to_owned()))?;
         Py::new(
             py,
             Registry {

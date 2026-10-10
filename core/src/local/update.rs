@@ -258,7 +258,9 @@ fn normalize_doc(v: &Value) -> Result<Value, String> {
 
 /// `_id` 等值判定（候选文档的 `_id` 与目标 `_id`）。
 fn id_equal(row: &Value, id: &Value) -> bool {
-    row.get("_id").map(|v| value::values_equal(v, id)).unwrap_or(false)
+    row.get("_id")
+        .map(|v| value::values_equal(v, id))
+        .unwrap_or(false)
 }
 
 /// 首条命中下标。
@@ -295,7 +297,9 @@ fn build_upsert_base(condition: &Value) -> Value {
 }
 
 fn float_value(f: f64) -> Value {
-    Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
+    Number::from_f64(f)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
 }
 
 fn type_name(v: &Value) -> &'static str {
@@ -346,8 +350,12 @@ mod tests {
         )
         .is_err());
         // 正常插入
-        let out = insert_many(&mut r, &[json!({ "_id": "b" }), json!({ "_id": "c" })], false)
-            .unwrap();
+        let out = insert_many(
+            &mut r,
+            &[json!({ "_id": "b" }), json!({ "_id": "c" })],
+            false,
+        )
+        .unwrap();
         assert_eq!(out, json!({ "insertedCount": 2 }));
         assert_eq!(r.len(), 3);
     }
@@ -391,7 +399,12 @@ mod tests {
         assert_eq!(r[0], json!({ "_id": 1, "n": 11, "tag": "x" }));
         assert_eq!(r[1], json!({ "_id": 2, "s": "open", "n": 2 }));
         // $set 同值 → 不计入 modifiedCount
-        let out2 = update_many(&mut r, &json!({ "_id": 1 }), &json!({ "$set": { "n": 11 } })).unwrap();
+        let out2 = update_many(
+            &mut r,
+            &json!({ "_id": 1 }),
+            &json!({ "$set": { "n": 11 } }),
+        )
+        .unwrap();
         assert_eq!(out2, json!({ "modifiedCount": 0 }));
     }
 
@@ -402,12 +415,15 @@ mod tests {
         update_many(&mut r, &json!({ "_id": 1 }), &json!({ "$inc": { "i": 3 } })).unwrap();
         assert_eq!(r[0]["i"], json!(5));
         // 缺失字段 → 取增量值（保留类型）
-        update_many(&mut r, &json!({ "_id": 1 }), &json!({ "$inc": { "gone": 1 } })).unwrap();
+        update_many(
+            &mut r,
+            &json!({ "_id": 1 }),
+            &json!({ "$inc": { "gone": 1 } }),
+        )
+        .unwrap();
         assert_eq!(r[0]["gone"], json!(1));
         // 非数值目标 → Err
-        assert!(
-            update_many(&mut r, &json!({ "_id": 2 }), &json!({ "$inc": { "s": 1 } })).is_err()
-        );
+        assert!(update_many(&mut r, &json!({ "_id": 2 }), &json!({ "$inc": { "s": 1 } })).is_err());
     }
 
     #[test]
@@ -421,9 +437,13 @@ mod tests {
     fn find_one_and_update_after_before_and_upsert() {
         let mut r = rows(json!([{ "_id": 1, "n": 1 }, { "_id": 2, "n": 2 }]));
         // 命中 → 返回更新后文档（默认 after）
-        let out =
-            find_one_and_update(&mut r, &json!({ "_id": 1 }), &json!({ "$set": { "n": 7 } }), &json!({}))
-                .unwrap();
+        let out = find_one_and_update(
+            &mut r,
+            &json!({ "_id": 1 }),
+            &json!({ "$set": { "n": 7 } }),
+            &json!({}),
+        )
+        .unwrap();
         assert_eq!(out, json!({ "_id": 1, "n": 7 }));
         // returnDocument=before → 返回更新前
         let out2 = find_one_and_update(
@@ -436,8 +456,13 @@ mod tests {
         assert_eq!(out2, json!({ "_id": 1, "n": 7 }));
         assert_eq!(r[0], json!({ "_id": 1, "n": 8 }));
         // 无命中且非 upsert → null
-        let miss = find_one_and_update(&mut r, &json!({ "_id": 99 }), &json!({ "$set": { "n": 1 } }), &json!({}))
-            .unwrap();
+        let miss = find_one_and_update(
+            &mut r,
+            &json!({ "_id": 99 }),
+            &json!({ "$set": { "n": 1 } }),
+            &json!({}),
+        )
+        .unwrap();
         assert_eq!(miss, Value::Null);
         assert_eq!(r.len(), 2);
         // upsert：条件等值字段为底 + $set + $setOnInsert
