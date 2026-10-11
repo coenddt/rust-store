@@ -38,6 +38,9 @@ impl DataSource {
         match kind.to_lowercase().as_str() {
             "mongo" | "mongodb" => Ok(DataSource::Mongo),
             "local" => Ok(DataSource::Local),
+            // memory 与 local 同族：core 只关心「求值路径相同」（均走 core 本地求值器），
+            // 介质差异由宿主按描述符 kind 判别；故 as_str() 对两者都返回 "local"。
+            "memory" => Ok(DataSource::Local),
             other => Backend::parse(other).map(DataSource::Sql),
         }
     }
@@ -193,5 +196,15 @@ mod tests {
         assert!(!DataSource::Mongo.is_local());
         // 未知 kind 仍报错
         assert!(DataSource::from_kind("oracle").is_err());
+    }
+
+    #[test]
+    fn memory_kind_alias() {
+        let ds = DataSource::from_kind("memory").unwrap();
+        assert_eq!(ds, DataSource::Local);
+        assert!(ds.is_local());
+        // round-trip 不对称是刻意的：memory 在 core 侧与 local 同族，as_str() 归一为 "local"
+        assert_eq!(ds.as_str(), "local");
+        assert!(ds.backend().is_none());
     }
 }
