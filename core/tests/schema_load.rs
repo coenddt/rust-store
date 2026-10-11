@@ -51,6 +51,21 @@ fn depth_layered_by_kind() {
     assert!(depth_layered("oracle").is_err());
 }
 
+// ── kind: "memory" 属合法白名单（与 local 同族，深度 = 1） ──
+
+#[test]
+fn memory_kind_accepted() {
+    assert_eq!(depth_layered("memory").unwrap(), 1);
+    let c = LoadConfig::from_json(&json!({
+        "sources": { "mem": { "kind": "memory", "databases": ["sales_db"] } },
+        "defs": ["schema"]
+    }))
+    .expect("kind: memory 应可装载");
+    let (decl, depth) = c.source_of_db("sales_db").unwrap();
+    assert_eq!(decl.kind, "memory");
+    assert_eq!(depth, 1);
+}
+
 // ── locate：PG L2 = schema；无子目录 ⇒ None；非 PG ⇒ None（L2+ 打平） ──
 
 #[test]
