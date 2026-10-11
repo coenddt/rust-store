@@ -8,6 +8,7 @@ use serde_json::{json, Map, Value};
 use crate::types::{is_truthy, str_list, AGG_OPS};
 
 use super::definition::{normalize_fields, ComputeDef, FieldDef, Location, RelationDef, Schema};
+use super::load::LoadConfig;
 
 use crate::command::WriteLinkPolicy;
 use crate::error::{CoreError, ERR_POLICY_VIEW_READONLY};
@@ -611,6 +612,65 @@ impl Registry {
             }
         }
 
+        Ok(())
+    }
+
+    /// 把 `config.links` 的角色/优先级附着到各 entry 的链路集；声明但缺失的链路按声明序补建。
+    ///
+    /// 算法（**先校验后落库，任一 `Err` ⇒ 零副作用**，与 [`Self::register_batch`] 同规）：
+    /// 1. 逐项取 [`Self::get_entry`]（未注册 ⇒ `Err`，禁猜——该名可能由其它批次注册）。
+    /// 2. 每条声明按 [`Location::same_place`] 在 `entry.links` 中匹配来源（只比三元组）：
+    ///    命中 ⇒ 写回 `role`/`priority`；未命中 ⇒ 按**声明序**追加 `Location`。
+    /// 3. 归档随附表 `<Name>Deleted`（若已注册且未在 `links` 中独立声明）继承主的重算链路。
+    /// 4. 未在 `cfg.links` 中出现的 entry / 链路：保持原样（零回归）；`links` 为空 ⇒ no-op。
+    pub fn apply_link_decls(&mut self, cfg: &LoadConfig) -> Result<(), String> {
+        if cfg.links.is_empty() {
+            return Ok(());
+        }
+        self.ensure_base_catalog()?; // 目录唯一真源在 base（视图只读）
+
+        // ── 1/2：拟定期望链路（全程不落库） ──
+        let declared: std::collections::HashSet<&str> =
+            cfg.links.iter().map(|(n, _)| n.as_str()).collect();
+        let mut planned: Vec<(String, Vec<Location>)> = Vec::new();
+        for (name, decls) in &cfg.links {
+            let entry = self.get_entry(name).map_err(|_| {
+                format!("未注册 schema: {name}（config.links 引用了不存在的 schema）")
+            })?;
+            let mut links = entry.links.clone();
+            for decl in decls {
+                let target = Location {
+                    source: decl.source.clone(),
+                    database: decl.database.clone(),
+                    schema: decl.schema.clone(),
+                    role: decl.role,
+                    priority: decl.priority,
+                };
+                match links.iter_mut().find(|l| l.same_place(&target)) {
+                    Some(hit) => {
+                        hit.role = decl.role;
+                        hit.priority = decl.priority;
+                    }
+                    None => links.push(target),
+                }
+            }
+            // 归档随附表继承主的重算链路（主名独立声明同名归档时不覆盖）
+            if !name.ends_with("Deleted") {
+                let aname = format!("{}Deleted", name);
+                if !declared.contains(aname.as_str()) && self.catalog.entries.contains_key(&aname) {
+                    planned.push((aname, links.clone()));
+                }
+            }
+            planned.push((name.clone(), links));
+        }
+
+        // ── 3：提交（仅替换 links；非重注册 ⇒ version 不变） ──
+        let catalog = Arc::make_mut(&mut self.catalog);
+        for (name, links) in planned {
+            if let Some(e) = catalog.entries.get_mut(&name) {
+                e.links = links;
+            }
+        }
         Ok(())
     }
 
