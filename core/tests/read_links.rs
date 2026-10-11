@@ -115,6 +115,53 @@ fn resolve_read_links_priority_ascending_and_unset_last() {
     );
 }
 
+// ── 全 role 层序：primary → replica → cache → archive → 未声明 ──
+
+#[test]
+fn resolve_read_links_full_role_rank_incl_archive_and_undeclared() {
+    let mut r = Registry::new();
+    r.register_batch(
+        &[
+            (order_defn(), loc("s_primary", Some("db1"))),
+            (replica_defn(), loc("s_replica", Some("db2"))),
+            (replica_defn(), loc("s_cache", Some("db3"))),
+            (replica_defn(), loc("s_archive", Some("db4"))),
+            (replica_defn(), loc("s_plain", Some("db5"))),
+        ],
+        None,
+    )
+    .unwrap();
+
+    // 声明序刻意与期望相反；`s_plain` 不给 role ⇒ 未声明层（rank 4）排最末
+    let c = LoadConfig::from_json(&json!({
+        "sources": {
+            "s_primary": { "kind": "mongodb", "databases": ["db1"] },
+            "s_replica": { "kind": "mongodb", "databases": ["db2"] },
+            "s_cache": { "kind": "mongodb", "databases": ["db3"] },
+            "s_archive": { "kind": "mongodb", "databases": ["db4"] },
+            "s_plain": { "kind": "mongodb", "databases": ["db5"] }
+        },
+        "defs": ["schema"],
+        "links": {
+            "Order": [
+                { "source": "s_plain", "database": "db5" },
+                { "source": "s_archive", "database": "db4", "role": "archive" },
+                { "source": "s_cache", "database": "db3", "role": "cache" },
+                { "source": "s_replica", "database": "db2", "role": "replica" },
+                { "source": "s_primary", "database": "db1", "role": "primary" }
+            ]
+        }
+    }))
+    .expect("配置应可解析");
+    r.apply_link_decls(&c).unwrap();
+
+    assert_eq!(
+        sources_of(&r, "Order", None),
+        vec!["s_primary", "s_replica", "s_cache", "s_archive", "s_plain"],
+        "全 role 层序：primary → replica → cache → archive → 未声明"
+    );
+}
+
 // ── 零回归：无 links 声明 ⇒ 原序 ──
 
 #[test]
