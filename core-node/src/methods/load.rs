@@ -27,7 +27,7 @@ fn location_from_value(v: &Value) -> Result<Location> {
             .map(String::from)
     };
     let role = match pick("role") {
-        Some(s) => Some(Role::parse(&s).map_err(|e| napi::Error::from_reason(e))?),
+        Some(s) => Some(Role::parse(&s).map_err(napi::Error::from_reason)?),
         None => None,
     };
     let priority = match o.get("priority") {
