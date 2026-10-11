@@ -27,7 +27,7 @@ use crate::datasource::DataSourceConfig;
 use crate::permission::{can_read_schema, merge_owner_condition, Context};
 use crate::pipeline::{flatten_object_fields, parse_gql, Ast};
 use crate::rbac::{ensure_read, merge_row_condition};
-use crate::schema::{Profile, Registry};
+use crate::schema::{Location, Profile, Registry};
 
 use route::{detect_cross_source_sort, walk};
 
@@ -35,7 +35,14 @@ mod route;
 mod select;
 
 /// 契约版本：形状变更必须升版并附迁移说明
-pub const FEDERATION_VERSION: u64 = 2;
+///
+/// - v3（2026-10）：新增**可选**字段 `links`
+///   （`{ "<schema 名>": [ { source, database, schema, role, priority } ] }`，仅含本次查询
+///   涉及的 schema，顺序取 [`Registry::resolve_read_links`]；`role`/`priority` 未声明输出 `null`）。
+///   v2 消费方**忽略该字段即可**（向后兼容，非破坏性变更）；`degraded` 可能新增
+///   `code:"readLinkUnreachable"`（读链路不可达被跳过，由 `resolve_read_links` 产生；
+///   P1 阶段未下发 `unreachable`，暂不出现）。
+pub const FEDERATION_VERSION: u64 = 3;
 
 /// 一个取数单元（某数据源上的一组命令）
 struct UnitSpec {
@@ -166,10 +173,20 @@ pub fn plan_federated(
     let mut degraded: Vec<Value> = Vec::new();
     let (involved, graph_edges) =
         select::collect_graph(&root_schema.name, &ast.relations, registry)?;
-    let mut cands: select::Candidates = involved
-        .iter()
-        .map(|s| Ok((s.clone(), select::candidates_of(registry, s)?)))
-        .collect::<Result<_, String>>()?;
+    let mut cands: select::Candidates = HashMap::new();
+    // 读链路输出（契约 v3 `plan.links`）：仅含本次涉及 schema，顺序取 `resolve_read_links`
+    let mut links: Map<String, Value> = Map::new();
+    for s in &involved {
+        let locs = select::candidates_of(registry, s)?;
+        links.insert(
+            s.clone(),
+            Value::Array(locs.iter().map(location_to_link_value).collect()),
+        );
+        cands.insert(s.clone(), locs);
+        // 读链路降级声明并入既有 `degraded`（复用 `crud/query.js` 的反馈通道，宿主无需改动）。
+        // P1 阶段 `unreachable` 传 None ⇒ 不产生跳过，此并入恒为空——零行为变化。
+        degraded.extend(registry.resolve_read_links(s, None)?.degraded);
+    }
     // 约束先于优化：当前 Context 无 source 可达字段，暂不限制（待 01/06 定真实来源）
     select::filter_reachable(&mut cands, None);
     let selection = select::select_links(&involved, &graph_edges, &cands, &ds_cfg)?;
@@ -268,8 +285,20 @@ pub fn plan_federated(
         "join": { "type": "hash", "edges": join_edges },
         "postprocess": root_plan.postprocess.clone().unwrap_or(Value::Null),
         "degraded": degraded,
+        "links": links,
         "maxRowsPerSource": max_rows_per_source,
     }))
+}
+
+/// 读链路输出项（契约 v3 `plan.links`）：五元组，`role`/`priority` 未声明输出 `null`。
+fn location_to_link_value(l: &Location) -> Value {
+    json!({
+        "source": l.source,
+        "database": l.database,
+        "schema": l.schema,
+        "role": l.role.as_ref().map(|r| r.as_str()),
+        "priority": l.priority,
+    })
 }
 
 /// 供测试与 Host 参考：把 `sources` 按 key 建索引

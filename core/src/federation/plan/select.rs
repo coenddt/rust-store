@@ -91,17 +91,18 @@ pub(super) fn collect_graph(
     Ok((schemas, edges))
 }
 
-/// 取 schema 的候选链路（主 + 从，主在首位）。
+/// 取 schema 的候选链路（读路径接入：经 [`Registry::resolve_read_links`] 排序）。
 ///
 /// 01 实际模型把链路挂在 [`Registry`] 上（非 `Schema`），故按 schema name 取；
-/// 无链路信息时回落「单落点」= `registry.primary_location(name)`。
+/// 无链路信息时回落「单落点」= `registry.primary_location(name)`（与写路径同源）。
+/// 读路径候选一律经 `resolve_read_links`（排序 + 跳过 + 降级），与写路径的
+/// `primary_location` 解耦；P1 阶段 `unreachable` 传 `None` ⇒ 无跳过、零行为变化，
+/// 降级声明由 [`super::plan_federated`] 另行并入 `plan.degraded`（本函数只回候选）。
 pub(super) fn candidates_of(registry: &Registry, name: &str) -> Result<Vec<Location>, String> {
-    let links = registry.links_of(name)?;
-    if links.is_empty() {
-        Ok(vec![registry.primary_location(name)?.clone()])
-    } else {
-        Ok(links.to_vec())
+    if registry.links_of(name)?.is_empty() {
+        return Ok(vec![registry.primary_location(name)?.clone()]);
     }
+    Ok(registry.resolve_read_links(name, None)?.links)
 }
 
 /// 约束先于优化：按上下文可达 source 过滤候选（`reachable = None` 表示不限制）。

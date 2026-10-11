@@ -3,7 +3,7 @@
     "name": "federation-single-source-default",
     "kind": "plan",
     "result": {
-      "v": 2,
+      "v": 3,
       "kind": "federated",
       "root": "Post",
       "sources": [
@@ -25,7 +25,7 @@
     "name": "federation-same-source-relation",
     "kind": "plan",
     "result": {
-      "v": 2,
+      "v": 3,
       "kind": "federated",
       "root": "Order",
       "sources": [
@@ -47,7 +47,7 @@
     "name": "federation-cross-source-many",
     "kind": "plan",
     "result": {
-      "v": 2,
+      "v": 3,
       "kind": "federated",
       "root": "User",
       "sources": [
@@ -87,7 +87,7 @@
     "name": "federation-cross-source-one-default-child",
     "kind": "plan",
     "result": {
-      "v": 2,
+      "v": 3,
       "kind": "federated",
       "root": "Comment",
       "sources": [
@@ -127,7 +127,7 @@
     "name": "federation-cross-source-one-pg",
     "kind": "plan",
     "result": {
-      "v": 2,
+      "v": 3,
       "kind": "federated",
       "root": "User",
       "sources": [
@@ -167,7 +167,7 @@
     "name": "federation-nested-cross-source",
     "kind": "plan",
     "result": {
-      "v": 2,
+      "v": 3,
       "kind": "federated",
       "root": "Team",
       "sources": [
@@ -226,7 +226,7 @@
     "name": "federation-child-paging-degraded",
     "kind": "plan",
     "result": {
-      "v": 2,
+      "v": 3,
       "kind": "federated",
       "root": "User",
       "sources": [
@@ -268,7 +268,7 @@
     "name": "federation-child-sort-degraded",
     "kind": "plan",
     "result": {
-      "v": 2,
+      "v": 3,
       "kind": "federated",
       "root": "User",
       "sources": [
@@ -310,7 +310,7 @@
     "name": "federation-cross-source-sort-degraded",
     "kind": "plan",
     "result": {
-      "v": 2,
+      "v": 3,
       "kind": "federated",
       "root": "User",
       "sources": [
