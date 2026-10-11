@@ -9,12 +9,13 @@ use napi_derive::napi;
 use serde_json::{json, Value};
 
 use rust_store_core::datasource::DEFAULT_SOURCE;
-use rust_store_core::schema::{plan_load as core_plan_load, LoadConfig, Location};
+use rust_store_core::schema::{plan_load as core_plan_load, LoadConfig, Location, Role};
 
 use crate::convert::err;
 use crate::Registry;
 
-/// `{source?, database?, schema?}` → [`Location`]（缺省 source = `default`；空串视为 None）
+/// `{source?, database?, schema?, role?, priority?}` → [`Location`]（缺省 source = `default`；
+/// 空串视为 None；`role` 经 [`Role::parse`]，非法 ⇒ 绑定层 `Err`；`priority` 须整数）
 fn location_from_value(v: &Value) -> Result<Location> {
     let o = v
         .as_object()
@@ -25,16 +26,36 @@ fn location_from_value(v: &Value) -> Result<Location> {
             .filter(|s| !s.is_empty())
             .map(String::from)
     };
+    let role = match pick("role") {
+        Some(s) => Some(Role::parse(&s).map_err(|e| napi::Error::from_reason(e))?),
+        None => None,
+    };
+    let priority = match o.get("priority") {
+        None | Some(Value::Null) => None,
+        Some(p) => Some(
+            p.as_i64()
+                .ok_or_else(|| napi::Error::from_reason("location.priority 必须是整数"))?,
+        ),
+    };
     Ok(Location {
         source: pick("source").unwrap_or_else(|| DEFAULT_SOURCE.to_string()),
         database: pick("database"),
         schema: pick("schema"),
+        role,
+        priority,
     })
 }
 
-/// [`Location`] → `{source, database, schema}`（跨语言稳定投影）
+/// [`Location`] → `{source, database, schema, role, priority}`（跨语言稳定投影；
+/// `role`/`priority` 未声明输出 `null`）
 fn location_to_value(loc: &Location) -> Value {
-    json!({ "source": loc.source, "database": loc.database, "schema": loc.schema })
+    json!({
+        "source": loc.source,
+        "database": loc.database,
+        "schema": loc.schema,
+        "role": loc.role.map(|r| r.as_str()),
+        "priority": loc.priority,
+    })
 }
 
 #[napi]
@@ -99,5 +120,13 @@ impl Registry {
         self.core
             .register_batch(&pairs, context.as_ref())
             .map_err(err)
+    }
+
+    /// 装配 `store.config.json` 的 `links` 声明（透出 core [`Registry::apply_link_decls`]；
+    /// 失败原样上抛，fail-fast）。
+    #[napi]
+    pub fn apply_link_decls(&mut self, config: Value) -> Result<()> {
+        let cfg = LoadConfig::from_json(&config).map_err(err)?;
+        self.core.apply_link_decls(&cfg).map_err(err)
     }
 }
