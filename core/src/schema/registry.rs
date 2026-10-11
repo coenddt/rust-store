@@ -426,6 +426,15 @@ impl PolicyBundle {
     }
 }
 
+/// 读链路解析结果：已排序链路 + 跳过/降级声明（随 `plan.degraded` 透出，禁静默）。
+#[derive(Debug, Clone)]
+pub struct ReadLinks {
+    /// 已排序链路；`links[0]` = 本次读的选中主链路
+    pub links: Vec<Location>,
+    /// 跳过/降级声明，随 `plan.degraded` 透出（禁静默）
+    pub degraded: Vec<Value>,
+}
+
 impl Registry {
     pub fn new() -> Self {
         Self::default()
@@ -677,6 +686,61 @@ impl Registry {
     /// 主链路 + 从链路（只读）
     pub fn links_of(&self, name: &str) -> Result<&[Location], String> {
         Ok(&self.get_entry(name)?.links)
+    }
+
+    /// 读链路解析：排序（`role` → `priority` → **声明序**）+ 跳过不可达 + 产降级声明。
+    ///
+    /// 排序用稳定 `sort_by_key`：键为 `(role.map_or(4u8, |r| r.rank()), priority.unwrap_or(i64::MAX))`
+    /// ——未声明 `role` 视作最低层（4）、未声明 `priority` 视作最大；稳定排序 ⇒ 同级保声明序，
+    /// 无任何 `links` 声明时全为 `(4, MAX)` ⇒ 顺序 = 原序（零回归）。
+    ///
+    /// `unreachable`：本次调用不可达的 source 列表（由 Host 下发；`None` = 不限制）；
+    /// 命中某链路 `source` ⇒ 从结果剔除并 push 降级声明（禁静默）。全部链路被跳过 ⇒
+    /// `Err:ERR_READ_NO_REACHABLE_LINK: <name>`（绝不回落主链路）。
+    ///
+    /// `links[0]` 即读路径的选中落点（替代 `primary_location` 在读路径的角色；
+    /// `primary_location` 保留供写路径与兼容入口）。可达过滤判据单点在
+    /// [`federation::plan::select::filter_reachable`](crate::federation::plan::select::filter_reachable)，
+    /// 本函数**不重复**该判据。
+    pub fn resolve_read_links(
+        &self,
+        name: &str,
+        unreachable: Option<&[String]>,
+    ) -> Result<ReadLinks, String> {
+        let mut links = self.links_of(name)?.to_vec();
+        links.sort_by_key(|l| {
+            (
+                l.role.map_or(4u8, |r| r.rank()),
+                l.priority.unwrap_or(i64::MAX),
+            )
+        });
+
+        let mut degraded: Vec<Value> = Vec::new();
+        if let Some(unreachable) = unreachable {
+            links.retain(|l| {
+                if unreachable.iter().any(|s| s == &l.source) {
+                    degraded.push(json!({
+                        "code": "readLinkUnreachable",
+                        "layer": "schema",
+                        "message": format!("schema {} 的链路 {} 不可达，已跳过", name, l.source),
+                        "hint": "检查该数据源连接；或调整 store.config.json 的 links 优先级",
+                        "schema": name,
+                        "source": l.source,
+                    }));
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+
+        if links.is_empty() {
+            return Err(format!(
+                "ERR_READ_NO_REACHABLE_LINK: {} 的全部链路不可达（已按 unreachable 跳过）",
+                name
+            ));
+        }
+        Ok(ReadLinks { links, degraded })
     }
 
     /// 主落点（= `links[0]`）
