@@ -213,7 +213,10 @@ fn links_reject_bad_role_and_priority() {
         "links": { "Order": [ { "source": "m", "role": "hot" } ] }
     }))
     .expect_err("非法 role 应报错");
-    assert!(err_role.contains("未知链路角色"), "错误信息异常: {err_role}");
+    assert!(
+        err_role.contains("未知链路角色"),
+        "错误信息异常: {err_role}"
+    );
 
     let err_pri = LoadConfig::from_json(&json!({
         "sources": { "m": { "kind": "mongodb", "databases": ["d"] } },

@@ -62,7 +62,11 @@ fn apply_link_decls_attaches_and_appends() {
     .unwrap();
     // 装配前：两条链路均无 role/priority
     assert_eq!(r.links_of("Order").unwrap().len(), 2);
-    assert!(r.links_of("Order").unwrap().iter().all(|l| l.role.is_none()));
+    assert!(r
+        .links_of("Order")
+        .unwrap()
+        .iter()
+        .all(|l| l.role.is_none()));
 
     let c = cfg(json!({
         "Order": [
