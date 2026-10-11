@@ -204,6 +204,8 @@ mod tests {
             source: source.to_string(),
             database: database.map(String::from),
             schema: None,
+            role: None,
+            priority: None,
         }
     }
 

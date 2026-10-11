@@ -7,8 +7,57 @@ use serde_json::{Map, Value};
 use crate::datasource::DEFAULT_SOURCE;
 use crate::types::{is_truthy, str_list};
 
+/// 链路角色：读解析时决定链路的优先级层级（`Primary` 最高）。
+/// 仅在 `store.config.json` 的 `links` 声明中出现，**禁写入 schema 定义文件**。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// 主链路：读路径的默认选中落点
+    Primary,
+    /// 从链路：主不可用时的备选
+    Replica,
+    /// 缓存链路
+    Cache,
+    /// 归档链路
+    Archive,
+}
+
+impl Role {
+    /// 非法字符串 ⇒ Err（禁静默回落）
+    pub fn parse(s: &str) -> Result<Role, String> {
+        match s {
+            "primary" => Ok(Role::Primary),
+            "replica" => Ok(Role::Replica),
+            "cache" => Ok(Role::Cache),
+            "archive" => Ok(Role::Archive),
+            other => Err(format!(
+                "未知链路角色: {other}（仅 primary/replica/cache/archive）"
+            )),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::Primary => "primary",
+            Role::Replica => "replica",
+            Role::Cache => "cache",
+            Role::Archive => "archive",
+        }
+    }
+
+    /// 排序键：Primary=0, Replica=1, Cache=2, Archive=3
+    pub fn rank(&self) -> u8 {
+        match self {
+            Role::Primary => 0,
+            Role::Replica => 1,
+            Role::Cache => 2,
+            Role::Archive => 3,
+        }
+    }
+}
+
 /// 落点：定义之外，由「目录语义 + 连接配置」解析得到（设计 §5.2）。
-/// 落点维度 = `source` + `database` + `schema`（`schema` 仅 PostgreSQL）。
+/// 落点维度 = `source` + `database` + `schema`（`schema` 仅 PostgreSQL）；
+/// `role` / `priority` 为链路声明附着的可选属性（缺省 `None`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Location {
     /// 连接选择（source 名）；缺省 [`DEFAULT_SOURCE`]
@@ -17,6 +66,10 @@ pub struct Location {
     pub database: Option<String>,
     /// 连接内「schema」：仅 PostgreSQL
     pub schema: Option<String>,
+    /// 链路角色（由 `links` 声明附着；缺省 `None` = 未声明）
+    pub role: Option<Role>,
+    /// 链路优先级（同 role 内升序；`None` 视作最大；允许负数）
+    pub priority: Option<i64>,
 }
 
 impl Default for Location {
@@ -25,7 +78,20 @@ impl Default for Location {
             source: DEFAULT_SOURCE.to_string(),
             database: None,
             schema: None,
+            role: None,
+            priority: None,
         }
+    }
+}
+
+impl Location {
+    /// 落点同址判据（**单点**）：仅比 `(source, database, schema)`，不含 role/priority。
+    ///
+    /// `PartialEq` 由 derive 覆盖全部字段，故任何「两落点是否同址」的判断一律改用本方法。
+    pub fn same_place(&self, other: &Location) -> bool {
+        self.source == other.source
+            && self.database == other.database
+            && self.schema == other.schema
     }
 }
 
@@ -126,6 +192,8 @@ impl Schema {
             source: self.source().to_string(),
             database: self.database().map(String::from),
             schema: self.schema().map(String::from),
+            role: None,
+            priority: None,
         }
     }
 

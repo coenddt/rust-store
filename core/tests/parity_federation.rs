@@ -53,6 +53,8 @@ fn build_registry(fx: &Value) -> Result<Registry, String> {
                         source: src.to_string(),
                         database: None,
                         schema: None,
+                        role: None,
+                        priority: None,
                     },
                 )
             })

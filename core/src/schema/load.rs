@@ -172,6 +172,8 @@ pub fn locate(rel_under_db: &str, source: &str, db: &str, depth: u8) -> Result<L
         source: source.to_string(),
         database: Some(db.to_string()),
         schema,
+        role: None,
+        priority: None,
     })
 }
 

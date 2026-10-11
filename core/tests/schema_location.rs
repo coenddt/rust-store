@@ -4,13 +4,15 @@
 
 use serde_json::json;
 
-use rust_store_core::schema::{Location, Registry};
+use rust_store_core::schema::{Location, Registry, Role};
 
 fn loc(source: &str, database: Option<&str>, schema: Option<&str>) -> Location {
     Location {
         source: source.to_string(),
         database: database.map(String::from),
         schema: schema.map(String::from),
+        role: None,
+        priority: None,
     }
 }
 
@@ -210,4 +212,37 @@ fn default_source_is_none_and_pg_schema_layer_kept() {
     assert_eq!(c.source(), "pg1");
     assert_eq!(c.database(), Some("app_db"));
     assert_eq!(c.schema(), Some("app"));
+}
+
+// ── 02 步骤1：Role 解析与落点同址判据 ──
+
+#[test]
+fn role_parse_rejects_unknown() {
+    assert_eq!(Role::parse("primary").unwrap(), Role::Primary);
+    assert_eq!(Role::parse("replica").unwrap(), Role::Replica);
+    assert_eq!(Role::parse("cache").unwrap(), Role::Cache);
+    assert_eq!(Role::parse("archive").unwrap(), Role::Archive);
+    assert_eq!(Role::Primary.as_str(), "primary");
+    assert_eq!(Role::Primary.rank(), 0);
+    assert_eq!(Role::Replica.rank(), 1);
+    assert_eq!(Role::Cache.rank(), 2);
+    assert_eq!(Role::Archive.rank(), 3);
+    // 非法角色 ⇒ Err（禁静默回落）
+    let err = Role::parse("secondary").expect_err("未知角色应报错");
+    assert!(err.contains("未知链路角色"), "错误信息异常: {}", err);
+}
+
+#[test]
+fn same_place_ignores_role_priority() {
+    let mut a = loc("mongo_main", Some("sales_db"), None);
+    let mut b = loc("mongo_main", Some("sales_db"), None);
+    a.role = Some(Role::Primary);
+    a.priority = Some(1);
+    b.role = Some(Role::Archive);
+    b.priority = Some(-5);
+    assert!(a.same_place(&b), "同址判据只看三元组");
+    // 与整体 == 的差异：role/priority 不同 ⇒ PartialEq 不等，same_place 相等
+    assert_ne!(a, b);
+    let c = loc("mongo_main", Some("other_db"), None);
+    assert!(!a.same_place(&c), "database 不同 ⇒ 非同址");
 }

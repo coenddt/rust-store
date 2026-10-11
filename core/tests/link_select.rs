@@ -18,6 +18,8 @@ fn loc(source: &str, database: Option<&str>, schema: Option<&str>) -> Location {
         source: source.to_string(),
         database: database.map(String::from),
         schema: schema.map(String::from),
+        role: None,
+        priority: None,
     }
 }
 
