@@ -4,7 +4,7 @@
 
 use serde_json::{json, Value};
 
-use rust_store_core::schema::{depth_layered, locate, plan_load, LoadConfig};
+use rust_store_core::schema::{depth_layered, locate, plan_load, LoadConfig, Role};
 
 fn cfg() -> LoadConfig {
     LoadConfig::from_json(&json!({
@@ -115,6 +115,116 @@ fn source_of_db_conflict_and_undeclared() {
     .unwrap();
     assert!(c.source_of_db("shared").is_err(), "同一 db 挂两连接应报错");
     assert!(c.source_of_db("nope").is_err(), "未声明库应报错");
+}
+
+// ── links：链路声明解析与六条校验（A6） ──
+
+#[test]
+fn links_default_empty_ok() {
+    let c = cfg();
+    assert!(c.links.is_empty(), "缺省 links ⇒ 空且不报错（零回归）");
+}
+
+#[test]
+fn links_parse_roles_priority_and_default_db() {
+    let c = LoadConfig::from_json(&json!({
+        "sources": {
+            "mongoMain": { "kind": "mongodb", "databases": ["sales_db"] },
+            "pgMain": { "kind": "pg", "databases": ["analytics_db"] }
+        },
+        "defs": ["schema"],
+        "links": {
+            "Order": [
+                { "source": "mongoMain", "role": "primary", "priority": -1, "database": "sales_db" },
+                { "source": "pgMain", "role": "replica", "schema": "app" }
+            ]
+        }
+    }))
+    .expect("links 应可解析");
+    assert_eq!(c.links.len(), 1);
+    let (name, decls) = &c.links[0];
+    assert_eq!(name, "Order");
+    assert_eq!(decls.len(), 2, "声明序保持");
+    assert_eq!(decls[0].role, Some(Role::Primary));
+    assert_eq!(decls[0].priority, Some(-1));
+    assert_eq!(decls[0].database.as_deref(), Some("sales_db"));
+    assert_eq!(decls[1].role, Some(Role::Replica));
+    // database 缺省：源恰 1 库 ⇒ 取唯一库
+    assert_eq!(decls[1].database.as_deref(), Some("analytics_db"));
+    assert_eq!(decls[1].schema.as_deref(), Some("app"));
+}
+
+#[test]
+fn links_reject_undeclared_source() {
+    let err = LoadConfig::from_json(&json!({
+        "sources": { "mongoMain": { "kind": "mongodb", "databases": ["sales_db"] } },
+        "defs": ["schema"],
+        "links": { "Order": [ { "source": "ghost", "role": "primary" } ] }
+    }))
+    .expect_err("source 未在 sources 声明应报错");
+    assert!(err.contains("未在 sources 中声明"), "错误信息异常: {err}");
+}
+
+#[test]
+fn links_reject_primary_count() {
+    // 0 条
+    let e0 = LoadConfig::from_json(&json!({
+        "sources": { "m": { "kind": "mongodb", "databases": ["d"] } },
+        "defs": ["schema"],
+        "links": { "Order": [ { "source": "m", "role": "replica" } ] }
+    }))
+    .expect_err("0 条 primary 应报错");
+    assert!(
+        e0.contains("必须恰好一条 role=primary"),
+        "错误信息异常: {e0}"
+    );
+    // 2 条
+    let e2 = LoadConfig::from_json(&json!({
+        "sources": {
+            "m1": { "kind": "mongodb", "databases": ["d1"] },
+            "m2": { "kind": "mongodb", "databases": ["d2"] }
+        },
+        "defs": ["schema"],
+        "links": { "Order": [
+            { "source": "m1", "role": "primary" },
+            { "source": "m2", "role": "primary" }
+        ] }
+    }))
+    .expect_err("2 条 primary 应报错");
+    assert!(e2.contains("实际 2 条"), "错误信息异常: {e2}");
+}
+
+#[test]
+fn links_reject_multi_db_without_database() {
+    let err = LoadConfig::from_json(&json!({
+        "sources": { "m": { "kind": "mongodb", "databases": ["d1", "d2"] } },
+        "defs": ["schema"],
+        "links": { "Order": [ { "source": "m", "role": "primary" } ] }
+    }))
+    .expect_err("多库未给 database 应报错");
+    assert!(err.contains("维护多库"), "错误信息异常: {err}");
+}
+
+#[test]
+fn links_reject_bad_role_and_priority() {
+    let err_role = LoadConfig::from_json(&json!({
+        "sources": { "m": { "kind": "mongodb", "databases": ["d"] } },
+        "defs": ["schema"],
+        "links": { "Order": [ { "source": "m", "role": "hot" } ] }
+    }))
+    .expect_err("非法 role 应报错");
+    assert!(err_role.contains("未知链路角色"), "错误信息异常: {err_role}");
+
+    let err_pri = LoadConfig::from_json(&json!({
+        "sources": { "m": { "kind": "mongodb", "databases": ["d"] } },
+        "defs": ["schema"],
+        "links": { "Order": [ { "source": "m", "role": "primary", "priority": 1.5 } ] }
+    }))
+    .expect_err("非整数 priority 应报错");
+    assert!(
+        err_pri.contains("priority 须为整数"),
+        "错误信息异常: {err_pri}"
+    );
 }
 
 // ── A2：目录即落点（L1=database；PG L2=schema；L3+ 打平） ──

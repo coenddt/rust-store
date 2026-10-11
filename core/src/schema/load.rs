@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::datasource::DataSource;
 use crate::dialect::Backend;
 
-use super::definition::Location;
+use super::definition::{Location, Role};
 use super::registry::{classify_batch, detect_location_conflict, BatchError};
 
 /// 一个连接声明（`store.config.json` 的 `sources` 一项）
@@ -25,18 +25,40 @@ pub struct SourceDecl {
     pub databases: Vec<String>,
 }
 
-/// 装载配置（`store.config.json` 的 `sources` + `defs`）
+/// 一条链路声明（`store.config.json` 的 `links[<schema>]` 一项）。
+///
+/// 外置配置，**禁写入 schema 定义文件**（设计 §4.1）；`source`/`database`/`schema`
+/// 三元组标识一个既有或待补建的落点，`role`/`priority` 为读解析排序属性。
+#[derive(Debug, Clone)]
+pub struct LinkDecl {
+    /// 连接名（必须已在 `sources` 声明）
+    pub source: String,
+    /// 链路角色；缺省 `None` = 未声明（排序时视作最低层，不参与 primary 唯一性校验）
+    pub role: Option<Role>,
+    /// 同 role 内升序排序；缺省 `None` = 视作最大；允许负数
+    pub priority: Option<i64>,
+    /// 库：缺省 = `sources[source].databases` 的唯一库（多库须显式给）
+    pub database: Option<String>,
+    /// 连接内 schema（仅 PG 有意义）
+    pub schema: Option<String>,
+}
+
+/// 装载配置（`store.config.json` 的 `sources` + `defs` + `links`）
 #[derive(Debug, Clone, Default)]
 pub struct LoadConfig {
     /// 保持声明顺序（`serde_json::Map` 为 BTreeMap ⇒ 字典序；确定性输出）
     pub sources: Vec<SourceDecl>,
     pub defs: Vec<String>,
+    /// schema 名 → 有序链路声明（保声明序；缺省为空 ⇒ 零回归）
+    pub links: Vec<(String, Vec<LinkDecl>)>,
 }
 
 impl LoadConfig {
-    /// 解析 `{ "sources": { <name>: { kind, databases:[...] } }, "defs": [<root>...] }`。
+    /// 解析 `{ "sources": { <name>: { kind, databases:[...] } }, "defs": [<root>...], "links": {...} }`。
     ///
-    /// 非法即 `Err`（禁静默兜底；含 kind 白名单、databases 非空、defs 非空）。
+    /// 非法即 `Err`（禁静默兜底；含 kind 白名单、databases 非空、defs 非空、links 六条校验）。
+    /// `links` 缺省 ⇒ 空（零回归）；非空时每项须 `source` 已声明、`role` 合法、
+    /// `priority` 为整数、恰一条 `primary`、`database` 可判（多库须显式给）。
     pub fn from_json(v: &Value) -> Result<Self, String> {
         let obj = v
             .as_object()
@@ -106,7 +128,113 @@ impl LoadConfig {
             return Err("ERR:LOAD defs 须为非空字符串数组（定义根）".to_string());
         }
 
-        Ok(LoadConfig { sources, defs })
+        // links：schema 名 → 有序链路声明；缺省 ⇒ 空（零回归，全走既有目录语义）
+        let links = match obj.get("links") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(v) => {
+                let links_obj = v.as_object().ok_or_else(|| {
+                    "ERR:LOAD links 必须是对象（schema 名 → 链路声明数组）".to_string()
+                })?;
+                let mut out: Vec<(String, Vec<LinkDecl>)> = Vec::with_capacity(links_obj.len());
+                for (name, decls_v) in links_obj {
+                    let arr = decls_v.as_array().ok_or_else(|| {
+                        format!("ERR:LOAD links[{name}] 必须是数组（链路声明列表）")
+                    })?;
+                    let mut decls: Vec<LinkDecl> = Vec::with_capacity(arr.len());
+                    let mut primary_count = 0usize;
+                    for (i, item) in arr.iter().enumerate() {
+                        let d = item
+                            .as_object()
+                            .ok_or_else(|| format!("ERR:LOAD links[{name}][{i}] 必须是对象"))?;
+                        // source 必填，且必须已在 sources 声明（未声明即 Err，禁猜）
+                        let source = d
+                            .get("source")
+                            .and_then(|s| s.as_str())
+                            .filter(|s| !s.is_empty())
+                            .ok_or_else(|| format!("ERR:LOAD links[{name}][{i}] 缺 source"))?;
+                        let src_decl = sources.iter().find(|s| s.name == source).ok_or_else(|| {
+                            format!("ERR:LOAD links[{name}] 的 source 未在 sources 中声明: {source}")
+                        })?;
+                        // role 缺省 ⇒ None；给值须经 Role::parse（非法 ⇒ Err）
+                        let role = match d.get("role") {
+                            None | Some(Value::Null) => None,
+                            Some(rv) => {
+                                let rs = rv.as_str().ok_or_else(|| {
+                                    format!("ERR:LOAD links[{name}][{i}] 的 role 须为字符串")
+                                })?;
+                                Some(Role::parse(rs)?)
+                            }
+                        };
+                        if role == Some(Role::Primary) {
+                            primary_count += 1;
+                        }
+                        // priority 必须为整数
+                        let priority = match d.get("priority") {
+                            None | Some(Value::Null) => None,
+                            Some(pv) => Some(pv.as_i64().ok_or_else(|| {
+                                format!("ERR:LOAD links[{name}][{i}] 的 priority 须为整数")
+                            })?),
+                        };
+                        // database 缺省：source 恰 1 库 ⇒ 取其值；多库 ⇒ Err（禁猜）
+                        let database = match d.get("database") {
+                            None | Some(Value::Null) => {
+                                if src_decl.databases.len() == 1 {
+                                    Some(src_decl.databases[0].clone())
+                                } else {
+                                    return Err(format!(
+                                        "ERR:LOAD links[{name}] 的 source {source} 维护多库，须显式给 database"
+                                    ));
+                                }
+                            }
+                            Some(dv) => Some(
+                                dv.as_str()
+                                    .filter(|s| !s.is_empty())
+                                    .ok_or_else(|| {
+                                        format!(
+                                            "ERR:LOAD links[{name}][{i}] 的 database 须为非空字符串"
+                                        )
+                                    })?
+                                    .to_string(),
+                            ),
+                        };
+                        let schema = match d.get("schema") {
+                            None | Some(Value::Null) => None,
+                            Some(sv) => Some(
+                                sv.as_str()
+                                    .filter(|s| !s.is_empty())
+                                    .ok_or_else(|| {
+                                        format!(
+                                            "ERR:LOAD links[{name}][{i}] 的 schema 须为非空字符串"
+                                        )
+                                    })?
+                                    .to_string(),
+                            ),
+                        };
+                        decls.push(LinkDecl {
+                            source: source.to_string(),
+                            role,
+                            priority,
+                            database,
+                            schema,
+                        });
+                    }
+                    // 同一 links[<name>] 内 role=primary 恰好一条
+                    if primary_count != 1 {
+                        return Err(format!(
+                            "ERR:LOAD links[{name}] 必须恰好一条 role=primary（实际 {primary_count} 条）"
+                        ));
+                    }
+                    out.push((name.clone(), decls));
+                }
+                out
+            }
+        };
+
+        Ok(LoadConfig {
+            sources,
+            defs,
+            links,
+        })
     }
 
     /// db 名 → (连接声明, 语义深度)：同一 db 名挂多个连接 ⇒ `Err`（设计 §5.2）。
