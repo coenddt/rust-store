@@ -17,7 +17,7 @@ keywords = [
   "ai-agent", "rust",
 ]
 authors = [
-    { name = "leo", email = "coen_ddt@qq.com" },
+    { name = "丁滔", email = "coen_ddt@qq.com" },
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
