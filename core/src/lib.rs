@@ -8,6 +8,7 @@
 //! 2. schema 注册表由模块级全局 `_schemas` 改为显式 `Registry` 实例。
 
 pub mod bson;
+pub mod capability;
 pub mod command;
 pub mod computes;
 pub mod datasource;
