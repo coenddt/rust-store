@@ -141,8 +141,13 @@ pub fn build_pipeline_projection(ast: &Ast, schema: &Schema) -> Option<Value> {
     let mut proj: Map<String, Value> = Map::new();
     proj.insert("_id".to_string(), json!(1));
     let mut any = false;
+    let mut wants_score = false;
     for f in &ast.fields {
         if f == "_id" {
+            continue;
+        }
+        if f == "_score" {
+            wants_score = true;
             continue;
         }
         if schema.fields.contains_key(f) {
@@ -150,7 +155,10 @@ pub fn build_pipeline_projection(ast: &Ast, schema: &Schema) -> Option<Value> {
             any = true;
         }
     }
-    if !any {
+    if wants_score {
+        proj.insert("_score".to_string(), json!(1));
+    }
+    if !any && !wants_score {
         return None;
     }
     Some(Value::Object(proj))
@@ -179,8 +187,15 @@ pub fn build_projection(
     for (k, v) in fields_proj {
         proj.insert(k, v);
     }
-    if !has_real_field {
+    // `_score` 是向量检索的派生列，不在 schema.fields 中（与保留名约束配套）：
+    // - 请求了就必须保留，否则后续 $project 会把它丢掉（Mongo find / aggregate 两条路径）
+    // - 未请求时不注入，保证响应不含该键（A6 反向断言）
+    let wants_score = ast.fields.iter().any(|f| f == "_score");
+    if !has_real_field && !wants_score {
         return None;
+    }
+    if wants_score {
+        proj.insert("_score".to_string(), json!(1));
     }
 
     // 收集需要在应用层执行的计算列（fn + asyncFn），其依赖字段不能被投影排除

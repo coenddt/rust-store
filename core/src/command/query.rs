@@ -323,6 +323,13 @@ pub fn build_plan(
     let pipeline = build_pipeline(&mut fetch_ast, params, registry, ctx)?;
     let stages: Vec<Value> = pipeline.as_array().cloned().unwrap_or_default();
 
+    // `_score` 只由向量阶段产出（VR-03）；非向量查询请求它必须显式报错，
+    // 不得返回 null 字段（D2：绝不静默返回残缺结果）。
+    let has_vector = stages.iter().any(|s| s.get("$vectorSearch").is_some());
+    if fetch_ast.fields.iter().any(|f| f == "_score") && !has_vector {
+        return Err("字段 _score 仅在向量检索（$near）查询中可用".to_string());
+    }
+
     // 根级 `$group`：命令自身已含分组投影与分组后分页（§9.3 固定序），
     // 不能再走两阶段优化 / 追加普通 `$project`；且**分组行不是普通文档**，
     // 不可做关系下钻 / 计算列 / 默认值后处理 → `postprocess` 置空。
@@ -347,11 +354,11 @@ pub fn build_plan(
 
     // VR-03：`$vectorSearch` 必须是聚合首阶段。find 快路径只认单阶段 `$match`，
     // 形态上已天然排除；此处加断言式护栏，防止后续改动把 `$near` 塞回 `$match`。
-    let has_vector = stages
+    let vector_first = stages
         .first()
         .map(|s| s.get("$vectorSearch").is_some())
         .unwrap_or(false);
-    if has_vector && stages.len() == 1 {
+    if vector_first && stages.len() == 1 {
         return Err(
             "向量检索计划缺少后置阶段：$vectorSearch 必须与 $addFields._score 成对出现".into(),
         );

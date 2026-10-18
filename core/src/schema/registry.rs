@@ -1007,6 +1007,23 @@ fn build_schema(
     let computes = parse_computes(obj, &relations)?;
     // 写触发器声明（onFields 校验依赖已归一 fields；非法声明注册期 Err）
     let triggers = super::triggers::parse_triggers(obj, &name, &fields)?;
+    // `_score` 是向量检索评分列（04），与 `fields ∪ relations ∪ computes` 同属结果文档命名空间；
+    // 字面保留名必须在注册期拒绝，避免用户字段被评分列覆盖或反之。
+    // 注意不能用 `RESERVED_KEYS`：其 `norm_key` 会把 `_score` 归一为 `score`，
+    // 连带误拒合法字段名 `score`（存量 schema 常见）。
+    for (k, ns) in fields
+        .keys()
+        .map(|k| (k, "fields"))
+        .chain(relations.keys().map(|k| (k, "relations")))
+        .chain(computes.iter().map(|(k, _)| (k, "computes")))
+    {
+        if k == "_score" {
+            return Err(format!(
+                "{}名称 \"_score\" 为向量检索评分保留键，不得在 schema {ns} 中声明",
+                crate::naming::ERR_NAME_CONFLICT
+            ));
+        }
+    }
     // 命名冲突检测（A7）：fields ∪ relations ∪ computes 归一后撞名 / 撞保留键 ⇒ 报错
     // （三者同属结果文档命名空间；`_id` 已在 detect_conflicts 内豁免）
     let mut ids: Vec<&str> = Vec::new();
