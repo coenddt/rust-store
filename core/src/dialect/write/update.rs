@@ -123,7 +123,7 @@ fn op_assignments(
             continue;
         };
         let ftype = schema.fields.get(&col).map(|f| f.field_type.as_str());
-        if matches!(ftype, Some("object") | Some("array") | Some("vector")) {
+        if op == "$inc" && matches!(ftype, Some("object") | Some("array") | Some("vector")) {
             return Err(format!(
                 "字段 {k} 的类型为 {}，不支持 $inc（仅数值字段可自增）",
                 ftype.unwrap_or("")
