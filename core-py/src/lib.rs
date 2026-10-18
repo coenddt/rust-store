@@ -252,6 +252,22 @@ fn resource_compose_url(py: Python<'_>, reference: String, cfg: Py<PyAny>) -> Py
     to_py(py, serde_json::json!(out))
 }
 
+/// 向量能力矩阵（纯函数）：宿主探测环境后调用，判定唯一在 core。
+#[pyfunction]
+fn vector_capability(
+    py: Python<'_>,
+    backend: &str,
+    native_ready: bool,
+    atlas_index: bool,
+) -> PyResult<Py<PyAny>> {
+    let out = rust_store_core::capability::vector_capability(rust_store_core::capability::VectorEnv {
+        backend,
+        native_ready,
+        atlas_index,
+    });
+    to_py(py, out)
+}
+
 #[pymodule]
 fn rust_store_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Registry>()?;
@@ -265,5 +281,6 @@ fn rust_store_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(resource_content_path, m)?)?;
     m.add_function(wrap_pyfunction!(resource_is_external_url, m)?)?;
     m.add_function(wrap_pyfunction!(resource_compose_url, m)?)?;
+    m.add_function(wrap_pyfunction!(vector_capability, m)?)?;
     Ok(())
 }

@@ -258,6 +258,16 @@ pub fn detect_conflicts(names: Vec<String>) -> Result<()> {
         .map_err(napi::Error::from_reason)
 }
 
+/// 向量能力矩阵（纯函数）：宿主探测环境后调用，判定唯一在 core。
+#[napi]
+pub fn vector_capability(backend: String, native_ready: bool, atlas_index: bool) -> Value {
+    rust_store_core::capability::vector_capability(rust_store_core::capability::VectorEnv {
+        backend: &backend,
+        native_ready,
+        atlas_index,
+    })
+}
+
 /// 内容寻址路径（纯函数）
 #[napi]
 pub fn resource_content_path(sha1: String) -> Result<String> {

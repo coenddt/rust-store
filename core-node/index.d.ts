@@ -21,6 +21,8 @@ export declare function toPascal(tokens: Array<string>): string
 export declare function translateName(logical: string, target: string): string
 /** 命名冲突检测（A7）：一组逻辑名归一后撞名 / 撞保留键 ⇒ 抛错。 */
 export declare function detectConflicts(names: Array<string>): void
+/** 向量能力矩阵（纯函数）：宿主探测环境后调用，判定唯一在 core。 */
+export declare function vectorCapability(backend: string, nativeReady: boolean, atlasIndex: boolean): any
 /** 内容寻址路径（纯函数） */
 export declare function resourceContentPath(sha1: string): string
 /** 是否外部 URL（纯函数） */
@@ -81,6 +83,11 @@ export declare class Registry {
   planLoad(config: any, files: any): any
   /** 带定位批量注册（D13 批次唯一）；`items` = `[{defn, location}]`，`ctx` 缺省 = 无上下文。 */
   registerBatch(items: any, ctx?: any | undefined | null): void
+  /**
+   * 装配 `store.config.json` 的 `links` 声明（透出 core [`Registry::apply_link_decls`]；
+   * 失败原样上抛，fail-fast）。
+   */
+  applyLinkDecls(config: any): void
   /** 本地磁盘数据源纯求值（宿主提供集合快照 → 返回 `{result, changed, collections}`） */
   localEval(collections: any, command: any): any
   canRead(model: string, ctx?: any | undefined | null): boolean
@@ -182,6 +189,11 @@ export declare class Registry {
   /** 注册同步计算列回调（schema 里 `fn: true` 的 `fnRef`，缺省为计算列名） */
   setFn(fnRef: string, callback: (arg: any) => any): void
   clearFns(): void
+  /**
+   * 派生策略视图：共享目录快照与回调池，策略覆盖经 core 单点解析（零绑定侧解析）。
+   * 视图上注册/清空 schema 会抛 `ERR_POLICY_VIEW_READONLY:`（守卫在 core）。
+   */
+  withPolicy(policy: any): Registry
   /**
    * 开关「上下文强制」（默认关闭 = fail-open，保持 JS parity）。
    * 开启后：plan 入口遇 `ctx` 缺失抛 `ERR_NO_CONTEXT`（fail-secure），

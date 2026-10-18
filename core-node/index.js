@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { Registry, systemContext, canonical, toSnake, toCamel, toPascal, translateName, detectConflicts, resourceContentPath, resourceIsExternalUrl, resourceComposeUrl } = nativeBinding
+const { Registry, systemContext, canonical, toSnake, toCamel, toPascal, translateName, detectConflicts, vectorCapability, resourceContentPath, resourceIsExternalUrl, resourceComposeUrl } = nativeBinding
 
 module.exports.Registry = Registry
 module.exports.systemContext = systemContext
@@ -320,6 +320,7 @@ module.exports.toCamel = toCamel
 module.exports.toPascal = toPascal
 module.exports.translateName = translateName
 module.exports.detectConflicts = detectConflicts
+module.exports.vectorCapability = vectorCapability
 module.exports.resourceContentPath = resourceContentPath
 module.exports.resourceIsExternalUrl = resourceIsExternalUrl
 module.exports.resourceComposeUrl = resourceComposeUrl
