@@ -99,7 +99,10 @@ fn non_vector_rejects_dim_and_metric() {
 fn write_dim_mismatch_is_rejected() {
     let r = reg();
     let err = insert(Backend::Sqlite, &r, json!({ "embedding": [0.1, 0.2, 0.3] })).unwrap_err();
-    assert!(err.contains("期望 1024，实际 3"), "维度文案须含期望与实际：{err}");
+    assert!(
+        err.contains("期望 1024，实际 3"),
+        "维度文案须含期望与实际：{err}"
+    );
 }
 
 #[test]
@@ -131,7 +134,10 @@ fn pg_binds_vector_with_cast() {
     let r = reg_with(json!({ "type": "vector", "dim": 2 })).unwrap();
     let out = insert(Backend::Postgres, &r, json!({ "embedding": [0.1, 0.2] })).unwrap();
     let text = first_stmt(&out)["text"].as_str().unwrap().to_string();
-    assert!(text.contains("CAST($1 AS vector)"), "PG 须显式 CAST：{text}");
+    assert!(
+        text.contains("CAST($1 AS vector)"),
+        "PG 须显式 CAST：{text}"
+    );
 }
 
 #[test]

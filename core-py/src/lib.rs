@@ -260,11 +260,12 @@ fn vector_capability(
     native_ready: bool,
     atlas_index: bool,
 ) -> PyResult<Py<PyAny>> {
-    let out = rust_store_core::capability::vector_capability(rust_store_core::capability::VectorEnv {
-        backend,
-        native_ready,
-        atlas_index,
-    });
+    let out =
+        rust_store_core::capability::vector_capability(rust_store_core::capability::VectorEnv {
+            backend,
+            native_ready,
+            atlas_index,
+        });
     to_py(py, out)
 }
 

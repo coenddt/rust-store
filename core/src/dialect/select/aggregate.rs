@@ -618,8 +618,10 @@ pub(super) fn translate_aggregate(
     // ── 根级 `$group`：分组聚合路径（GROUP BY / HAVING / 分组后 ORDER BY / LIMIT） ──
     if let Some(spec) = group {
         if vector.is_some() {
-            return Err("向量检索（$vectorSearch）不能与 $group 并用（分组终结前无法保证 TopK 语义）"
-                .to_string());
+            return Err(
+                "向量检索（$vectorSearch）不能与 $group 并用（分组终结前无法保证 TopK 语义）"
+                    .to_string(),
+            );
         }
         let stmt = group_agg::translate_group(
             backend,

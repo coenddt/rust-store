@@ -167,7 +167,10 @@ fn score_in_fields_is_rejected() {
         "fields": { "_score": { "type": "number" } },
         "relations": {}
     }));
-    assert!(err.starts_with("ERR_NAME_CONFLICT:"), "须以 ERR_NAME_CONFLICT: 开头：{err}");
+    assert!(
+        err.starts_with("ERR_NAME_CONFLICT:"),
+        "须以 ERR_NAME_CONFLICT: 开头：{err}"
+    );
     assert!(err.contains("fields"), "须指明命名空间 fields：{err}");
 }
 
@@ -180,7 +183,10 @@ fn score_in_relations_is_rejected() {
             "_score": { "model": "Other", "type": "many", "localField": "_id", "foreignField": "badId" }
         }
     }));
-    assert!(err.starts_with("ERR_NAME_CONFLICT:"), "须以 ERR_NAME_CONFLICT: 开头：{err}");
+    assert!(
+        err.starts_with("ERR_NAME_CONFLICT:"),
+        "须以 ERR_NAME_CONFLICT: 开头：{err}"
+    );
     assert!(err.contains("relations"), "须指明命名空间 relations：{err}");
 }
 
@@ -192,7 +198,10 @@ fn score_in_computes_is_rejected() {
         "relations": {},
         "computes": { "_score": { "fn": true, "depends": ["title"] } }
     }));
-    assert!(err.starts_with("ERR_NAME_CONFLICT:"), "须以 ERR_NAME_CONFLICT: 开头：{err}");
+    assert!(
+        err.starts_with("ERR_NAME_CONFLICT:"),
+        "须以 ERR_NAME_CONFLICT: 开头：{err}"
+    );
     assert!(err.contains("computes"), "须指明命名空间 computes：{err}");
 }
 

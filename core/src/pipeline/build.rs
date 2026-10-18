@@ -222,7 +222,9 @@ pub fn build_pipeline(
     // 该路径独立成组构建（不与关系下推 / 计算列聚合混用），阶段数组由 group 模块产出。
     if let Some(group_v) = non_nullish(root_group.as_ref()) {
         if vector_spec.is_some() {
-            return Err("向量检索（$near）不能与 $group 并用（分组终结前无法保证 TopK 语义）".into());
+            return Err(
+                "向量检索（$near）不能与 $group 并用（分组终结前无法保证 TopK 语义）".into(),
+            );
         }
         if rel_plan.is_some() {
             return Err(

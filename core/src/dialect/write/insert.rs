@@ -46,7 +46,12 @@ pub(super) fn build_insert(
                 Ok(binder.bind(p))
             } else {
                 // object/array/vector 字段 → JSON 文本；其余标量原样；vector 维度校验
-                bind_col(&mut binder, schema, c, &doc.get(c).cloned().unwrap_or(Value::Null))
+                bind_col(
+                    &mut binder,
+                    schema,
+                    c,
+                    &doc.get(c).cloned().unwrap_or(Value::Null),
+                )
             }
         })
         .collect::<Result<Vec<String>, String>>()?;

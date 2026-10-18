@@ -27,22 +27,64 @@ pub fn vector_capability(env: VectorEnv<'_>) -> serde_json::Value {
     let (supported, native, backend, metrics, max_dim) = match env.backend {
         "postgres" => {
             if env.native_ready {
-                (true, true, "pgvector", &VECTOR_METRICS[..], PGVECTOR_INDEX_MAX_DIM)
+                (
+                    true,
+                    true,
+                    "pgvector",
+                    &VECTOR_METRICS[..],
+                    PGVECTOR_INDEX_MAX_DIM,
+                )
             } else {
                 (false, false, "pgvector", &[][..], 0)
             }
         }
         "mongodb" => {
             if env.atlas_index {
-                (true, true, "atlas", &VECTOR_METRICS[..], ATLAS_INDEX_MAX_DIM)
+                (
+                    true,
+                    true,
+                    "atlas",
+                    &VECTOR_METRICS[..],
+                    ATLAS_INDEX_MAX_DIM,
+                )
             } else {
-                (true, false, "mongo", &VECTOR_METRICS[..], APPLICATION_MAX_DIM)
+                (
+                    true,
+                    false,
+                    "mongo",
+                    &VECTOR_METRICS[..],
+                    APPLICATION_MAX_DIM,
+                )
             }
         }
-        "mysql" => (true, false, "mysql", &VECTOR_METRICS[..], APPLICATION_MAX_DIM),
-        "sqlite" => (true, false, "sqlite", &VECTOR_METRICS[..], APPLICATION_MAX_DIM),
-        "local" => (true, false, "local", &VECTOR_METRICS[..], APPLICATION_MAX_DIM),
-        "memory" => (true, false, "memory", &VECTOR_METRICS[..], APPLICATION_MAX_DIM),
+        "mysql" => (
+            true,
+            false,
+            "mysql",
+            &VECTOR_METRICS[..],
+            APPLICATION_MAX_DIM,
+        ),
+        "sqlite" => (
+            true,
+            false,
+            "sqlite",
+            &VECTOR_METRICS[..],
+            APPLICATION_MAX_DIM,
+        ),
+        "local" => (
+            true,
+            false,
+            "local",
+            &VECTOR_METRICS[..],
+            APPLICATION_MAX_DIM,
+        ),
+        "memory" => (
+            true,
+            false,
+            "memory",
+            &VECTOR_METRICS[..],
+            APPLICATION_MAX_DIM,
+        ),
         _ => (false, false, "unknown", &[][..], 0),
     };
     serde_json::json!({

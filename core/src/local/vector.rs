@@ -41,18 +41,12 @@ pub fn score(metric: &str, a: &[f64], b: &[f64]) -> Result<f64, String> {
             dot(a, b) / (na * nb)
         }
         "l2" => {
-            let sum: f64 = a
-                .iter()
-                .zip(b.iter())
-                .map(|(x, y)| (x - y) * (x - y))
-                .sum();
+            let sum: f64 = a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum();
             1.0 / (1.0 + sum.sqrt())
         }
         "ip" => dot(a, b),
         other => {
-            return Err(format!(
-                "不支持的向量度量 {other}（仅 cosine/l2/ip）"
-            ));
+            return Err(format!("不支持的向量度量 {other}（仅 cosine/l2/ip）"));
         }
     };
     if !r.is_finite() {
@@ -74,12 +68,8 @@ pub fn search(rows: Vec<Value>, spec: &VectorSpec) -> Result<Vec<Value>, String>
     let mut skipped_zero = 0_usize;
     let mut scored: Vec<Value> = Vec::with_capacity(rows.len().min(spec.limit as usize));
     for mut row in rows {
-        let raw = value::get_path(&row, &spec.field).ok_or_else(|| {
-            format!(
-                "候选行缺少向量字段 {}（禁止拿空列打分）",
-                spec.field
-            )
-        })?;
+        let raw = value::get_path(&row, &spec.field)
+            .ok_or_else(|| format!("候选行缺少向量字段 {}（禁止拿空列打分）", spec.field))?;
         let b = row_vector(raw, &spec.field)?;
         if norm(&b) == 0.0 {
             // 契约：零向量行不参与排序，但必须显式计数并告警（禁止静默丢行）。

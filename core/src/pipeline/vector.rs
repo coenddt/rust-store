@@ -80,7 +80,9 @@ pub fn split(schema: &Schema, condition: &Value) -> Result<(Option<VectorSpec>, 
     collect_near(obj, &mut found)?;
     if found.is_empty() {
         // `$near` 出现在非字段位置（如顶层 `$near` 键）
-        return Err("向量条件 $near 必须作用于 vector 字段：形如 {\"<字段>\": {\"$near\": {…}}}".into());
+        return Err(
+            "向量条件 $near 必须作用于 vector 字段：形如 {\"<字段>\": {\"$near\": {…}}}".into(),
+        );
     }
     if found.len() > 1 {
         return Err("$near 只允许一个向量字段（一次查询只做一次向量检索）".into());
@@ -104,7 +106,9 @@ pub fn split(schema: &Schema, condition: &Value) -> Result<(Option<VectorSpec>, 
         .ok_or_else(|| "$near 必须是对象：{\"$vector\": […], \"$limit\": n}".to_string())?;
     for k in near_obj.keys() {
         if !matches!(k.as_str(), "$vector" | "$limit" | "$minScore") {
-            return Err(format!("$near 出现未知键 {k}（仅支持 $vector/$limit/$minScore）"));
+            return Err(format!(
+                "$near 出现未知键 {k}（仅支持 $vector/$limit/$minScore）"
+            ));
         }
     }
 
@@ -150,7 +154,9 @@ pub fn parse_stage(schema: Option<&Schema>, arg: &Value) -> Result<VectorSpec, S
                 .get(&field)
                 .ok_or_else(|| format!("字段 {field} 未在 schema \"{}\" 中声明", schema.name))?;
             if field_def.field_type != "vector" {
-                return Err(format!("字段 {field} 不是 vector 字段，不能用于 $vectorSearch"));
+                return Err(format!(
+                    "字段 {field} 不是 vector 字段，不能用于 $vectorSearch"
+                ));
             }
             let dim = field_def
                 .dim
@@ -197,9 +203,7 @@ pub fn parse_stage(schema: Option<&Schema>, arg: &Value) -> Result<VectorSpec, S
 
 fn contains_near(v: &Value) -> bool {
     match v {
-        Value::Object(o) => o
-            .iter()
-            .any(|(k, val)| k == "$near" || contains_near(val)),
+        Value::Object(o) => o.iter().any(|(k, val)| k == "$near" || contains_near(val)),
         Value::Array(a) => a.iter().any(contains_near),
         _ => false,
     }
@@ -305,7 +309,11 @@ fn split_filter(cond: &Value) -> (Option<Value>, Option<Value>) {
     if is_empty_condition(cond) {
         return (None, None);
     }
-    let items: Vec<Value> = match cond.as_object().and_then(|o| o.get("$and")).and_then(Value::as_array) {
+    let items: Vec<Value> = match cond
+        .as_object()
+        .and_then(|o| o.get("$and"))
+        .and_then(Value::as_array)
+    {
         Some(arr) => arr.clone(),
         None => vec![cond.clone()],
     };
@@ -406,12 +414,16 @@ fn parse_query_vector(
             .as_f64()
             .ok_or_else(|| format!("$near.$vector 第 {i} 个元素必须为数值，实际 {v}"))?;
         if !n.is_finite() {
-            return Err(format!("$near.$vector 第 {i} 个元素必须为有限数值，实际 {v}"));
+            return Err(format!(
+                "$near.$vector 第 {i} 个元素必须为有限数值，实际 {v}"
+            ));
         }
         out.push(n);
     }
     if metric == "cosine" && out.iter().all(|x| *x == 0.0) {
-        return Err(format!("$near.$vector 为零向量（字段 {field}，cosine 距离未定义）"));
+        return Err(format!(
+            "$near.$vector 为零向量（字段 {field}，cosine 距离未定义）"
+        ));
     }
     Ok(out)
 }
@@ -421,7 +433,9 @@ fn parse_limit(raw: Option<&Value>, field: &str) -> Result<i64, String> {
         .and_then(Value::as_i64)
         .ok_or_else(|| format!("$near.$limit 必填且必须为正整数（字段 {field}）"))?;
     if n <= 0 {
-        return Err(format!("$near.$limit 必须为正整数，实际 {n}（字段 {field}）"));
+        return Err(format!(
+            "$near.$limit 必须为正整数，实际 {n}（字段 {field}）"
+        ));
     }
     if n > ATLAS_MAX_LIMIT {
         return Err(format!(
@@ -445,7 +459,9 @@ fn parse_min_score(raw: Option<&Value>, metric: &str, field: &str) -> Result<Opt
         .as_f64()
         .ok_or_else(|| format!("$near.$minScore 必须是数值（字段 {field}）"))?;
     if !n.is_finite() {
-        return Err(format!("$near.$minScore 必须是有限数值，实际 {v}（字段 {field}）"));
+        return Err(format!(
+            "$near.$minScore 必须是有限数值，实际 {v}（字段 {field}）"
+        ));
     }
     if matches!(metric, "cosine" | "l2") && !(0.0..=1.0).contains(&n) {
         return Err(format!(

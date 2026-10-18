@@ -77,7 +77,10 @@ fn near(limit: i64) -> Value {
 fn missing_near_limit_is_rejected() {
     let err = plan(json!({ "embedding": { "$near": { "$vector": vec4(1.0, 0.0, 0.0, 0.0) } } }))
         .unwrap_err();
-    assert!(err.contains("必填"), "缺 $near.$limit 须显式报「必填」：{err}");
+    assert!(
+        err.contains("必填"),
+        "缺 $near.$limit 须显式报「必填」：{err}"
+    );
 }
 
 #[test]
@@ -101,7 +104,10 @@ fn zero_query_vector_is_rejected_for_cosine() {
         } }
     }))
     .unwrap_err();
-    assert!(err.contains("零向量"), "cosine 零向量须显式报「零向量」：{err}");
+    assert!(
+        err.contains("零向量"),
+        "cosine 零向量须显式报「零向量」：{err}"
+    );
 }
 
 // ─── §6 行为断言 4~6：互斥与位置 ─────────────────────────────
@@ -179,7 +185,9 @@ fn acl_filters_are_prefilter_and_do_not_consume_topk() {
         }),
     );
     let spec = &stages[0]["$vectorSearch"];
-    let flt = spec.get("filter").expect("三条 ACL 行条件须进 $vectorSearch.filter");
+    let flt = spec
+        .get("filter")
+        .expect("三条 ACL 行条件须进 $vectorSearch.filter");
     assert_eq!(flt["tenant"], json!("t1"));
     assert_eq!(flt["ownerId"], json!("u1"));
     assert_eq!(flt["status"], json!("published"));

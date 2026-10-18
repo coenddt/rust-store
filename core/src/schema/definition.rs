@@ -283,9 +283,7 @@ pub(super) fn normalize_fields(v: Option<&Value>) -> Result<HashMap<String, Fiel
                         .map(|v| v as u32)
                         .ok_or_else(|| format!("字段 {key} 的 dim 必须是正整数，实际 {n}"))?,
                 ),
-                Some(other) => {
-                    return Err(format!("字段 {key} 的 dim 必须是正整数，实际 {other}"))
-                }
+                Some(other) => return Err(format!("字段 {key} 的 dim 必须是正整数，实际 {other}")),
             };
             let metric = match o.get("metric") {
                 None | Some(Value::Null) => None,
