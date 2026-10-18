@@ -345,6 +345,18 @@ pub fn build_plan(
         }
     };
 
+    // VR-03：`$vectorSearch` 必须是聚合首阶段。find 快路径只认单阶段 `$match`，
+    // 形态上已天然排除；此处加断言式护栏，防止后续改动把 `$near` 塞回 `$match`。
+    let has_vector = stages
+        .first()
+        .map(|s| s.get("$vectorSearch").is_some())
+        .unwrap_or(false);
+    if has_vector && stages.len() == 1 {
+        return Err(
+            "向量检索计划缺少后置阶段：$vectorSearch 必须与 $addFields._score 成对出现".into(),
+        );
+    }
+
     // ── 纯 $match 无关联 → find 快路径（`$pipeline` 全权模式不适用）──
     if !has_pipeline && stages.len() == 1 {
         if let Some(filter) = stages[0].get("$match") {

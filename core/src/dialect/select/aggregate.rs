@@ -261,6 +261,85 @@ fn child_order_sql(backend: Backend, rel_schema: &Schema, j: &Join) -> Result<St
     Ok(parts.join(", "))
 }
 
+/// VR-03：PostgreSQL 原生向量检索的翻译态。
+///
+/// `param_idx` 是 `queryVector` 的**占位序号（0 基）**：距离表达式 / `_score` 表达式 /
+/// 距离上界三处复用同一序号，保证 `queryVector` 只绑定一次。
+#[derive(Debug, Clone)]
+struct VectorSql {
+    col: String,
+    param_idx: usize,
+    limit: i64,
+    min_score: Option<f64>,
+    metric: String,
+    vector: Vec<f64>,
+    /// 可进 `$vectorSearch.filter` 的预过滤条件（PG 侧必须落 WHERE）
+    filter: Option<Value>,
+}
+
+/// 解析 `$vectorSearch` 阶段（与 `local::vector` 共用同一份二次校验）。
+fn parse_vector_search(schema: &Schema, arg: &Value) -> Result<VectorSql, String> {
+    let spec = crate::pipeline::vector::parse_stage(Some(schema), arg)?;
+    let col = crate::dialect::scalar_column(schema, &spec.field).ok_or_else(|| {
+        format!(
+            "vector 字段 {} 无法映射到 SQL 列（schema \"{}\"）",
+            spec.field, schema.name
+        )
+    })?;
+    Ok(VectorSql {
+        col,
+        param_idx: 0,
+        limit: spec.limit,
+        min_score: spec.min_score,
+        metric: spec.metric,
+        vector: spec.vector,
+        filter: spec.filter,
+    })
+}
+
+/// pgvector 距离表达式：cosine `<=>` / l2 `<->` / ip `<#>`
+fn vector_distance(backend: Backend, v: &VectorSql) -> String {
+    let op = match v.metric.as_str() {
+        "l2" => "<->",
+        "ip" => "<#>",
+        _ => "<=>",
+    };
+    format!(
+        "t.{} {} {}",
+        backend.pcol(&v.col),
+        op,
+        backend.placeholder(v.param_idx)
+    )
+}
+
+/// 识别 build.rs 生成的 minScore 后置 `$match`：`{"_score": {"$gte": n}}`。
+///
+/// 其余形态返回 `Ok(None)` 交给常规 filter 翻译；一旦出现 `_score` 但不是该形态
+/// （或不是数值）→ 显式 `Err`，绝不静默丢弃。
+fn fold_score_min(m: &Value) -> Result<Option<f64>, String> {
+    let Some(obj) = m.as_object() else {
+        return Ok(None);
+    };
+    if !obj.contains_key("_score") {
+        return Ok(None);
+    }
+    if obj.len() != 1 {
+        return Err("向量评分条件必须是单键 {\"_score\": {\"$gte\": n}}".to_string());
+    }
+    let inner = obj
+        .get("_score")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "向量评分条件 _score 必须是 {\"$gte\": n}".to_string())?;
+    if inner.len() != 1 {
+        return Err("向量评分条件 _score 仅支持 $gte".to_string());
+    }
+    inner
+        .get("$gte")
+        .and_then(Value::as_f64)
+        .map(Some)
+        .ok_or_else(|| "向量评分条件 _score.$gte 必须是数值".to_string())
+}
+
 /// aggregate：$match / $lookup(→LEFT JOIN) / $sort / $skip / $limit / $project
 pub(super) fn translate_aggregate(
     backend: Backend,
@@ -291,13 +370,61 @@ pub(super) fn translate_aggregate(
     let mut group_limit: Option<i64> = None;
     let mut group_project: Option<Value> = None;
 
+    // VR-03：PostgreSQL 原生向量检索（`$vectorSearch` 必须是首阶段）
+    let mut vector: Option<VectorSql> = None;
+
     for stage in pipeline {
-        if let Some(g) = stage.get("$group") {
+        if let Some(vs) = stage.get("$vectorSearch") {
+            // 仅 PostgreSQL（pgvector）可下推；其余后端应已由宿主走 vector_scan 降级，
+            // 走到这里即 Err —— 拒绝静默全表扫描或静默忽略向量条件。
+            if backend != Backend::Postgres {
+                return Err(format!(
+                    "SQL 后端 {:?} 不支持原生向量检索：应由宿主 vector_scan 降级（拒绝静默全表扫描或忽略条件）",
+                    backend
+                ));
+            }
+            if vector.is_some() {
+                return Err("$vectorSearch 只允许出现一次（一次查询只做一次向量检索）".to_string());
+            }
+            // `$vectorSearch` 决定 TopK，必须先于一切过滤 / 关系 / 分页阶段落地
+            if group.is_some()
+                || project_on.is_some()
+                || !joins.is_empty()
+                || !compute_aggs.is_empty()
+                || !root_matches.is_empty()
+                || !root_order.is_empty()
+                || root_limit.is_some()
+            {
+                return Err(
+                    "$vectorSearch 必须是聚合管道首阶段（之前不得有 $match/$lookup/$sort/$limit/$project/$group）"
+                        .to_string(),
+                );
+            }
+            let v = parse_vector_search(schema, vs)?;
+            // filter 是「检索前」的行过滤（ACL / owner / 业务条件）：PG 侧必须落 WHERE，
+            // 否则该条件被静默丢弃。TopK 仍由向量阶段决定。
+            if let Some(f) = &v.filter {
+                root_matches.push(f.clone());
+            }
+            // `$near.$limit` = TopK；其后的 `$limit` 阶段（如 text2query 封顶）会覆盖此值
+            root_limit = Some(v.limit);
+            vector = Some(VectorSql { filter: None, ..v });
+        } else if let Some(g) = stage.get("$group") {
             group = Some(group_agg::parse_group(g)?);
         } else if let Some(m) = stage.get("$match") {
             // `$group` 之后的 `$match` = `$having`（§9.3 固定序），之前的 = WHERE
             if group.is_some() {
                 group_having = Some(m.clone());
+            } else if let Some(ms) = fold_score_min(m)? {
+                // VR-03：build.rs 生成的 minScore 后置 `$match` → 折叠为距离上界，
+                // 不产生 `_score` 常规列条件（`_score` 不是 schema 字段）。
+                let v = vector.as_mut().ok_or_else(|| {
+                    "评分条件 _score 只能与向量检索（$near / $vectorSearch）并用".to_string()
+                })?;
+                if v.min_score.is_some() {
+                    return Err("$near.$minScore 只允许出现一次".to_string());
+                }
+                v.min_score = Some(ms);
             } else {
                 root_matches.push(m.clone());
             }
@@ -440,6 +567,20 @@ pub(super) fn translate_aggregate(
                 ));
             }
         } else if let Some(af) = stage.get("$addFields") {
+            // VR-03 / VR-04：`_score: {$meta:"vectorSearchScore"}` 由向量列表达式提供 → no-op
+            let is_score_only = af
+                .as_object()
+                .map(|o| {
+                    o.len() == 1
+                        && o.get("_score")
+                            .and_then(|v| v.get("$meta"))
+                            .and_then(Value::as_str)
+                            == Some("vectorSearchScore")
+                })
+                .unwrap_or(false);
+            if is_score_only && vector.is_some() {
+                continue;
+            }
             // 归一聚合计算列（§9.2(2)）：`$addFields` 的键均已由对应 `$lookup` 翻译为
             // 派生表 LEFT JOIN 的标量列 → 此处为 no-op。仅当键全为已解析的计算列才安全忽略；
             // 其余（无关计算列的 $addFields）维持显式 Err，绝不静默忽略。
@@ -476,6 +617,10 @@ pub(super) fn translate_aggregate(
 
     // ── 根级 `$group`：分组聚合路径（GROUP BY / HAVING / 分组后 ORDER BY / LIMIT） ──
     if let Some(spec) = group {
+        if vector.is_some() {
+            return Err("向量检索（$vectorSearch）不能与 $group 并用（分组终结前无法保证 TopK 语义）"
+                .to_string());
+        }
         let stmt = group_agg::translate_group(
             backend,
             schema,
@@ -541,6 +686,21 @@ pub(super) fn translate_aggregate(
                 columns.push(RowCol::scalar(&alias, &f.split('.').collect::<Vec<_>>()));
             }
             None => {}
+        }
+    }
+    // `_score` 输出列（VR-03 / A6）：cosine `1-d`；l2 `1/(1+d)`；ip `-d`
+    // `_score` 不在 schema.fields 中，上面循环的 `col_fn` 恒为 None → 必须按 `selected` 事后补列；
+    // 未请求时不产出该键（A6 反向断言）。
+    if let Some(v) = &vector {
+        if selected.iter().any(|f| f == "_score") {
+            let d = format!("({})", vector_distance(backend, v));
+            let score_expr = match v.metric.as_str() {
+                "l2" => format!("(1.0 / (1.0 + {}))", d),
+                "ip" => format!("(-{})", d),
+                _ => format!("(1.0 - {})", d),
+            };
+            cols_sql.push(format!("{} AS {}", score_expr, q(backend, "_score")));
+            columns.push(RowCol::computed("_score", &["_score"]));
         }
     }
     if cols_sql.is_empty() && !selected.is_empty() {
@@ -781,6 +941,12 @@ pub(super) fn translate_aggregate(
         schema,
         registry,
     };
+    // VR-03：向量参数序号必须在 JOIN 参数之后、根 `$match` 参数之前确定
+    // （`queryVector` 只绑定一次；距离 / 上界 / `_score` 三处复用同一序号）
+    if let Some(v) = vector.as_mut() {
+        v.param_idx = param_seq;
+        param_seq += 1;
+    }
     let mut root_wheres: Vec<WhereClause> = Vec::new();
     for m in &root_matches {
         let wh = build_filter_with_relations(
@@ -796,7 +962,36 @@ pub(super) fn translate_aggregate(
             root_wheres.push(wh);
         }
     }
+
+    // VR-03 / VR-05：minScore → 距离上界（PG 原生距离运算符可直接走 HNSW）
+    // cosine score = 1-d       → d <= 1-minScore
+    // l2     score = 1/(1+d)   → d <= 1/minScore-1（minScore<=0 时得分恒 >0，无过滤效果）
+    // ip     score = -d        → d <= -minScore
+    if let Some(v) = &vector {
+        let dist = vector_distance(backend, v);
+        if let Some(ms) = v.min_score {
+            let bound = match v.metric.as_str() {
+                "l2" if ms > 0.0 => Some(1.0 / ms - 1.0),
+                "l2" => None,
+                "ip" => Some(-ms),
+                _ => Some(1.0 - ms),
+            };
+            if let Some(b) = bound {
+                let ph = backend.placeholder(param_seq);
+                param_seq += 1;
+                root_wheres.push(WhereClause {
+                    text: format!("{} <= {}", dist, ph),
+                    params: vec![json!(b)],
+                });
+            }
+        }
+        root_order.push(format!("{} ASC", dist));
+    }
     all_params.extend(join_params);
+    // 向量参数位于 JOIN 参数之后、根 `$match` 参数之前（与 `param_idx` 编号一致）
+    if let Some(v) = &vector {
+        all_params.push(json!(v.vector));
+    }
     let where_sql = if root_wheres.is_empty() {
         String::new()
     } else {

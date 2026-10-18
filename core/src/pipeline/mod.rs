@@ -26,6 +26,7 @@ mod projection;
 mod relation_filter;
 mod token;
 mod util;
+pub mod vector;
 
 pub use ast::{Ast, RelAst};
 pub(crate) use build::flatten_object_fields_impl;

@@ -9,5 +9,6 @@ pub mod filter;
 pub mod pipeline;
 pub mod update;
 pub mod value;
+pub mod vector;
 
 pub use eval::eval_command;

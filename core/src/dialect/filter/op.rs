@@ -84,6 +84,13 @@ pub(super) fn cond_clause(
                     }
                     WhereClause::new(String::new(), Vec::new())
                 }
+                // VR-03：`$near` 只允许由 `pipeline::vector::split` 抽取为 `$vectorSearch`。
+                // 落到 SQL 条件翻译说明规划层漏抽 —— 显式 Err，禁止降级为「字段等于该对象」。
+                "$near" => {
+                    return Err(format!(
+                        "向量条件 $near 未被规划层抽取（字段 {col}）：请检查 $near 是否位于 $or/$nor/$not 内或与 $group 并用"
+                    ));
+                }
                 // 未识别操作符（$expr / $elemMatch / $all / $where …）→ 显式报错
                 // （缺陷 D-02：绝不静默丢弃条件生成缺 WHERE 的错误 SQL）
                 _ => {

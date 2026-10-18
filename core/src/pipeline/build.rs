@@ -14,6 +14,7 @@ use super::group;
 use super::lookup::{build_agg_stages, build_lookup};
 use super::relation_filter;
 use super::util::{append_order, find_stage_idx, force_t2q_limit, non_nullish, param};
+use super::vector;
 
 /// 归一化 AST：将 type=object 的花括号子字段展平为点号字段（原地修改）
 pub fn flatten_object_fields(ast: &mut Ast, schema: &Schema) {
@@ -179,18 +180,50 @@ pub fn build_pipeline(
         validate_condition(cond)?;
     }
 
+    // VR-03：`$near` 必须最先抽取 —— 它决定首阶段（TopK），且与关系谓词 / `$group` /
+    // 排序翻页互斥；抽取后的剩余条件才进入常规过滤规划。
+    let (vector_spec, rest_condition) = match non_nullish(root_condition.as_ref()) {
+        Some(cond) => {
+            let (spec, rest) = vector::split(schema, cond)?;
+            (spec, non_nullish(Some(&rest)).cloned())
+        }
+        None => (None, None),
+    };
+    if vector_spec.is_some() {
+        // 互斥：向量检索自带排序 / TopK / 不支持翻页
+        if non_nullish(root_skip.as_ref()).is_some() {
+            return Err("向量检索（$near）不支持 $skip：请用 $near.$limit 控制返回条数".into());
+        }
+        if non_nullish(root_sort.as_ref()).is_some() {
+            return Err("向量检索（$near）已按相似度排序，不能与 $sort 同时使用".into());
+        }
+        // 仅用户显式给出的根 `$limit` 与 `$near.$limit` 互斥；text2query 档的封顶是档位
+        // 限制而非用户意图，不参与互斥判定（否则该档位下 `$near` 恒不可用）。
+        if non_nullish(param(params, ast.params.get("limit"))).is_some() {
+            return Err(
+                "向量检索（$near）的返回条数由 $near.$limit 唯一指定，不能再给根 $limit".into(),
+            );
+        }
+    }
+
     // §9.6 关系聚合谓词（跨表条件过滤 / semi-join）：判定依据 = schema ——
     // `$condition` 键命中 `schema.relations` 的关系名 → 谓词；命中 array/object 字段 → U1/U2 Err。
     // 无关系谓词 → `None`，既有标量路径逐字节不变。
-    let rel_plan = match non_nullish(root_condition.as_ref()) {
+    let rel_plan = match rest_condition.as_ref() {
         Some(cond) => relation_filter::plan(schema, registry, ctx, cond)?,
         None => None,
     };
+    if vector_spec.is_some() && rel_plan.is_some() {
+        return Err("向量检索（$near）暂不支持与关系聚合谓词并用（两者都占用阶段段位）".into());
+    }
 
     // ── 根级 `$group`：成组聚合终结路径（§9.2(1)） ──
     // 固定执行序（§9.3）：$condition(WHERE) → $group → $having → $sort/$skip/$limit → 投影。
     // 该路径独立成组构建（不与关系下推 / 计算列聚合混用），阶段数组由 group 模块产出。
     if let Some(group_v) = non_nullish(root_group.as_ref()) {
+        if vector_spec.is_some() {
+            return Err("向量检索（$near）不能与 $group 并用（分组终结前无法保证 TopK 语义）".into());
+        }
         if rel_plan.is_some() {
             return Err(
                 "$group 查询暂不支持关系聚合谓词（§9.6 属 $condition 段，与分组终结路径暂未互通）"
@@ -227,11 +260,21 @@ pub fn build_pipeline(
     // 展平 object 子字段花括号语法 → dot-notation
     flatten_object_fields(ast, schema);
 
-    if let Some(plan) = &rel_plan {
+    if let Some(spec) = &vector_spec {
+        // VR-03：`$vectorSearch` 必须先于一切过滤条件落成首阶段
+        stages.extend(vector::build_stages(spec));
+        if let Some(r) = spec.residual.clone() {
+            stages.push(json!({ "$match": r }));
+        }
+        if let Some(m) = spec.min_score {
+            // Atlas 无 minScore 参数 → 后置阈值过滤（语义与 PG 下推一致）
+            stages.push(json!({ "$match": { "_score": { "$gte": m } } }));
+        }
+    } else if let Some(plan) = &rel_plan {
         // 关系谓词 `$lookup` 必须位于改写后的 `$match` 之前（semi-join：不扇出、父行形状不变）
         stages.extend(plan.lookups.iter().cloned());
         stages.push(json!({ "$match": plan.condition.clone() }));
-    } else if let Some(cond) = non_nullish(root_condition.as_ref()) {
+    } else if let Some(cond) = rest_condition.as_ref() {
         // 条件拒绝名单校验（缺陷 D-02：$where 等载荷显式报错，绝不静默传递）已在上方统一完成
         stages.push(json!({ "$match": cond }));
     }

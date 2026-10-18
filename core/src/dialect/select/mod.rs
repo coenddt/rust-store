@@ -159,7 +159,9 @@ pub(in crate::dialect::select) fn check_projection_supported(
     };
     for (k, v) in o {
         let requested = v.as_i64().map(|n| n != 0).unwrap_or(false) || v.as_bool() == Some(true);
-        if !requested || k == "_id" {
+        // `_score` 为向量检索派生列（不在 schema），由 aggregate 组装阶段按需生成，
+        // 不属于「未声明字段」，不得在此拒绝（仅放行字面 `_score`）。
+        if !requested || k == "_id" || k == "_score" {
             continue;
         }
         // 关系名与计算列不是真实列，交由关系 JOIN / 派生表处理，不在本检查范围

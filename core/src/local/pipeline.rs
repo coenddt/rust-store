@@ -1,5 +1,5 @@
 //! 本地磁盘数据源 —— 聚合管道阶段求值（`$match $sort $skip $limit $project $unwind
-//! $lookup $group $addFields/$set $facet $replaceRoot`）。
+//! $lookup $group $vectorSearch $addFields/$set $facet $replaceRoot`）。
 //!
 //! 语义基准 = **MongoDB 驱动语义**（local 与 mongo 走同一条命令路径，必须同结果）。
 //! 纯逻辑：无 IO / 无时钟 / 无随机（确定性是双端对拍的前提）——
@@ -20,6 +20,7 @@ use serde_json::{Map, Value};
 use crate::local::filter;
 use crate::local::value;
 use crate::local::value::{eval_expr, get_path};
+use crate::local::vector;
 
 // ---------------------------------------------------------------------------
 // 入口
@@ -117,6 +118,24 @@ fn apply_stage(
         "$unwind" => apply_unwind(rows, arg),
         "$lookup" => apply_lookup(collections, rows, arg, vars),
         "$group" => apply_group(rows, arg, vars),
+        // 应用层精确向量检索（MySQL / SQLite / 自建 Mongo / local / memory 共用）
+        "$vectorSearch" => {
+            let spec = vector::parse_stage(arg)?;
+            // Atlas 阶段内 `filter` 语义：先按预过滤缩小集合，再在子集上精确打分
+            let candidates = match spec.filter.as_ref() {
+                Some(f) => {
+                    let mut out = Vec::with_capacity(rows.len());
+                    for row in rows {
+                        if filter::matches_with_vars(&row, f, vars)? {
+                            out.push(row);
+                        }
+                    }
+                    out
+                }
+                None => rows,
+            };
+            vector::search(candidates, &spec)
+        }
         "$addFields" | "$set" => {
             let spec = arg
                 .as_object()
@@ -124,6 +143,12 @@ fn apply_stage(
             let mut out = Vec::with_capacity(rows.len());
             for mut row in rows {
                 for (path, expr) in spec {
+                    // 向量检索的 `_score` 已由 `$vectorSearch` 写入，`$meta` 阶段为 no-op
+                    if path == "_score"
+                        && expr.get("$meta").and_then(Value::as_str) == Some("vectorSearchScore")
+                    {
+                        continue;
+                    }
                     let v = eval_expr(expr, &row, vars)?;
                     value::set_path(&mut row, path, v);
                 }
@@ -168,7 +193,7 @@ fn apply_stage(
             Ok(out)
         }
         other => Err(format!(
-            "不支持的聚合阶段 {other}（本地求值器拒绝静默跳过；支持 $match/$sort/$skip/$limit/$project/$unwind/$lookup/$group/$addFields/$set/$facet/$replaceRoot）"
+            "不支持的聚合阶段 {other}（本地求值器拒绝静默跳过；支持 $match/$sort/$skip/$limit/$project/$unwind/$lookup/$group/$vectorSearch/$addFields/$set/$facet/$replaceRoot）"
         )),
     }
 }
