@@ -7,7 +7,9 @@ use serde_json::{json, Map, Value};
 
 use crate::types::{is_truthy, str_list, AGG_OPS};
 
-use super::definition::{normalize_fields, ComputeDef, FieldDef, Location, RelationDef, Schema};
+use super::definition::{
+    normalize_fields, validate_vector_fields, ComputeDef, FieldDef, Location, RelationDef, Schema,
+};
 use super::load::LoadConfig;
 
 use crate::command::WriteLinkPolicy;
@@ -995,6 +997,8 @@ fn build_schema(
 ) -> Result<Schema, String> {
     let timestamps = parse_timestamps(obj)?;
     let mut fields = normalize_fields(obj.get("fields"))?;
+    // 向量字段注册期校验（A1）：任一步 Err ⇒ 零副作用
+    validate_vector_fields(&fields)?;
     if timestamps {
         add_timestamp_fields(&mut fields);
     }
@@ -1068,6 +1072,8 @@ fn add_timestamp_fields(fields: &mut HashMap<String, FieldDef>) {
             write: None,
             fields: None,
             strategy: None,
+            dim: None,
+            metric: None,
         });
     }
 }

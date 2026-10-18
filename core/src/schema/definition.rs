@@ -108,6 +108,57 @@ pub struct FieldDef {
     /// 赋值（SQL 后端），宿主不生成、core 不注入 `_id`；Mongo 后端无自增语义，
     /// 执行器对此显式报错（AUTOINCREMENT_NOT_SUPPORTED）。其余值非法（注册期校验）。
     pub strategy: Option<String>,
+    /// 向量维度：`field_type == "vector"` 时必填，正整数（VR-01）
+    pub dim: Option<u32>,
+    /// 向量距离度量：cosine / l2 / ip，缺省 cosine（仅 vector 字段允许出现）
+    pub metric: Option<String>,
+}
+
+impl FieldDef {
+    /// 向量距离度量（缺省 cosine）；非 vector 字段调用无意义
+    pub fn metric_or_default(&self) -> &str {
+        self.metric.as_deref().unwrap_or("cosine")
+    }
+}
+
+/// 向量维度统一上限：与 pgvector `vector` 类型上限一致，保证同一 schema 可跨源迁移。
+/// 数值源唯一：05 的 `capability::APPLICATION_MAX_DIM` 引用本常量，禁止出现第二个 16000 字面量。
+pub const MAX_VECTOR_DIM: u32 = 16000;
+
+/// 注册期向量字段校验（VR-01 / A1）：vector 必带合法 dim；非 vector 不接受 dim / metric。
+pub(super) fn validate_vector_fields(fields: &HashMap<String, FieldDef>) -> Result<(), String> {
+    for (name, f) in fields {
+        let is_vector = f.field_type == "vector";
+        if is_vector {
+            let dim = match f.dim {
+                Some(d) => d,
+                None => {
+                    return Err(format!(
+                        "字段 {name} 类型为 vector，但缺少必填 dim（正整数）"
+                    ))
+                }
+            };
+            if dim > MAX_VECTOR_DIM {
+                return Err(format!(
+                    "字段 {name} 的 dim 超过上限：{dim} > {MAX_VECTOR_DIM}"
+                ));
+            }
+        } else {
+            if f.dim.is_some() {
+                return Err(format!(
+                    "字段 {name} 类型为 {}，不接受 dim（仅 vector 允许）",
+                    f.field_type
+                ));
+            }
+            if f.metric.is_some() {
+                return Err(format!(
+                    "字段 {name} 类型为 {}，不接受 metric（仅 vector 允许）",
+                    f.field_type
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -219,8 +270,34 @@ pub(super) fn normalize_fields(v: Option<&Value>) -> Result<HashMap<String, Fiel
                 write: None,
                 fields: None,
                 strategy: None,
+                dim: None,
+                metric: None,
             }
         } else if let Some(o) = val.as_object() {
+            // 向量属性必须显式提取：未提取的键会被静默丢弃（VR-01 / 取证 3.5）
+            let dim = match o.get("dim") {
+                None | Some(Value::Null) => None,
+                Some(Value::Number(n)) => Some(
+                    n.as_u64()
+                        .filter(|v| *v > 0 && *v <= u32::MAX as u64)
+                        .map(|v| v as u32)
+                        .ok_or_else(|| format!("字段 {key} 的 dim 必须是正整数，实际 {n}"))?,
+                ),
+                Some(other) => {
+                    return Err(format!("字段 {key} 的 dim 必须是正整数，实际 {other}"))
+                }
+            };
+            let metric = match o.get("metric") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(s)) if ["cosine", "l2", "ip"].contains(&s.as_str()) => {
+                    Some(s.clone())
+                }
+                Some(other) => {
+                    return Err(format!(
+                        "字段 {key} 的 metric 仅支持 cosine/l2/ip，实际 {other}"
+                    ))
+                }
+            };
             FieldDef {
                 field_type: o
                     .get("type")
@@ -242,6 +319,8 @@ pub(super) fn normalize_fields(v: Option<&Value>) -> Result<HashMap<String, Fiel
                         ))
                     }
                 },
+                dim,
+                metric,
             }
         } else {
             // 非字符串、非对象的定义（如 `fields: { price: 123 }`）= 脏 schema，

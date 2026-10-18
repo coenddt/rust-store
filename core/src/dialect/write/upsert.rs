@@ -10,7 +10,7 @@ use crate::dialect::Backend;
 use crate::schema::Schema;
 
 use super::update::{build_assignments, read_back, write_with_returning};
-use super::{bind_value, returning_cols, scalar_col, tname, writable_col, Binder};
+use super::{bind_col, returning_cols, scalar_col, tname, writable_col, Binder};
 
 /// upsert：`INSERT ... ON CONFLICT/ON DUPLICATE KEY ...` + 回读
 pub(super) fn translate_upsert(
@@ -44,7 +44,7 @@ pub(super) fn translate_upsert(
             if v.is_null() || cols.iter().any(|c| c == &col) {
                 continue;
             }
-            let bound = bind_value(schema, &col, v);
+            let bound = v.clone();
             cols.push(col);
             vals.push(bound);
         }
@@ -59,7 +59,11 @@ pub(super) fn translate_upsert(
         .map(|c| backend.pcol(c))
         .collect::<Vec<_>>()
         .join(", ");
-    let phs: Vec<String> = vals.iter().map(|v| binder.bind(v.clone())).collect();
+    let phs: Vec<String> = cols
+        .iter()
+        .zip(vals.iter())
+        .map(|(c, v)| bind_col(&mut binder, schema, c, v))
+        .collect::<Result<Vec<String>, String>>()?;
 
     // 冲突时的 SET 赋值（仅 `$set`；`$inc`/`$unset` 亦允许）
     // PG `ON CONFLICT … DO UPDATE` 中裸 `__present` 与 `EXCLUDED` 歧义 → RHS 限定目标表

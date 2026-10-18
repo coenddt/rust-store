@@ -12,7 +12,7 @@ use crate::dialect::filter::{
     build_filter, build_filter_with_relations, RelPredResolver, Warnings, WhereClause,
 };
 use crate::dialect::ir::{RowCol, RowShape, SqlStmt};
-use crate::dialect::{field_is_bool, physical_of, Backend, ColumnRef};
+use crate::dialect::{field_is_bool, field_is_json, physical_of, Backend, ColumnRef};
 use crate::pipeline::REL_PRED_PREFIX;
 
 use super::group_agg::{self, GroupSpec};
@@ -514,12 +514,17 @@ pub(super) fn translate_aggregate(
             // 标量列
             Some(ColumnRef::Scalar(c)) => {
                 cols_sql.push(format!("t.{}", backend.pcol(&c)));
-                // §9.7 布尔归一：schema `boolean` 字段的列值 0/1 → JSON bool
-                columns.push(RowCol::scalar_bool(
-                    &physical_of(&c),
-                    &[f.as_str()],
-                    field_is_bool(schema, f),
-                ));
+                if field_is_json(schema, f) {
+                    // vector：列存 JSON 数组文本（PG 为原生 vector），读回按 JSON 解析
+                    columns.push(RowCol::json(&physical_of(&c), &[f.as_str()]));
+                } else {
+                    // §9.7 布尔归一：schema `boolean` 字段的列值 0/1 → JSON bool
+                    columns.push(RowCol::scalar_bool(
+                        &physical_of(&c),
+                        &[f.as_str()],
+                        field_is_bool(schema, f),
+                    ));
+                }
             }
             // object/array JSON 列：整列取出，还原时解析 JSON 文本
             Some(ColumnRef::Json(c, _)) => {
@@ -667,7 +672,8 @@ pub(super) fn translate_aggregate(
                 always: false,
                 // §9.7 布尔归一：关系表的 `boolean` 字段同样 0/1 → bool
                 is_bool: field_is_bool(rel_schema, &rf),
-                is_json: false,
+                // vector 落 JSON 文本（PG 原生 vector），读回按 JSON 解析
+                is_json: field_is_json(rel_schema, &rf),
             });
         }
     }

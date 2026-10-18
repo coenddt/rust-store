@@ -52,7 +52,7 @@ pub fn translate_write(
     match kind {
         "insertOne" => {
             let doc = cmd.get("doc").cloned().unwrap_or(json!({}));
-            Ok(vec![insert::build_insert(backend, schema, &doc)])
+            Ok(vec![insert::build_insert(backend, schema, &doc)?])
         }
         "insertMany" => {
             let docs = cmd
@@ -150,19 +150,72 @@ fn writable_col(_schema: &Schema, field: &str) -> Option<String> {
     Some(field.to_string())
 }
 
-/// 绑定值：object/array 字段 → JSON 文本字符串（跨后端落 JSON 列）；其余原样。
+/// 绑定值：object/array/vector 字段 → JSON 文本字符串（跨后端落 JSON 列）；其余原样。
 ///
 /// 跨方言对齐：MySQL `JSON` / PG `jsonb` / SQLite `TEXT` 均接受 JSON 文本参数；
 /// 空值（`null`）原样绑定为 SQL NULL（缺失 vs 显式 null 由 `__present` 哨兵区分）。
-pub(super) fn bind_value(schema: &Schema, col: &str, v: &Value) -> Value {
-    let is_json = matches!(
-        schema.fields.get(col).map(|f| f.field_type.as_str()),
-        Some("object") | Some("array")
-    );
-    if is_json && !v.is_null() {
-        Value::String(serde_json::to_string(v).unwrap_or_default())
+/// vector 落文本 `"[0.1,0.2]"`（pgvector 文本输入格式），并在写入期校验维度（A1 / A3）。
+pub(super) fn bind_value(schema: &Schema, col: &str, v: &Value) -> Result<Value, String> {
+    let fdef = schema.fields.get(col);
+    match fdef.map(|f| f.field_type.as_str()) {
+        Some("vector") => {
+            if v.is_null() {
+                return Ok(Value::Null);
+            }
+            let arr = v.as_array().ok_or_else(|| {
+                format!(
+                    "字段 {col} 为 vector，写入值必须是数组，实际 {}",
+                    json_type_name(v)
+                )
+            })?;
+            let dim = fdef.and_then(|f| f.dim).unwrap_or(0);
+            if arr.len() != dim as usize {
+                return Err(format!(
+                    "字段 {col} 的向量维度不符：期望 {dim}，实际 {}（禁止截断或补零）",
+                    arr.len()
+                ));
+            }
+            if !arr.iter().all(|x| x.as_f64().is_some()) {
+                return Err(format!("字段 {col} 的向量元素必须全部为数值"));
+            }
+            Ok(Value::String(serde_json::to_string(v).unwrap_or_default()))
+        }
+        Some("object") | Some("array") if !v.is_null() => {
+            Ok(Value::String(serde_json::to_string(v).unwrap_or_default()))
+        }
+        _ => Ok(v.clone()),
+    }
+}
+
+/// 绑定一列值：先按 schema 归一化，再产占位符；PG 的 vector 列显式 CAST。
+///
+/// pg / asyncpg 会把数组参数编码成 PG array 字面量 `{0.1,0.2}`，pgvector 不接受；
+/// 显式 `CAST($n AS vector)` 让驱动按文本参数送入、由数据库解析（V-19）。
+pub(in crate::dialect::write) fn bind_col(
+    b: &mut Binder,
+    schema: &Schema,
+    col: &str,
+    v: &Value,
+) -> Result<String, String> {
+    let val = bind_value(schema, col, v)?;
+    let ph = b.bind(val);
+    let is_vector = schema.fields.get(col).map(|f| f.field_type.as_str()) == Some("vector");
+    if b.backend == Backend::Postgres && is_vector && !v.is_null() {
+        Ok(format!("CAST({ph} AS vector)"))
     } else {
-        v.clone()
+        Ok(ph)
+    }
+}
+
+/// JSON 值类型名（用于错误信息，避免非法写入值被静默接受）
+fn json_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
@@ -203,7 +256,7 @@ fn returning_shape(schema: &Schema, cols: &[String]) -> RowShape {
             .map(|c| {
                 let is_json = matches!(
                     schema.fields.get(c.as_str()).map(|f| f.field_type.as_str()),
-                    Some("object") | Some("array")
+                    Some("object") | Some("array") | Some("vector")
                 );
                 if is_json {
                     RowCol::json(&physical_of(c), &[c.as_str()])

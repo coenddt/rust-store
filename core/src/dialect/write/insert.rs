@@ -7,16 +7,20 @@ use crate::schema::Schema;
 use crate::dialect::ir::SqlStmt;
 use crate::dialect::Backend;
 
-use super::{bind_value, q, tname, Binder};
+use super::{bind_col, q, tname, Binder};
 
 /// 单条 insert
-pub(super) fn build_insert(backend: Backend, schema: &Schema, doc: &Value) -> SqlStmt {
+pub(super) fn build_insert(
+    backend: Backend,
+    schema: &Schema,
+    doc: &Value,
+) -> Result<SqlStmt, String> {
     let mut cols = writable_cols(schema, doc);
     let present = present_value(schema, doc);
     cols.push("__present".to_string());
     if cols.len() == 1 {
         // 唯一列即 __present（无任何标量值）→ INSERT 空行 + 存在集合
-        return match backend {
+        return Ok(match backend {
             Backend::Mysql => SqlStmt::write(
                 format!(
                     "INSERT INTO {} (__present) VALUES (?)",
@@ -31,22 +35,21 @@ pub(super) fn build_insert(backend: Backend, schema: &Schema, doc: &Value) -> Sq
                 ),
                 vec![present],
             ),
-        };
+        });
     }
     let mut binder = Binder::new(backend);
     let phs: Vec<String> = cols
         .iter()
         .map(|c| {
             let p = present.clone();
-            let v = if c == "__present" {
-                p
+            if c == "__present" {
+                Ok(binder.bind(p))
             } else {
-                // object/array 字段 → JSON 文本；其余标量原样
-                bind_value(schema, c, &doc.get(c).cloned().unwrap_or(Value::Null))
-            };
-            binder.bind(v)
+                // object/array/vector 字段 → JSON 文本；其余标量原样；vector 维度校验
+                bind_col(&mut binder, schema, c, &doc.get(c).cloned().unwrap_or(Value::Null))
+            }
         })
-        .collect();
+        .collect::<Result<Vec<String>, String>>()?;
     let mut text = format!(
         "INSERT INTO {} ({}) VALUES ({})",
         tname(backend, schema),
@@ -62,7 +65,7 @@ pub(super) fn build_insert(backend: Backend, schema: &Schema, doc: &Value) -> Sq
     {
         text.push_str(&format!(" RETURNING {}", q(backend, "_id")));
     }
-    SqlStmt::write(text, binder.params)
+    Ok(SqlStmt::write(text, binder.params))
 }
 
 pub(super) fn build_insert_many(
@@ -79,23 +82,26 @@ pub(super) fn build_insert_many(
     let mut binder = Binder::new(backend);
     let groups: Vec<String> = docs
         .iter()
-        .map(|doc| {
+        .map(|doc| -> Result<String, String> {
             let present = present_value(schema, doc);
             let phs: Vec<String> = cols
                 .iter()
                 .map(|c| {
-                    let p = present.clone();
-                    let v = if c == "__present" {
-                        p
+                    if c == "__present" {
+                        Ok(binder.bind(present.clone()))
                     } else {
-                        bind_value(schema, c, &doc.get(c).cloned().unwrap_or(Value::Null))
-                    };
-                    binder.bind(v)
+                        bind_col(
+                            &mut binder,
+                            schema,
+                            c,
+                            &doc.get(c).cloned().unwrap_or(Value::Null),
+                        )
+                    }
                 })
-                .collect();
-            format!("({})", phs.join(", "))
+                .collect::<Result<Vec<String>, String>>()?;
+            Ok(format!("({})", phs.join(", ")))
         })
-        .collect();
+        .collect::<Result<Vec<String>, String>>()?;
     let text = format!(
         "INSERT INTO {} ({}) VALUES {}",
         tname(backend, schema),

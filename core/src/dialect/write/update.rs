@@ -122,13 +122,11 @@ fn op_assignments(
         let Some(col) = super::writable_col(schema, k) else {
             continue;
         };
-        let is_json = matches!(
-            schema.fields.get(&col).map(|f| f.field_type.as_str()),
-            Some("object") | Some("array")
-        );
-        if is_json && op == "$inc" {
+        let ftype = schema.fields.get(&col).map(|f| f.field_type.as_str());
+        if matches!(ftype, Some("object") | Some("array") | Some("vector")) {
             return Err(format!(
-                "SQL 后端不支持对 object/array 字段 \"{k}\" 执行 $inc（JSON 列无法数值自增）"
+                "字段 {k} 的类型为 {}，不支持 $inc（仅数值字段可自增）",
+                ftype.unwrap_or("")
             ));
         }
         let qc = binder.backend.pcol(&col);
@@ -137,7 +135,7 @@ fn op_assignments(
                 if v.is_null() {
                     continue;
                 }
-                let ph = binder.bind(super::bind_value(schema, &col, v));
+                let ph = super::bind_col(binder, schema, &col, v)?;
                 assigns.push(format!("{} = {}", qc, ph));
                 if !set_fields.contains(&col) {
                     set_fields.push(col);

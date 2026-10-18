@@ -47,6 +47,8 @@ pub(crate) fn scalar_column(schema: &Schema, field: &str) -> Option<String> {
         return Some(field.to_string());
     }
     match schema.fields.get(field).map(|f| f.field_type.as_str()) {
+        // vector 按标量列处理：它是单列，只是值以 JSON 文本 / 原生 vector 存放，
+        // 走列引用/条件生成与标量一致（读回解析见 dialect/write/returning_shape）
         Some("object") | Some("array") => None,
         _ => Some(field.to_string()),
     }
@@ -104,6 +106,14 @@ pub enum ColumnRef {
     Json(String, JsonKind),
     /// JSON 点号路径（U3 过滤 / U4 排序）：根列名 + 子路径（调用方构造提取表达式）
     JsonPath(String, Vec<String>),
+}
+
+/// JSON 单列字段：object/array/vector 均落单列存 JSON 文本，读回时须解析。
+pub(crate) fn field_is_json(schema: &Schema, field: &str) -> bool {
+    matches!(
+        schema.fields.get(field).map(|f| f.field_type.as_str()),
+        Some("object") | Some("array") | Some("vector")
+    )
 }
 
 /// §9.7「布尔归一」：schema 字段是否为布尔类型（`boolean` 规范拼写 / `bool` 简写）。
