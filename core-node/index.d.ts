@@ -179,6 +179,20 @@ export declare class Registry {
   planExists(model: string, condition: any, routeOverride?: any | undefined | null): any
   planCount(model: string, filter?: any | undefined | null, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
   sortsByRelation(sort?: any | undefined | null): boolean
+  /**
+   * 并发领取计划：领取 filter 命中的前 limit 行并写入标记。
+   *
+   * 返回 `{mode: "atomic_commands", commands: [claim, find]}`——Host 须在同一连接
+   * 同一事务内顺序执行，claim 结果集 `_id` 数组回填 find 的 `___claimed_ids___`
+   * 占位符；ids 为空时跳过后续命令返回空集。`sort` 缺省 FIFO；`now` 由宿主注入。
+   */
+  planClaim(model: string, filter: any | undefined | null, update: any | undefined | null, sort: any | undefined | null, limit: number, now?: number | undefined | null, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
+  /**
+   * 比较并写计划：对 filter 命中的行原子写入 update（matched 由宿主从 rowCount
+   * 读出）。返回 `{mode: "atomic_commands", commands: [compareAndSet]}`——单命令
+   * 也走事务序列，宿主统一在事务包裹内执行。
+   */
+  planCompareAndSet(model: string, filter?: any | undefined | null, update?: any | undefined | null, now?: number | undefined | null, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
   constructor()
   /** 注册 schema（自动派生 `<Name>Deleted` 归档表；`timestamps !== false` 时补时间戳字段） */
   register(defn: any): void

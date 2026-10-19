@@ -30,9 +30,8 @@ pub fn translate(backend: Backend, cmd: &Value, registry: &Registry) -> Result<V
         "find" | "findOne" | "countDocuments" | "aggregate" => {
             translate_select(backend, cmd, registry, &mut warnings, &mut unsupported)?
         }
-        "insertOne" | "insertMany" | "deleteMany" | "updateMany" | "findOneAndUpdate" => {
-            translate_write(backend, cmd, registry)?
-        }
+        "insertOne" | "insertMany" | "deleteMany" | "updateMany" | "findOneAndUpdate"
+        | "claim" | "compareAndSet" => translate_write(backend, cmd, registry)?,
         _ => return Err(format!("translate: 未支持的命令 kind = {}", kind)),
     };
 

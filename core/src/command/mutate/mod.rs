@@ -147,7 +147,7 @@ pub(in crate::command) fn object_of(v: &Value) -> Map<String, Value> {
 }
 
 /// data 是否含原生操作符（`$` 开头的 key）
-fn has_raw_operators(data: &Value) -> bool {
+pub(in crate::command) fn has_raw_operators(data: &Value) -> bool {
     data.as_object()
         .map(|o| o.keys().any(|k| k.starts_with('$')))
         .unwrap_or(false)
@@ -166,7 +166,7 @@ fn find_one_and_update_options(options: &Value) -> Value {
 }
 
 /// update/updateMany 共用：原生操作符模式（`$` 开头的 key 透传 $inc/$unset/$addToSet 等）
-fn build_raw_update(
+pub(in crate::command) fn build_raw_update(
     registry: &Registry,
     schema: &Schema,
     ctx: Option<&Context>,
@@ -192,7 +192,7 @@ fn build_raw_update(
 
 /// update/updateMany 共用：$set 模式数据（过滤 + 去 null + 去 _id；
 /// 时间戳与空字段检查的先后顺序两种路径不同，由调用方处理）
-fn build_set_data(
+pub(in crate::command) fn build_set_data(
     registry: &Registry,
     schema: &Schema,
     ctx: Option<&Context>,

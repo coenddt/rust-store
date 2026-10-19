@@ -370,6 +370,14 @@ mutation 关系谓词（含整值条件糖）、自增主键、`$group by` one �
   显式报错。
 - 双宿主 DDL 生成器（逐字节一致）现在还会从 `schema.indexes` 产出
   `CREATE [UNIQUE] INDEX`。
+- 并发原语 `planClaim` / `planCompareAndSet`（宿主门面命名；core 侧
+  `plan_claim` / `plan_compare_and_set`）产出 `atomic_commands` 事务序列——全部命令须在
+  同一连接同一事务内顺序执行。`claim` 锁定并标记 filter 命中的前 `limit` 行（MySQL/PG 走
+  `FOR UPDATE SKIP LOCKED`；SQLite 用 `IN (子查询)` 原子领取 + 同一子查询取行——filter
+  不得引用 update 将修改的列，否则取行漏命）。`compareAndSet` 产出单条条件 UPDATE，
+  matched（命中行数）语义由宿主从 rowCount / `changes()` 读出。仅 SQL 三后端有方言路径，
+  Mongo 执行器须显式拒绝两种 kind。宿主侧门面接线（claim / compareAndSet / renewLease）
+  随宿主发版落地。
 
 ## 测试与对拍
 

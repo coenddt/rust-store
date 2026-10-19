@@ -167,6 +167,53 @@ pub fn cmd_delete_many(schema: &Schema, filter: &Value) -> Value {
     .into()
 }
 
+/// claim 命令：并发领取原语（三 SQL 后端方言路径；Mongo 执行器侧显式拒绝）。
+/// `sort` 为 Mongo 数对数组 `[["field", 1], ...]`；`nowStamp` 为 Host 注入的
+/// 当前时间戳（core 无时钟，仅供宿主在事务内透传给业务字段）。
+pub fn cmd_claim(
+    schema: &Schema,
+    filter: &Value,
+    sort: &Value,
+    limit: i64,
+    update: &Value,
+    now_stamp: i64,
+) -> Value {
+    with_loc(
+        json!({
+            "kind": "claim",
+            "collection": schema.collection,
+            "filter": filter,
+            "sort": sort,
+            "limit": limit,
+            "update": update,
+            "nowStamp": now_stamp,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+        schema,
+    )
+    .into()
+}
+
+/// compareAndSet 命令：比较并写原语（matched 语义由宿主从 rowCount / changes() 读出）
+pub fn cmd_compare_and_set(schema: &Schema, filter: &Value, update: &Value, now_stamp: i64) -> Value {
+    with_loc(
+        json!({
+            "kind": "compareAndSet",
+            "collection": schema.collection,
+            "filter": filter,
+            "update": update,
+            "nowStamp": now_stamp,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+        schema,
+    )
+    .into()
+}
+
 // ─── 多租户路由 override（方案 §6） ──────────────────────────
 
 /// 把计划内**所有命令体**的定位字段替换为 `routeOverride` 声明。

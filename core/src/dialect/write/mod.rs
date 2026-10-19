@@ -18,6 +18,7 @@ use super::filter::build_filter;
 use super::ir::{RowCol, RowShape, SqlStmt};
 use super::{field_is_bool, physical_of, Backend};
 
+mod claim;
 mod insert;
 mod update;
 mod upsert;
@@ -75,6 +76,9 @@ pub fn translate_write(
             let update = cmd.get("update").cloned().unwrap_or(json!({}));
             update::translate_update_many(backend, schema, &filter, &update)
         }
+        // 并发原语（claim / compareAndSet）：SQL 三后端方言路径；Mongo 执行器侧显式拒绝
+        "claim" => claim::translate_claim(backend, schema, cmd),
+        "compareAndSet" => claim::translate_cas(backend, schema, cmd),
         "findOneAndUpdate" => {
             let filter = cmd.get("filter").cloned().unwrap_or(json!({}));
             let update = cmd.get("update").cloned().unwrap_or(json!({}));

@@ -45,8 +45,11 @@
 //!   - [`mutate`]：update / updateMany / remove / upsert / insertMany 计划
 //!   - [`mutation`]：mutation 递归规划（父子文档步骤序列）
 //!   - [`finalize`]：结果回喂（后处理 / asyncFn 桥 / 剥离注入）
+//!   - [`claim`] / [`cas`]：并发原语计划（领取 / 比较并写，`atomic_commands` 事务序列）
 
+mod cas;
 mod cmd;
+mod claim;
 mod count;
 mod finalize;
 mod mutate;
@@ -59,9 +62,12 @@ mod write_links;
 use crate::permission::Context;
 use crate::schema::{Profile, Registry};
 
+pub use cas::plan_compare_and_set;
+pub use claim::plan_claim;
 pub use cmd::{
-    apply_route_override, cmd_aggregate, cmd_count_documents, cmd_delete_many, cmd_find,
-    cmd_find_one, cmd_find_one_and_update, cmd_insert_many, cmd_insert_one, cmd_update_many,
+    apply_route_override, cmd_aggregate, cmd_claim, cmd_compare_and_set, cmd_count_documents,
+    cmd_delete_many, cmd_find, cmd_find_one, cmd_find_one_and_update, cmd_insert_many,
+    cmd_insert_one, cmd_update_many,
 };
 pub use count::{plan_query_with_count, CountQueryPlan};
 pub use finalize::{finalize_query, prepare_query, strip_query};
@@ -185,6 +191,16 @@ pub fn ensure_route_override_allowed(registry: &Registry, present: bool) -> Resu
 
 /// 两阶段查询中由 Host 替换的阶段一 `_id` 顺序数组
 pub const PHASE1_IDS: &str = "{{phase1.ids}}";
+
+/// `atomic_commands` mode：全部 commands 须在同一连接同一事务内顺序执行
+/// （claim / compareAndSet 等并发原语的计划形状；新增 mode 值，不与 `two_phase` 重叠）
+pub const MODE_ATOMIC_COMMANDS: &str = "atomic_commands";
+
+/// claim 命令序列中由 Host 替换的被领取 `_id` 数组（整值替换，契约同 [`PHASE1_IDS`]；
+/// ids 为空时 Host 跳过后续命令直接返回空集）。SQL 侧 `claim` 翻译的 UPDATE 语句
+/// 文本内含同名字面 token，Host 在同事务内展开为 ids 占位符序列（未展开必致语法
+/// 错误 = 显式失败，禁静默）。
+pub const CLAIMED_IDS: &str = "___claimed_ids___";
 
 /// mutation 第 `idx` 步执行结果文档 `_id` 的占位符
 pub fn step_id_placeholder(idx: usize) -> String {

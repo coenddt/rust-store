@@ -371,6 +371,16 @@ by both hosts. Engine notes, code paths and parity guardrails:
   SQL); `many` paths fail explicitly.
 - Host DDL generators (byte-identical across hosts) now also emit `CREATE [UNIQUE] INDEX`
   from `schema.indexes`.
+- Concurrency primitives `planClaim` / `planCompareAndSet` (host facade names; core
+  `plan_claim` / `plan_compare_and_set`) plan `atomic_commands` sequences — all commands
+  must run in one connection inside one transaction. `claim` locks and marks the first
+  `limit` rows matching a filter (`FOR UPDATE SKIP LOCKED` on MySQL/PG; SQLite uses an
+  atomic `IN (subquery)` update plus a same-subquery row fetch — the claim filter must
+  not reference columns the update writes, or the row fetch misses). `compareAndSet`
+  emits one conditional UPDATE; matched-row semantics come from the host's
+  rowCount / `changes()`. SQL backends only — Mongo executors must reject both kinds
+  explicitly. Host-side facade wiring (claim / compareAndSet / renewLease) lands with
+  the host release.
 
 ## Testing and parity
 

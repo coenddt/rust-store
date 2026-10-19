@@ -8,8 +8,10 @@ use serde_json::{json, Map, Value};
 use rust_store_core::command::apply_route_override as core_apply_route_override;
 use rust_store_core::command::ensure_route_override_allowed;
 use rust_store_core::command::{
-    plan_count as core_plan_count, plan_exists as core_plan_exists, plan_query as core_plan_query,
-    plan_query_one as core_plan_query_one, plan_query_with_count as core_plan_query_with_count,
+    plan_claim as core_plan_claim, plan_compare_and_set as core_plan_compare_and_set,
+    plan_count as core_plan_count, plan_exists as core_plan_exists,
+    plan_query as core_plan_query, plan_query_one as core_plan_query_one,
+    plan_query_with_count as core_plan_query_with_count,
     resolve_page as core_resolve_page, restore_sort_order as core_restore_sort_order,
     sorts_by_relation as core_sorts_by_relation,
 };
@@ -251,5 +253,102 @@ impl Registry {
             _ => None,
         };
         Ok(core_sorts_by_relation(sort_v.as_ref()))
+    }
+
+    // ─── 并发原语（atomic_commands 事务序列；SQL 三后端方言路径） ──
+
+    /// 并发领取计划：领取 filter 命中的前 limit 行并写入标记。
+    ///
+    /// 返回 `{mode: "atomic_commands", commands: [claim, find]}`——Host 须在同一连接
+    /// 同一事务内顺序执行，claim 结果集 `_id` 数组回填 find 的 `___claimed_ids___`
+    /// 占位符；ids 为空时跳过后续命令返回空集。`sort` 缺省 FIFO；`now` 由宿主注入。
+    #[pyo3(signature = (model, filter=None, update=None, sort=None, limit=0, now=0, ctx=None, route_override=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn plan_claim(
+        &self,
+        py: Python<'_>,
+        model: String,
+        filter: Option<&Bound<'_, PyAny>>,
+        update: Option<&Bound<'_, PyAny>>,
+        sort: Option<&Bound<'_, PyAny>>,
+        limit: i64,
+        now: i64,
+        ctx: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let filter_v = match filter {
+            Some(v) if !v.is_none() => py_to_json(v)?,
+            _ => Value::Object(Map::new()),
+        };
+        let update_v = match update {
+            Some(v) if !v.is_none() => py_to_json(v)?,
+            _ => Value::Object(Map::new()),
+        };
+        let sort_v = match sort {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
+        let context = ctx_from(ctx)?;
+        let plan = core_plan_claim(
+            &model,
+            &self.core,
+            context.as_ref(),
+            &filter_v,
+            &update_v,
+            sort_v.as_ref(),
+            limit,
+            now,
+        )
+        .map_err(err)?;
+        to_py(
+            py,
+            with_route_override(plan, ro.as_ref(), &self.core).map_err(err)?,
+        )
+    }
+
+    /// 比较并写计划：对 filter 命中的行原子写入 update（matched 由宿主从 rowCount
+    /// 读出）。返回 `{mode: "atomic_commands", commands: [compareAndSet]}`——单命令
+    /// 也走事务序列，宿主统一在事务包裹内执行。
+    #[pyo3(signature = (model, filter=None, update=None, now=0, ctx=None, route_override=None))]
+    fn plan_compare_and_set(
+        &self,
+        py: Python<'_>,
+        model: String,
+        filter: Option<&Bound<'_, PyAny>>,
+        update: Option<&Bound<'_, PyAny>>,
+        now: i64,
+        ctx: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let filter_v = match filter {
+            Some(v) if !v.is_none() => py_to_json(v)?,
+            _ => Value::Object(Map::new()),
+        };
+        let update_v = match update {
+            Some(v) if !v.is_none() => py_to_json(v)?,
+            _ => Value::Object(Map::new()),
+        };
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
+        let context = ctx_from(ctx)?;
+        let plan = core_plan_compare_and_set(
+            &model,
+            &self.core,
+            context.as_ref(),
+            &filter_v,
+            &update_v,
+            now,
+        )
+        .map_err(err)?;
+        to_py(
+            py,
+            with_route_override(plan, ro.as_ref(), &self.core).map_err(err)?,
+        )
     }
 }

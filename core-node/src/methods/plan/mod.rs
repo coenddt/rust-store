@@ -9,8 +9,10 @@ use serde_json::{json, Value};
 use rust_store_core::command::apply_route_override as core_apply_route_override;
 use rust_store_core::command::ensure_route_override_allowed;
 use rust_store_core::command::{
-    plan_count as core_plan_count, plan_exists as core_plan_exists, plan_query as core_plan_query,
-    plan_query_one as core_plan_query_one, plan_query_with_count as core_plan_query_with_count,
+    plan_claim as core_plan_claim, plan_compare_and_set as core_plan_compare_and_set,
+    plan_count as core_plan_count, plan_exists as core_plan_exists,
+    plan_query as core_plan_query, plan_query_one as core_plan_query_one,
+    plan_query_with_count as core_plan_query_with_count,
     resolve_page as core_resolve_page, restore_sort_order as core_restore_sort_order,
     sorts_by_relation as core_sorts_by_relation,
 };
@@ -179,5 +181,70 @@ impl Registry {
     #[napi]
     pub fn sorts_by_relation(&self, sort: Option<Value>) -> bool {
         core_sorts_by_relation(sort.as_ref().filter(|v| !v.is_null()))
+    }
+
+    // ─── 并发原语（atomic_commands 事务序列；SQL 三后端方言路径） ──
+
+    /// 并发领取计划：领取 filter 命中的前 limit 行并写入标记。
+    ///
+    /// 返回 `{mode: "atomic_commands", commands: [claim, find]}`——Host 须在同一连接
+    /// 同一事务内顺序执行，claim 结果集 `_id` 数组回填 find 的 `___claimed_ids___`
+    /// 占位符；ids 为空时跳过后续命令返回空集。`sort` 缺省 FIFO；`now` 由宿主注入。
+    #[napi]
+    pub fn plan_claim(
+        &self,
+        model: String,
+        filter: Option<Value>,
+        update: Option<Value>,
+        sort: Option<Value>,
+        limit: i64,
+        now: Option<i64>,
+        ctx: Option<Value>,
+        route_override: Option<Value>,
+    ) -> Result<Value> {
+        let filter_v = filter.filter(|v| !v.is_null()).unwrap_or_else(|| json!({}));
+        let update_v = update.filter(|v| !v.is_null()).unwrap_or_else(|| json!({}));
+        let sort_ref = sort.as_ref().filter(|v| !v.is_null());
+        let context = ctx.as_ref().and_then(context_from_value);
+        let plan = core_plan_claim(
+            &model,
+            &self.core,
+            context.as_ref(),
+            &filter_v,
+            &update_v,
+            sort_ref,
+            limit,
+            now.unwrap_or(0),
+        )
+        .map_err(err)?;
+        with_route_override(plan, &route_override, &self.core)
+    }
+
+    /// 比较并写计划：对 filter 命中的行原子写入 update（matched 由宿主从 rowCount
+    /// 读出）。返回 `{mode: "atomic_commands", commands: [compareAndSet]}`——单命令
+    /// 也走事务序列，宿主统一在事务包裹内执行。
+    #[napi]
+    pub fn plan_compare_and_set(
+        &self,
+        model: String,
+        filter: Option<Value>,
+        update: Option<Value>,
+        now: Option<i64>,
+        ctx: Option<Value>,
+        route_override: Option<Value>,
+    ) -> Result<Value> {
+        let filter_v = filter.filter(|v| !v.is_null()).unwrap_or_else(|| json!({}));
+        let update_v = update.filter(|v| !v.is_null()).unwrap_or_else(|| json!({}));
+        let context = ctx.as_ref().and_then(context_from_value);
+        let plan = core_plan_compare_and_set(
+            &model,
+            &self.core,
+            context.as_ref(),
+            &filter_v,
+            &update_v,
+            now.unwrap_or(0),
+        )
+        .map_err(err)?;
+        with_route_override(plan, &route_override, &self.core)
     }
 }
