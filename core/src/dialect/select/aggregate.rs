@@ -650,10 +650,17 @@ pub(super) fn translate_aggregate(
     columns.push(RowCol::scalar("_id", &["_id"]));
 
     // 根表选列（排除关系名与归一聚合计算列 —— 后者不是真实列，由派生表 LEFT JOIN 物化）
+    //
+    // `_score` 必须一并剔除：它是向量派生列，不在 schema.fields 中，但
+    // `field_column_ref` 对未声明字段走宽松兜底（按裸列名处理，为 `_id` 等物理列服务），
+    // 不会返回 None → 若不显式剔除，会经 `physical_of` 命名归一产出 `t."score"`
+    //（`_score` 不在保留名白名单，被 canonical/to_snake 剥掉下划线）→ PG 42703
+    // `column t.score does not exist`。该列由下方向量分支（VR-03/A6）事后补列。
     let root_selected: Vec<String> = selected
         .iter()
         .filter(|f| schema.relations.iter().all(|(rn, _)| rn != *f))
         .filter(|f| !compute_aggs.iter().any(|ca| &ca.key == *f))
+        .filter(|f| f.as_str() != "_score")
         .cloned()
         .collect();
     for f in &root_selected {

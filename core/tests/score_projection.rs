@@ -243,6 +243,13 @@ fn pg_sql_snapshot_includes_score_column() {
         text.contains(r#"(1.0 - (t."embedding" <=> $1)) AS "_score""#),
         "`_score` 输出列不符：{text}"
     );
+    // `_score` 是向量派生列：`field_column_ref` 宽松兜底会把它当裸列下发
+    //（`physical_of` 归一成 `score` → `t."score"` 不存在，PG 42703）。
+    // 回归锚点：投影里只允许出现补列表达式，绝不允许 `t."score"` 裸列引用。
+    assert!(
+        !text.contains(r#"t."score""#),
+        "投影不得把派生列 _score 当裸列 t.\"score\" 下发：{text}"
+    );
     assert!(text.contains(r#"FROM "artworks" t"#), "根表不符：{text}");
     assert!(
         text.contains(r#"WHERE t."status" = $2 AND t."embedding" <=> $1 <= $3"#),

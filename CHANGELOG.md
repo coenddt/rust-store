@@ -4,6 +4,17 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 4.6.1 (2026-10-19)
+
+### Fixed（pg 原生向量检索投影缺陷）
+
+- **`_score` 派生列被当裸列下发**：SQL 后端向量检索（`$vectorSearch`）的聚合投影循环
+  未剔除 `_score`，而 `field_column_ref` 对未声明字段走宽松兜底（按裸列名处理）、
+  `physical_of` 保留名白名单不含 `_score` → 命名归一产出 `t."score"` 引用不存在的列，
+  PostgreSQL 报 42703 `column t.score does not exist`。修复：投影选列显式剔除 `_score`
+  （由向量分支事后补列 `(...) AS "_score"`），并在 `score_projection` 快照补负向回归断言。
+  影响面：仅 PG 原生向量路径（pgvector）；MySQL / SQLite 走宿主 `vector_scan` 降级，不受影响。
+
 ## 4.4.0 (2026-10-10)
 
 ### Fixed（框架缺陷修复-新发现缺陷）
