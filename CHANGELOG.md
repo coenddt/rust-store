@@ -4,6 +4,17 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 4.6.2 (2026-10-19)
+
+### Fixed（pg 向量检索查询向量参数）
+
+- **查询向量参数未按 pgvector 文本格式下发**：4.6.1 修复投影后，CI 暴露第二层缺陷——
+  `$near` 查询向量的绑定参数是裸数组，asyncpg 拒绝（`expected str, got list`）、
+  node-pg 编码成 PG array 字面量 `{1,0.2}`（pgvector 不接受）。修复：与写侧 `bind_col`
+  （V-19）同一约定——core 把查询向量序列化为 pgvector 文本输入 `"[1,0.2]"`，
+  且 PG 占位符显式 `CAST($n AS vector)`；`score_projection` / `vector_search`
+  两份 PG 快照同步更新（SQL 文本 + 参数形态）。
+
 ## 4.6.1 (2026-10-19)
 
 ### Fixed（pg 原生向量检索投影缺陷）

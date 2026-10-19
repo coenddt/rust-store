@@ -240,7 +240,7 @@ fn pg_sql_snapshot_includes_score_column() {
     let text = stmt["text"].as_str().expect("应有 SQL 文本");
 
     assert!(
-        text.contains(r#"(1.0 - (t."embedding" <=> $1)) AS "_score""#),
+        text.contains(r#"(1.0 - (t."embedding" <=> CAST($1 AS vector))) AS "_score""#),
         "`_score` 输出列不符：{text}"
     );
     // `_score` 是向量派生列：`field_column_ref` 宽松兜底会把它当裸列下发
@@ -251,19 +251,22 @@ fn pg_sql_snapshot_includes_score_column() {
         "投影不得把派生列 _score 当裸列 t.\"score\" 下发：{text}"
     );
     assert!(text.contains(r#"FROM "artworks" t"#), "根表不符：{text}");
+    // 查询向量参数与写侧 V-19 同一约定：占位符显式 CAST、参数为 pgvector 文本
     assert!(
-        text.contains(r#"WHERE t."status" = $2 AND t."embedding" <=> $1 <= $3"#),
+        text.contains(
+            r#"WHERE t."status" = $2 AND t."embedding" <=> CAST($1 AS vector) <= $3"#
+        ),
         "WHERE 组合不符：{text}"
     );
     assert!(
-        text.contains(r#"ORDER BY t."embedding" <=> $1 ASC"#),
+        text.contains(r#"ORDER BY t."embedding" <=> CAST($1 AS vector) ASC"#),
         "ORDER BY 不符：{text}"
     );
     assert!(text.contains("LIMIT $4"), "LIMIT 参数序号不符：{text}");
 
     let ps = stmt["params"].as_array().expect("应有参数数组");
     assert_eq!(ps.len(), 4, "参数个数不符：{ps:?}");
-    assert_eq!(ps[0], json!([1.0, 0.0, 0.0, 0.0]));
+    assert_eq!(ps[0], json!("[1.0,0.0,0.0,0.0]"));
     assert_eq!(ps[1], json!("published"));
     assert!(
         (ps[2].as_f64().unwrap() - 0.45).abs() < 1e-12,

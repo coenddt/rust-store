@@ -298,18 +298,22 @@ fn parse_vector_search(schema: &Schema, arg: &Value) -> Result<VectorSql, String
 }
 
 /// pgvector 距离表达式：cosine `<=>` / l2 `<->` / ip `<#>`
+///
+/// 查询向量占位符与写侧 `bind_col`（V-19）同一约定：PG 显式 `CAST($n AS vector)`，
+/// 让驱动按文本参数送入、由数据库解析（仅 PG 走原生向量路径，其余后端保持裸占位符）。
 fn vector_distance(backend: Backend, v: &VectorSql) -> String {
     let op = match v.metric.as_str() {
         "l2" => "<->",
         "ip" => "<#>",
         _ => "<=>",
     };
-    format!(
-        "t.{} {} {}",
-        backend.pcol(&v.col),
-        op,
-        backend.placeholder(v.param_idx)
-    )
+    let ph = backend.placeholder(v.param_idx);
+    let ph = if backend == Backend::Postgres {
+        format!("CAST({ph} AS vector)")
+    } else {
+        ph
+    };
+    format!("t.{} {} {}", backend.pcol(&v.col), op, ph)
 }
 
 /// 识别 build.rs 生成的 minScore 后置 `$match`：`{"_score": {"$gte": n}}`。
@@ -999,7 +1003,12 @@ pub(super) fn translate_aggregate(
     all_params.extend(join_params);
     // 向量参数位于 JOIN 参数之后、根 `$match` 参数之前（与 `param_idx` 编号一致）
     if let Some(v) = &vector {
-        all_params.push(json!(v.vector));
+        // 查询向量与写侧 V-19 同一约定：core 序列化为 pgvector 文本输入格式
+        // `"[1,0.2]"` —— asyncpg 拒绝数组参数（expected str, got list），node-pg 会把
+        // 数组编码成 PG array 字面量 `{1,0.2}`，pgvector 均不接受。
+        let text = serde_json::to_string(&v.vector)
+            .map_err(|e| format!("查询向量序列化失败：{e}"))?;
+        all_params.push(json!(text));
     }
     let where_sql = if root_wheres.is_empty() {
         String::new()

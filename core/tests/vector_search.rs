@@ -304,21 +304,24 @@ fn pg_sql_snapshot() {
     // `_score` 输出列的断言由 04 §6 的同一份快照覆盖（投影放行属 04 §4.1/§4.2）；
     // 本步只验向量阶段驱动的 WHERE / ORDER BY / LIMIT 与参数顺序。
     assert!(text.contains(r#"FROM "artworks" t"#), "根表不符：{text}");
-    // filter 落 WHERE（检索前预过滤），minScore 折叠为距离上界
+    // filter 落 WHERE（检索前预过滤），minScore 折叠为距离上界；
+    // 查询向量占位符与写侧 V-19 同一约定：PG 显式 CAST、参数为 pgvector 文本
     assert!(
-        text.contains(r#"WHERE t."status" = $2 AND t."embedding" <=> $1 <= $3"#),
+        text.contains(
+            r#"WHERE t."status" = $2 AND t."embedding" <=> CAST($1 AS vector) <= $3"#
+        ),
         "WHERE 组合不符：{text}"
     );
     assert!(
-        text.contains(r#"ORDER BY t."embedding" <=> $1 ASC"#),
+        text.contains(r#"ORDER BY t."embedding" <=> CAST($1 AS vector) ASC"#),
         "ORDER BY 不符：{text}"
     );
     assert!(text.contains("LIMIT $4"), "LIMIT 参数序号不符：{text}");
 
-    // 参数顺序：queryVector → filter → 距离上界 → limit
+    // 参数顺序：queryVector（pgvector 文本格式）→ filter → 距离上界 → limit
     let ps = stmt["params"].as_array().expect("应有参数数组");
     assert_eq!(ps.len(), 4, "参数个数不符：{ps:?}");
-    assert_eq!(ps[0], json!([1.0, 0.0, 0.0, 0.0]));
+    assert_eq!(ps[0], json!("[1.0,0.0,0.0,0.0]"));
     assert_eq!(ps[1], json!("published"));
     assert!(
         (ps[2].as_f64().unwrap() - 0.45).abs() < 1e-12,
