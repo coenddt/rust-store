@@ -80,9 +80,8 @@ pub fn plan_claim(
     // RBAC 表级写判定（deny-wins）+ 行级条件合并（与 updateMany 语义一致：
     // ownerOnly / condition 并入 filter，匹配不到即 0 行）
     ensure_write(registry, schema, ctx, WriteAction::Update)?;
-    let eff_condition =
-        merge_row_condition(registry, schema, ctx, "update", Some(filter.clone()))
-            .unwrap_or_else(|| json!({}));
+    let eff_condition = merge_row_condition(registry, schema, ctx, "update", Some(filter.clone()))
+        .unwrap_or_else(|| json!({}));
 
     let update_doc = if has_raw_operators(update) {
         build_raw_update(registry, schema, ctx, update, now)
@@ -97,11 +96,7 @@ pub fn plan_claim(
 
     let sort_v = sort.cloned().unwrap_or_else(|| json!([["_id", 1]]));
     let claim_cmd = cmd_claim(schema, &eff_condition, &sort_v, limit, &update_doc, now);
-    let mut find_cmd = cmd_find(
-        schema,
-        &json!({ "_id": { "$in": CLAIMED_IDS } }),
-        None,
-    );
+    let mut find_cmd = cmd_find(schema, &json!({ "_id": { "$in": CLAIMED_IDS } }), None);
     if let Some(o) = find_cmd.as_object_mut() {
         o.insert("placeholder".to_string(), json!(CLAIMED_IDS));
     }
@@ -118,9 +113,8 @@ pub fn plan_claim(
 /// claim 是宿主编程原语：未知列名属编程错误，规划期显式拒绝（不静默透传、
 /// 不依赖驱动层报错——D2 绝不静默）。
 pub(super) fn ensure_fields_declared(schema: &Schema, update_doc: &Value) -> Result<(), String> {
-    let exempt = |f: &str| {
-        f == "_id" || (schema.timestamps && (f == "createdAt" || f == "updatedAt"))
-    };
+    let exempt =
+        |f: &str| f == "_id" || (schema.timestamps && (f == "createdAt" || f == "updatedAt"));
     let Some(ops) = update_doc.as_object() else {
         return Ok(());
     };
@@ -262,17 +256,7 @@ mod tests {
     #[test]
     fn plan_claim_empty_update_errs() {
         let r = registry();
-        let err = plan_claim(
-            "Outbox",
-            &r,
-            None,
-            &json!({}),
-            &json!({}),
-            None,
-            1,
-            0,
-        )
-        .unwrap_err();
+        let err = plan_claim("Outbox", &r, None, &json!({}), &json!({}), None, 1, 0).unwrap_err();
         assert!(err.contains("非空对象"), "{err}");
     }
 

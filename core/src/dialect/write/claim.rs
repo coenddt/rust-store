@@ -32,8 +32,8 @@ use crate::dialect::ir::{RowCol, RowShape, SqlStmt};
 use crate::dialect::{field_column_ref, Backend, ColumnRef};
 use crate::schema::Schema;
 
-use super::update::translate_update_many;
 use super::update::build_assignments;
+use super::update::translate_update_many;
 use super::{col_map, returning_cols, returning_shape, tname, Binder};
 
 /// claim 翻译：按后端产出领取 SQL 序列
@@ -43,7 +43,10 @@ pub(super) fn translate_claim(
     cmd: &Value,
 ) -> Result<Vec<SqlStmt>, String> {
     let filter = cmd.get("filter").cloned().unwrap_or(json!({}));
-    let sort = cmd.get("sort").cloned().unwrap_or_else(|| json!([["_id", 1]]));
+    let sort = cmd
+        .get("sort")
+        .cloned()
+        .unwrap_or_else(|| json!([["_id", 1]]));
     let limit = cmd
         .get("limit")
         .and_then(|v| v.as_i64())
@@ -181,7 +184,14 @@ fn translate_cas_mysql(
     }
     let mut sel = Binder::new(Backend::Mysql);
     let mut seq = sel.seq();
-    let wh = build_filter(filter, Backend::Mysql, "t", &col_map(schema), &mut seq, None)?;
+    let wh = build_filter(
+        filter,
+        Backend::Mysql,
+        "t",
+        &col_map(schema),
+        &mut seq,
+        None,
+    )?;
     sel.params.extend(wh.params.clone());
     let where_sql = if wh.text.is_empty() {
         String::new()
@@ -301,10 +311,7 @@ mod tests {
     fn stmts_of(backend: Backend, cmd: &Value) -> Vec<Value> {
         let r = registry();
         let out = crate::dialect::translate(backend, cmd, &r).expect("translate");
-        out["stmts"]
-            .as_array()
-            .expect("stmts 数组")
-            .clone()
+        out["stmts"].as_array().expect("stmts 数组").clone()
     }
 
     // ── A1 快照：MySQL 两步（SELECT FOR UPDATE SKIP LOCKED + UPDATE IN token） ──
@@ -321,7 +328,10 @@ mod tests {
         assert_eq!(stmts[0]["params"], json!(["pending", 10]));
         let s2 = stmts[1]["text"].as_str().unwrap();
         assert!(s2.starts_with("UPDATE `outbox` AS t SET"), "{s2}");
-        assert!(s2.contains("t.`_id` IN (___claimed_ids___)"), "token 占位: {s2}");
+        assert!(
+            s2.contains("t.`_id` IN (___claimed_ids___)"),
+            "token 占位: {s2}"
+        );
         assert_eq!(stmts[1]["isWrite"], json!(true));
         // SET 列按物理名字典序（locked_at < locked_by）
         assert_eq!(stmts[1]["params"], json!([123, "w1"]));
@@ -386,12 +396,21 @@ mod tests {
         let stmts = stmts_of(Backend::Mysql, &cas_cmd());
         assert_eq!(stmts.len(), 2, "MySQL CAS 两步");
         let s1 = stmts[0]["text"].as_str().unwrap();
-        assert!(s1.starts_with("SELECT t.`_id` FROM `outbox` t WHERE"), "{s1}");
-        assert!(s1.ends_with("FOR UPDATE"), "CAS 等锁（无 SKIP LOCKED）: {s1}");
+        assert!(
+            s1.starts_with("SELECT t.`_id` FROM `outbox` t WHERE"),
+            "{s1}"
+        );
+        assert!(
+            s1.ends_with("FOR UPDATE"),
+            "CAS 等锁（无 SKIP LOCKED）: {s1}"
+        );
         assert_eq!(stmts[0]["params"], json!(["l1", "w1"]));
         let s2 = stmts[1]["text"].as_str().unwrap();
         assert!(s2.starts_with("UPDATE `outbox` AS t SET"), "{s2}");
-        assert!(s2.contains("t.`_id` IN (___claimed_ids___)"), "token 占位: {s2}");
+        assert!(
+            s2.contains("t.`_id` IN (___claimed_ids___)"),
+            "token 占位: {s2}"
+        );
         assert_eq!(stmts[1]["isWrite"], json!(true));
         assert_eq!(stmts[1]["params"], json!([456]));
     }

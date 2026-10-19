@@ -197,7 +197,12 @@ pub fn cmd_claim(
 }
 
 /// compareAndSet 命令：比较并写原语（matched 语义由宿主从 rowCount / changes() 读出）
-pub fn cmd_compare_and_set(schema: &Schema, filter: &Value, update: &Value, now_stamp: i64) -> Value {
+pub fn cmd_compare_and_set(
+    schema: &Schema,
+    filter: &Value,
+    update: &Value,
+    now_stamp: i64,
+) -> Value {
     with_loc(
         json!({
             "kind": "compareAndSet",

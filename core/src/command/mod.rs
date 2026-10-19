@@ -48,8 +48,8 @@
 //!   - [`claim`] / [`cas`]：并发原语计划（领取 / 比较并写，`atomic_commands` 事务序列）
 
 mod cas;
-mod cmd;
 mod claim;
+mod cmd;
 mod count;
 mod finalize;
 mod mutate;

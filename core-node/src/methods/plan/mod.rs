@@ -10,9 +10,8 @@ use rust_store_core::command::apply_route_override as core_apply_route_override;
 use rust_store_core::command::ensure_route_override_allowed;
 use rust_store_core::command::{
     plan_claim as core_plan_claim, plan_compare_and_set as core_plan_compare_and_set,
-    plan_count as core_plan_count, plan_exists as core_plan_exists,
-    plan_query as core_plan_query, plan_query_one as core_plan_query_one,
-    plan_query_with_count as core_plan_query_with_count,
+    plan_count as core_plan_count, plan_exists as core_plan_exists, plan_query as core_plan_query,
+    plan_query_one as core_plan_query_one, plan_query_with_count as core_plan_query_with_count,
     resolve_page as core_resolve_page, restore_sort_order as core_restore_sort_order,
     sorts_by_relation as core_sorts_by_relation,
 };

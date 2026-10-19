@@ -27,9 +27,7 @@ use serde_json::{json, Value};
 use crate::command::cmd::cmd_compare_and_set;
 use crate::command::mutate::{build_raw_update, build_set_data, has_raw_operators};
 use crate::command::write_links::attach_write_links;
-use crate::command::{
-    ensure_context, forbid_t2q, ERR_NO_BATCH_WRITE, MODE_ATOMIC_COMMANDS,
-};
+use crate::command::{ensure_context, forbid_t2q, ERR_NO_BATCH_WRITE, MODE_ATOMIC_COMMANDS};
 use crate::permission::{can_write_schema, Context};
 use crate::rbac::{ensure_write, merge_row_condition, WriteAction};
 use crate::schema::Registry;
@@ -55,9 +53,7 @@ pub fn plan_compare_and_set(
     validate_condition(filter)?;
     validate_condition_shape(schema, filter, registry.profile())?;
     if update.as_object().map(|o| o.is_empty()).unwrap_or(true) {
-        return Err(
-            "compareAndSet 的 update 必须为非空对象（无条件写入属编程错误）".to_string(),
-        );
+        return Err("compareAndSet 的 update 必须为非空对象（无条件写入属编程错误）".to_string());
     }
     // 拒写清单 + 静态写权限（updateMany 同款：不走 creator 探针）
     if let Some(c) = ctx {
@@ -68,9 +64,8 @@ pub fn plan_compare_and_set(
         }
     }
     ensure_write(registry, schema, ctx, WriteAction::Update)?;
-    let eff_condition =
-        merge_row_condition(registry, schema, ctx, "update", Some(filter.clone()))
-            .unwrap_or_else(|| json!({}));
+    let eff_condition = merge_row_condition(registry, schema, ctx, "update", Some(filter.clone()))
+        .unwrap_or_else(|| json!({}));
 
     let update_doc = if has_raw_operators(update) {
         build_raw_update(registry, schema, ctx, update, now)
