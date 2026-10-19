@@ -253,9 +253,7 @@ fn pg_sql_snapshot_includes_score_column() {
     assert!(text.contains(r#"FROM "artworks" t"#), "根表不符：{text}");
     // 查询向量参数与写侧 V-19 同一约定：占位符显式 CAST、参数为 pgvector 文本
     assert!(
-        text.contains(
-            r#"WHERE t."status" = $2 AND t."embedding" <=> CAST($1 AS vector) <= $3"#
-        ),
+        text.contains(r#"WHERE t."status" = $2 AND t."embedding" <=> CAST($1 AS vector) <= $3"#),
         "WHERE 组合不符：{text}"
     );
     assert!(

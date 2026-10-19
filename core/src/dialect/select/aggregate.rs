@@ -1006,8 +1006,8 @@ pub(super) fn translate_aggregate(
         // 查询向量与写侧 V-19 同一约定：core 序列化为 pgvector 文本输入格式
         // `"[1,0.2]"` —— asyncpg 拒绝数组参数（expected str, got list），node-pg 会把
         // 数组编码成 PG array 字面量 `{1,0.2}`，pgvector 均不接受。
-        let text = serde_json::to_string(&v.vector)
-            .map_err(|e| format!("查询向量序列化失败：{e}"))?;
+        let text =
+            serde_json::to_string(&v.vector).map_err(|e| format!("查询向量序列化失败：{e}"))?;
         all_params.push(json!(text));
     }
     let where_sql = if root_wheres.is_empty() {

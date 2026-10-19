@@ -307,9 +307,7 @@ fn pg_sql_snapshot() {
     // filter 落 WHERE（检索前预过滤），minScore 折叠为距离上界；
     // 查询向量占位符与写侧 V-19 同一约定：PG 显式 CAST、参数为 pgvector 文本
     assert!(
-        text.contains(
-            r#"WHERE t."status" = $2 AND t."embedding" <=> CAST($1 AS vector) <= $3"#
-        ),
+        text.contains(r#"WHERE t."status" = $2 AND t."embedding" <=> CAST($1 AS vector) <= $3"#),
         "WHERE 组合不符：{text}"
     );
     assert!(
