@@ -313,6 +313,7 @@ impl Registry {
     /// 读出）。返回 `{mode: "atomic_commands", commands: [compareAndSet]}`——单命令
     /// 也走事务序列，宿主统一在事务包裹内执行。
     #[pyo3(signature = (model, filter=None, update=None, now=0, ctx=None, route_override=None))]
+    #[allow(clippy::too_many_arguments)] // 绑定层公共 API 签名与宿主调用约定一致，不收敛参数
     fn plan_compare_and_set(
         &self,
         py: Python<'_>,

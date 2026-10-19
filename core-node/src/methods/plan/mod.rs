@@ -190,6 +190,7 @@ impl Registry {
     /// 同一事务内顺序执行，claim 结果集 `_id` 数组回填 find 的 `___claimed_ids___`
     /// 占位符；ids 为空时跳过后续命令返回空集。`sort` 缺省 FIFO；`now` 由宿主注入。
     #[napi]
+    #[allow(clippy::too_many_arguments)] // 绑定层公共 API 签名与宿主调用约定一致，不收敛参数
     pub fn plan_claim(
         &self,
         model: String,
