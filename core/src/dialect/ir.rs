@@ -38,6 +38,18 @@ impl SqlStmt {
         }
     }
 
+    /// 写语句 + 行形状（SQLite claim 的 `UPDATE … RETURNING`：既写又取行；
+    /// 执行器按 rowShape 还原行为文档，行数即领取数）
+    pub fn write_returning(text: String, params: Vec<Value>, row_shape: RowShape) -> Self {
+        SqlStmt {
+            text,
+            params,
+            is_write: true,
+            row_shape: Some(row_shape),
+            returning: Vec::new(),
+        }
+    }
+
     pub fn to_value(&self) -> Value {
         json!({
             "text": self.text,
