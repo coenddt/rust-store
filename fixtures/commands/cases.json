@@ -566,6 +566,24 @@
   },
   {
     "kind": "remove",
+    "name": "rm-archive-schema-off",
+    "schemas": [
+      {
+        "name": "Post", "collection": "posts", "idPrefix": "P", "timestamps": true,
+        "archive": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "Post",
+    "condition": { "_id": "p1" },
+    "context": null,
+    "now": 1700000000000,
+    "docs": [{ "_id": "p1", "title": "a", "createdAt": 5, "updatedAt": 5 }],
+    "deletedCount": 1
+  },
+  {
+    "kind": "remove",
     "name": "rm-no-match",
     "schemas": [
       {

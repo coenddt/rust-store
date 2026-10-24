@@ -205,6 +205,7 @@ Notes:
 - `planUpdate` / `planRemove` return `{ "needsProbe": cmd }` when a `creator` permission check requires a probe; the host executes the probe and re-enters with `probeFound` / `probeDoc` to get `{ "command": cmd }`.
 - `planUpdateMany` rejects guest / unauthorised callers outright and **does not** use the creator probe.
 - `planRemove` returns an archive `findCommand` plus a `deleteCommand`; archived documents are written to `<collection>_deleted` with a `deletedAt` field.
+- `archive` (optional bool, default `true`) on a schema definition opts it out of soft-delete: when `false`, the `<Name>Deleted` archive model is not derived at registration, so `planRemove` emits no `findCommand` and `planArchiveDocs` rejects — archiving is structurally impossible for that schema. Call-level `archive` options are host concerns; core plans are options-free.
 - `planMutation` expands into an ordered step sequence; parent/child dependencies are expressed with `{{step.<N>._id}}` placeholders that the host fills in.
 - Every plan method takes an optional trailing `routeOverride` / `route_override` (`{source, database, schema}`).
 

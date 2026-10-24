@@ -98,6 +98,55 @@ fn owner_key_rejects_invalid_values() {
     }
 }
 
+// ─── archive 归档开关（漉金Core 接入扩展 02）──────────────
+
+fn base_schema_with_archive(archive: Value) -> Value {
+    let mut s = base_schema(json!(true));
+    s.as_object_mut()
+        .unwrap()
+        .insert("archive".to_string(), archive);
+    s
+}
+
+#[test]
+fn archive_defaults_on_and_accepts_bool() {
+    // 缺省 / null / 显式 bool → 注册成功（缺省零破坏）
+    for defn in [
+        base_schema(json!(true)),
+        base_schema_with_archive(Value::Null),
+        base_schema_with_archive(json!(true)),
+        base_schema_with_archive(json!(false)),
+    ] {
+        registry_with(defn);
+    }
+}
+
+#[test]
+fn archive_rejects_non_bool_values() {
+    // 非 bool（非 null）一律注册期显式报错（禁静默回落）
+    for v in [json!("no"), json!(0), json!([true])] {
+        let mut reg = Registry::new();
+        let err = reg
+            .register(&base_schema_with_archive(v.clone()))
+            .expect_err("非法 archive 应报错");
+        assert!(err.contains("archive"), "错误信息异常: {}", err);
+    }
+}
+
+#[test]
+fn archive_false_skips_archive_model_derivation() {
+    // archive:false → PostDeleted 完全不注册（不进模型表、不占名称冲突名额）；
+    // 主模型不受影响；缺省时 PostDeleted 照常派生（零破坏）。
+    let reg = registry_with(base_schema_with_archive(json!(false)));
+    assert!(
+        !reg.has("PostDeleted"),
+        "archive:false 后不应派生 PostDeleted"
+    );
+    assert!(reg.get("Post").is_ok(), "主模型应不受影响");
+    let reg = registry_with(base_schema(json!(true)));
+    assert!(reg.has("PostDeleted"), "缺省应照常派生 PostDeleted");
+}
+
 #[test]
 fn owner_key_creator_doc_check_uses_owner_key() {
     // creator 伪角色行级判定按 schema.owner_key() 取归属键（漉金Core FinanceUser

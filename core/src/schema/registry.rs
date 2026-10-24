@@ -546,8 +546,11 @@ impl Registry {
                     schema: schema.clone(),
                     links: links.clone(),
                 });
-                // 归档附表紧随主定义派生（`links` 继承主链路，定位同主）
-                if !is_archive && !name.ends_with("Deleted") {
+                // 归档附表紧随主定义派生（`links` 继承主链路，定位同主）；
+                // archive:false（漉金Core 接入扩展 02）完全不派生（不进模型表、
+                // 不建集合、不占名称冲突检查名额）
+                let archive_on = obj.get("archive").map(is_truthy).unwrap_or(true);
+                if !is_archive && !name.ends_with("Deleted") && archive_on {
                     let aobj = archive_defn(obj, name, &schema.collection)
                         .as_object()
                         .cloned()
@@ -1043,6 +1046,17 @@ fn build_schema(
             ))
         }
     };
+    // archive（漉金Core 接入扩展 02）：归档开关，可选 bool，缺省 true（零破坏）；
+    // false 时注册期不派生 `<Name>Deleted` 归档模型（plan_remove 按 registry.has
+    // 判定，自然跳过归档副作用，删除行为本身不变）。
+    match obj.get("archive") {
+        None | Some(Value::Null) | Some(Value::Bool(_)) => {}
+        Some(other) => {
+            return Err(format!(
+                "schema \"{name}\" 的 archive 必须为可选布尔值，实际 {other}"
+            ))
+        }
+    }
     Ok(Schema {
         name,
         collection,

@@ -1272,6 +1272,28 @@
     }
   },
   {
+    "name": "rm-archive-schema-off",
+    "kind": "remove",
+    "result": {
+      "commands": [
+        {
+          "kind": "deleteMany",
+          "collection": "posts",
+          "filter": {
+            "_id": "p1"
+          },
+          "source": "default",
+          "database": null,
+          "schema": null
+        }
+      ],
+      "returns": {
+        "deletedCount": 1,
+        "archivedCount": 0
+      }
+    }
+  },
+  {
     "name": "rm-no-match",
     "kind": "remove",
     "result": {
