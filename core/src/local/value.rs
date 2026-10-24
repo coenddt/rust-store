@@ -646,9 +646,61 @@ fn eval_ref(s: &str, doc: &Value, vars: &Map<String, Value>) -> Result<Value, St
         let base = vars.get(name).cloned().unwrap_or(Value::Null);
         Ok(reference_path(&base, path))
     } else if let Some(rest) = s.strip_prefix('$') {
-        Ok(get_path(doc, rest).cloned().unwrap_or(Value::Null))
+        Ok(eval_field_path(doc, rest))
     } else {
         Ok(Value::String(s.to_string()))
+    }
+}
+
+/// `"$a.b"` 字段引用的**表达式**求值（Mongo 表达式语义，含数组展开）：
+/// - 纯对象路径 → 值本身；缺失 → `Null`（与 [`get_path`] 的三态形态一致）；
+/// - 路径中间段命中数组 → 扇出：对每个元素继续解析剩余段（元素为对象才取段），
+///   缺失子路径的元素跳过，结果恒为数组（单/零元素也保持数组——对齐 Mongo
+///   `$a.b` 在 `a` 为数组时的投影形态，`{a:[]}` → `[]` 而非 missing）。
+///
+/// 与 [`get_path`]（过滤匹配的严格取值）/ [`resolve_path_candidates`]（命中候选收集）
+/// 的差别：本函数服务**投影/聚合表达式**的引用求值——关系聚合计算列与 inline-array
+/// agg（漉金Core 接入扩展 04）都发射 `{$max:"$arr.f"}` / `{$ifNull:["$arr.f",[]]}`
+/// 形态，依赖数组展开取元素列（漉金Core 接入扩展 04 修复：此前走 get_path 遇数组
+/// 即缺失，聚合恒 null/0）。`$$var` 引用不展开（$lookup let 绑定值均为标量）。
+fn eval_field_path(doc: &Value, path: &str) -> Value {
+    let mut cur: Vec<&Value> = vec![doc];
+    let mut fanout = false;
+    for seg in segments(path) {
+        let mut next: Vec<&Value> = Vec::new();
+        let mut array_hit = false;
+        for base in &cur {
+            match base {
+                Value::Object(o) => {
+                    if let Some(v) = o.get(seg) {
+                        next.push(v);
+                    }
+                }
+                Value::Array(a) => {
+                    array_hit = true;
+                    for el in a {
+                        if let Value::Object(o) = el {
+                            if let Some(v) = o.get(seg) {
+                                next.push(v);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if array_hit {
+            fanout = true;
+        }
+        cur = next;
+        if cur.is_empty() {
+            break;
+        }
+    }
+    if fanout {
+        Value::Array(cur.into_iter().cloned().collect())
+    } else {
+        cur.into_iter().next().cloned().unwrap_or(Value::Null)
     }
 }
 
@@ -1196,6 +1248,55 @@ mod tests {
         assert_eq!(
             eval_expr(&shape("$tags"), &missing, &vars).unwrap(),
             json!(0)
+        );
+    }
+
+    /// 点路径数组展开（eval_field_path）：`$arr.f` 表达式引用扇出取元素列；
+    /// 关系聚合计算列（`$sum:"$as.f"`）与 inline-array agg（`$max:"$bidders.amount"`）
+    /// 共用此语义（漉金Core 接入扩展 04 修复）
+    #[test]
+    fn field_path_array_fanout_eval() {
+        let vars = Map::new();
+        // 对象数组点路径 → 元素列（缺失子路径的元素跳过）；$max/$sum 在元素列上聚合
+        let doc = json!({ "bidders": [
+            { "bidderId": "u1", "amount": 100 },
+            { "bidderId": "u2" },
+            { "bidderId": "u1", "amount": 300 }
+        ] });
+        assert_eq!(
+            eval_expr(&json!({ "$max": "$bidders.amount" }), &doc, &vars).unwrap(),
+            json!(300)
+        );
+        assert_eq!(
+            eval_expr(&json!({ "$sum": "$bidders.amount" }), &doc, &vars).unwrap(),
+            json!(400)
+        );
+        // 扇出形态：缺子路径元素不产出 → 元素列 [ "u1", "u2", "u1" ]
+        assert_eq!(
+            eval_expr(&json!({ "$filter": {
+                "input": { "$ifNull": ["$bidders.bidderId", []] },
+                "as": "v",
+                "cond": { "$ne": ["$$v", null] }
+            } }), &doc, &vars).unwrap(),
+            json!(["u1", "u2", "u1"])
+        );
+        // 空数组：扇出产出空数组（非 missing；$ifNull 不触发兜底）
+        let empty = json!({ "bidders": [] });
+        assert_eq!(
+            eval_expr(&json!("$bidders.amount"), &empty, &vars).unwrap(),
+            json!([])
+        );
+        // 缺字段：无扇出 → Null（$ifNull 兜底语义依赖该形态）
+        let missing = json!({});
+        assert_eq!(
+            eval_expr(&json!("$bidders.amount"), &missing, &vars).unwrap(),
+            Value::Null
+        );
+        // 纯对象路径不受影响（标量/对象/数组整体原样）
+        let plain = json!({ "a": { "b": [1, 2] } });
+        assert_eq!(
+            eval_expr(&json!("$a.b"), &plain, &vars).unwrap(),
+            json!([1, 2])
         );
     }
 }
