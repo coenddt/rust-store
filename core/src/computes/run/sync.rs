@@ -326,7 +326,7 @@ fn apply_owner_read_prune(
         }
         if let Some(field) = schema.fields.get(key) {
             if let Some(rl) = &field.read {
-                if !evaluate(rules, ctx, Some(rl), Doc::Doc(doc)) {
+                if !evaluate(rules, ctx, Some(rl), Doc::Doc(doc), schema.owner_key()) {
                     keep.remove(key);
                 }
             }
@@ -338,7 +338,7 @@ fn apply_owner_read_prune(
             continue;
         }
         if let Some(rl) = &comp.read {
-            if !evaluate(rules, ctx, Some(rl), Doc::Doc(doc)) {
+            if !evaluate(rules, ctx, Some(rl), Doc::Doc(doc), schema.owner_key()) {
                 keep.remove(key);
             }
         }
@@ -350,7 +350,7 @@ fn apply_owner_read_prune(
         }
         if let Some(rel) = schema.relations.get(rel_name) {
             if let Some(rl) = &rel.read {
-                if !evaluate(rules, ctx, Some(rl), Doc::Doc(doc)) {
+                if !evaluate(rules, ctx, Some(rl), Doc::Doc(doc), schema.owner_key()) {
                     keep.remove(rel_name);
                 }
             }

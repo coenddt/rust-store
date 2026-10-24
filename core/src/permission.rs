@@ -147,6 +147,7 @@ pub fn evaluate(
     ctx: Option<&Context>,
     role_list: Option<&[String]>,
     doc: Doc,
+    owner_key: &str,
 ) -> bool {
     let Some(c) = ctx else { return true };
     if c.internal {
@@ -170,11 +171,11 @@ pub fn evaluate(
         return true;
     }
 
-    // ② 创作者匹配
-    match_creator(c, doc, list)
+    // ② 创作者匹配（归属键由 schema.ownerKey 声明，缺省 createdBy）
+    match_creator(c, doc, list, owner_key)
 }
 
-fn match_creator(ctx: &Context, doc: Doc, role_list: &[String]) -> bool {
+fn match_creator(ctx: &Context, doc: Doc, role_list: &[String], owner_key: &str) -> bool {
     if !role_list.iter().any(|r| r == "creator") {
         return false;
     }
@@ -186,7 +187,7 @@ fn match_creator(ctx: &Context, doc: Doc, role_list: &[String]) -> bool {
             if uid.is_empty() {
                 return false;
             }
-            d.get("createdBy")
+            d.get(owner_key)
                 .and_then(|v| v.as_str())
                 .map(|cb| cb == uid)
                 .unwrap_or(false)
@@ -207,7 +208,7 @@ pub fn get_readable_fields(
     for (key, field) in &schema.fields {
         match &field.read {
             Some(rl) => {
-                if evaluate(rules, Some(c), Some(rl), Doc::Missing) {
+                if evaluate(rules, Some(c), Some(rl), Doc::Missing, schema.owner_key()) {
                     allowed.insert(key.clone());
                 }
             }
@@ -229,7 +230,7 @@ pub fn get_readable_computes(
     for (key, comp) in &schema.computes {
         match &comp.read {
             Some(rl) => {
-                if evaluate(rules, Some(c), Some(rl), Doc::Missing) {
+                if evaluate(rules, Some(c), Some(rl), Doc::Missing, schema.owner_key()) {
                     allowed.insert(key.clone());
                 }
             }
@@ -251,7 +252,7 @@ pub fn get_readable_relations(
     for (key, rel) in &schema.relations {
         match &rel.read {
             Some(rl) => {
-                if evaluate(rules, Some(c), Some(rl), Doc::Missing) {
+                if evaluate(rules, Some(c), Some(rl), Doc::Missing, schema.owner_key()) {
                     allowed.insert(key.clone());
                 }
             }
@@ -300,7 +301,7 @@ pub fn is_relation_readable(
 // ─── Schema 级检查 ────────────────────────────────────────────
 
 pub fn can_read_schema(rules: &RoleRules, schema: &Schema, ctx: Option<&Context>) -> bool {
-    evaluate(rules, ctx, schema.read.as_deref(), Doc::Missing)
+    evaluate(rules, ctx, schema.read.as_deref(), Doc::Missing, schema.owner_key())
 }
 
 /// 拒写清单命中者一切写路径拒绝（读不受影响，默认空——无拒写）；
@@ -318,7 +319,7 @@ pub fn can_write_schema(rules: &RoleRules, schema: &Schema, ctx: Option<&Context
             return false;
         }
     }
-    evaluate(rules, ctx, schema.write.as_deref(), Doc::Missing)
+    evaluate(rules, ctx, schema.write.as_deref(), Doc::Missing, schema.owner_key())
 }
 
 /// 有效角色集：`roles` 非空用之，否则回落单 `role`——对齐 `rbac::effective_roles`
@@ -368,7 +369,8 @@ pub fn should_inject_owner_condition(
     read.iter().any(|r| r == "creator")
 }
 
-/// 非 admin 用户只看自己的数据：`creator` 专属读权限时注入 `createdBy` 条件
+/// 非 admin 用户只看自己的数据：`creator` 专属读权限时注入归属键条件
+/// （键取 [`Schema::owner_key`]，缺省 `createdBy`）
 pub fn merge_owner_condition(
     rules: &RoleRules,
     schema: &Schema,
@@ -378,7 +380,9 @@ pub fn merge_owner_condition(
     if !should_inject_owner_condition(rules, schema, ctx) {
         return condition;
     }
-    let owner = json!({ "createdBy": ctx?.user_id });
+    let mut owner = Map::new();
+    owner.insert(schema.owner_key().to_string(), json!(ctx?.user_id));
+    let owner = Value::Object(owner);
     match condition.filter(is_truthy) {
         None => Some(owner),
         Some(c) => Some(json!({ "$and": [c, owner] })),
@@ -398,7 +402,7 @@ pub fn get_writable_fields(
     for (key, field) in &schema.fields {
         match &field.write {
             Some(wl) => {
-                if evaluate(rules, Some(c), Some(wl), Doc::Missing) {
+                if evaluate(rules, Some(c), Some(wl), Doc::Missing, schema.owner_key()) {
                     allowed.insert(key.clone());
                 }
             }

@@ -208,6 +208,9 @@ pub struct Schema {
     pub database: Option<String>,
     /// 连接内「schema」（仅 PG；由 `register_batch` 注入；`None` = 连接默认 search_path）。
     pub schema: Option<String>,
+    /// 归属键（creator 伪角色判定 / owner-condition 注入 / update-remove 所有权检查
+    /// 读取的文档字段名）。`None` = 缺省 `"createdBy"`（零破坏）；空串在注册期拦截。
+    pub owner_key: Option<String>,
 }
 
 impl Schema {
@@ -251,6 +254,13 @@ impl Schema {
     /// `_id` 是否声明 `strategy: "autoincrement"`（阶段2：数据库自增主键）
     pub fn id_is_autoincrement(&self) -> bool {
         self.fields.get("_id").and_then(|f| f.strategy.as_deref()) == Some("autoincrement")
+    }
+
+    /// 归属键（creator 伪角色判定 / 注入 / 所有权检查三处统一经此取键，禁止
+    /// 调用点直接写 `createdBy` 字面量）。缺省 `"createdBy"`（零破坏）；
+    /// `ownerKey` 空串视为非法（注册期已拦截，此处不兜底）。
+    pub fn owner_key(&self) -> &str {
+        self.owner_key.as_deref().unwrap_or("createdBy")
     }
 }
 

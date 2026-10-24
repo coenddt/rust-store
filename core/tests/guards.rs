@@ -59,6 +59,90 @@ fn timestamps_rejects_invalid_values() {
     }
 }
 
+// ─── ownerKey 归属键校验（漉金Core 接入扩展 01）──────────────
+
+fn base_schema_with_owner_key(owner_key: Value) -> Value {
+    let mut s = base_schema(json!(true));
+    s.as_object_mut()
+        .unwrap()
+        .insert("ownerKey".to_string(), owner_key);
+    s
+}
+
+#[test]
+fn owner_key_defaults_to_created_by_and_accepts_custom_keys() {
+    // 缺省 / null → "createdBy"（零破坏）
+    for defn in [base_schema(json!(true)), base_schema_with_owner_key(Value::Null)] {
+        let reg = registry_with(defn);
+        assert_eq!(
+            reg.get("Post").expect("schema 应存在").owner_key(),
+            "createdBy"
+        );
+    }
+    // 显式非空字符串 → 原样生效；系统键 `_id`（漉金Core FinanceUser 形态）合法
+    let reg = registry_with(base_schema_with_owner_key(json!("_id")));
+    assert_eq!(reg.get("Post").expect("schema 应存在").owner_key(), "_id");
+    let reg = registry_with(base_schema_with_owner_key(json!("ownerRef")));
+    assert_eq!(reg.get("Post").expect("schema 应存在").owner_key(), "ownerRef");
+}
+
+#[test]
+fn owner_key_rejects_invalid_values() {
+    // 空串与非字符串一律注册期显式报错（禁静默回落）
+    for v in [json!(""), json!(123), json!(true), json!(["_id"])] {
+        let mut reg = Registry::new();
+        let err = reg
+            .register(&base_schema_with_owner_key(v.clone()))
+            .expect_err("非法 ownerKey 应报错");
+        assert!(err.contains("ownerKey"), "错误信息异常: {}", err);
+    }
+}
+
+#[test]
+fn owner_key_creator_doc_check_uses_owner_key() {
+    // creator 伪角色行级判定按 schema.owner_key() 取归属键（漉金Core FinanceUser
+    // 以 `_id` 归属）：本人文档放行、他人文档拒绝；缺省键 createdBy 行为不变（零破坏）。
+    // 注：plan_update 写路径的 creator 探针 403 分支被 can_write_schema（Doc::Missing
+    // → creator 恒通过）静态放行遮蔽，行级 creator 判定的可达判定点即 evaluate。
+    use rust_store_core::permission::{context_from_value, evaluate, Doc, RoleRules};
+
+    let ctx = context_from_value(&json!({ "userId": "USR1", "roles": ["user"] }))
+        .expect("ctx 应可构造");
+    let creators: Vec<String> = vec!["creator".to_string()];
+    let rules = RoleRules::default();
+
+    // ownerKey = _id：本人 → 放行，他人 → 拒绝
+    assert!(evaluate(
+        &rules,
+        Some(&ctx),
+        Some(&creators),
+        Doc::Doc(&json!({ "_id": "USR1" })),
+        "_id"
+    ));
+    assert!(!evaluate(
+        &rules,
+        Some(&ctx),
+        Some(&creators),
+        Doc::Doc(&json!({ "_id": "USR2" })),
+        "_id"
+    ));
+    // 缺省键 createdBy：旧行为不变
+    assert!(evaluate(
+        &rules,
+        Some(&ctx),
+        Some(&creators),
+        Doc::Doc(&json!({ "createdBy": "USR1" })),
+        "createdBy"
+    ));
+    assert!(!evaluate(
+        &rules,
+        Some(&ctx),
+        Some(&creators),
+        Doc::Doc(&json!({ "createdBy": "USR2" })),
+        "createdBy"
+    ));
+}
+
 // ─── queryOne `$limit(1)` 下推 + 权限错误哨兵前缀 ────────────
 
 use rust_store_core::command::{plan_query_one, Mode};

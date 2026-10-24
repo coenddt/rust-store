@@ -100,7 +100,13 @@ fn plan_mutation_node(
             let allowed = match ctx {
                 None => true,
                 Some(c) => match &rel_def.read {
-                    Some(rl) => evaluate(registry.role_rules(), Some(c), Some(rl), Doc::Missing),
+                    Some(rl) => evaluate(
+                        registry.role_rules(),
+                        Some(c),
+                        Some(rl),
+                        Doc::Missing,
+                        schema.owner_key(),
+                    ),
                     None => true,
                 },
             };

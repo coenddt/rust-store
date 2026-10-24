@@ -200,7 +200,7 @@ pub enum Probe<'a> {
 /// RBAC 叠加（deny-wins）：
 /// - 表级：`ensure_write(action)` 在 guest 检查后判定，deny 即拒；
 /// - 行级：`row_condition` 非空（ownerOnly / condition）时**同样需要探针**——
-///   静态放行的路径也要先取 `{_id, createdBy, condition 键}` 再重入判定
+///   静态放行的路径也要先取 `{_id, 归属键, condition 键}` 再重入判定
 ///   （[`ensure_write_on_doc`]），杜绝 ownerOnly 单条更新静默命中他人文档；
 /// - 探针重入（`Probe::Found`）时静态 `evaluate` 与 RBAC 行级判定都过才放行。
 ///
@@ -225,7 +225,9 @@ pub fn check_write_perm(
     let probe_projection = |extra: &[String]| -> Value {
         let mut m = Map::new();
         m.insert("_id".to_string(), json!(1));
-        m.insert("createdBy".to_string(), json!(1));
+        // 探针必须含归属键（schema.owner_key()，缺省 createdBy）：creator 判定 /
+        // ownerOnly 行级检查都从探针文档取归属键，ownerKey='_id' 等自定义键同样命中
+        m.insert(schema.owner_key().to_string(), json!(1));
         for f in extra {
             // 仅取 schema 已声明字段（防触发器声明引用未声明键污染投影）
             if schema.fields.contains_key(f) {
@@ -332,6 +334,7 @@ pub fn check_write_perm(
                     Some(c),
                     schema.write.as_deref(),
                     Doc::Doc(doc),
+                    schema.owner_key(),
                 ) {
                     if needs_row_check {
                         // 静态 creator 过 → RBAC 行级再判（两引擎都过才放行）

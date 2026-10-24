@@ -1696,5 +1696,151 @@
     "name": "mut-denied",
     "kind": "mutation",
     "error": true
+  },
+  {
+    "name": "q-ownerkey-read-own",
+    "kind": "query",
+    "result": {
+      "collection": "users",
+      "mode": "find",
+      "commands": [
+        {
+          "kind": "find",
+          "collection": "users",
+          "filter": {
+            "$and": [
+              {
+                "_id": "USR1"
+              },
+              {
+                "_id": "USR1"
+              }
+            ]
+          },
+          "projection": {
+            "_id": 1,
+            "name": 1
+          },
+          "source": "default",
+          "database": null,
+          "schema": null
+        }
+      ],
+      "postprocess": {
+        "ast": {
+          "model": "User",
+          "params": {
+            "condition": "@c0"
+          },
+          "fields": [
+            "name"
+          ],
+          "relations": {}
+        },
+        "inject": null
+      },
+      "sort": null
+    }
+  },
+  {
+    "name": "q-ownerkey-inject-list",
+    "kind": "query",
+    "result": {
+      "collection": "users",
+      "mode": "find",
+      "commands": [
+        {
+          "kind": "find",
+          "collection": "users",
+          "filter": {
+            "_id": "USR1"
+          },
+          "projection": {
+            "_id": 1,
+            "name": 1
+          },
+          "source": "default",
+          "database": null,
+          "schema": null
+        }
+      ],
+      "postprocess": {
+        "ast": {
+          "model": "User",
+          "params": {
+            "condition": "@__core_owner__"
+          },
+          "fields": [
+            "name"
+          ],
+          "relations": {}
+        },
+        "inject": null
+      },
+      "sort": null
+    }
+  },
+  {
+    "name": "upd-ownerkey-self-pass",
+    "kind": "update",
+    "result": {
+      "commands": [
+        {
+          "kind": "findOneAndUpdate",
+          "collection": "users_w",
+          "filter": {
+            "_id": "USR1"
+          },
+          "update": {
+            "$set": {
+              "name": "me"
+            }
+          },
+          "options": {
+            "returnDocument": "after"
+          },
+          "source": "default",
+          "database": null,
+          "schema": null
+        }
+      ],
+      "returns": {
+        "_id": "USR1",
+        "name": "me"
+      }
+    }
+  },
+  {
+    "name": "rm-ownerkey-self-pass",
+    "kind": "remove",
+    "result": {
+      "commands": [
+        {
+          "kind": "find",
+          "collection": "users_w",
+          "filter": {
+            "_id": "USR1"
+          },
+          "projection": null,
+          "source": "default",
+          "database": null,
+          "schema": null
+        },
+        {
+          "kind": "deleteMany",
+          "collection": "users_w",
+          "filter": {
+            "_id": "USR1"
+          },
+          "source": "default",
+          "database": null,
+          "schema": null
+        }
+      ],
+      "returns": {
+        "deletedCount": 1,
+        "archivedCount": 0
+      }
+    }
   }
 ]

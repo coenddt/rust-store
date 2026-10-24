@@ -797,5 +797,75 @@
     "context": { "userId": "u1", "roles": ["user"] },
     "now": 1700000000000,
     "expect_error": true
+  },
+  {
+    "kind": "query",
+    "name": "q-ownerkey-read-own",
+    "schemas": [
+      {
+        "name": "User", "collection": "users", "timestamps": false,
+        "read": ["admin", "creator"],
+        "ownerKey": "_id",
+        "fields": { "name": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "User($condition:@c0){name}",
+    "params": { "c0": { "_id": "USR1" } },
+    "context": { "userId": "USR1", "roles": ["user"] }
+  },
+  {
+    "kind": "query",
+    "name": "q-ownerkey-inject-list",
+    "schemas": [
+      {
+        "name": "User", "collection": "users", "timestamps": false,
+        "read": ["admin", "creator"],
+        "ownerKey": "_id",
+        "fields": { "name": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "gql": "User{name}",
+    "params": {},
+    "context": { "userId": "USR1", "roles": ["user"] }
+  },
+  {
+    "kind": "update",
+    "name": "upd-ownerkey-self-pass",
+    "schemas": [
+      {
+        "name": "UserW", "collection": "users_w", "idPrefix": "USR", "timestamps": false,
+        "write": ["creator"],
+        "ownerKey": "_id",
+        "fields": { "name": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "UserW",
+    "condition": { "_id": "USR1" },
+    "data": { "name": "me" },
+    "options": null,
+    "context": { "userId": "USR1", "roles": ["user"] },
+    "now": 1700000000000,
+    "updatedDoc": { "_id": "USR1", "name": "me" }
+  },
+  {
+    "kind": "remove",
+    "name": "rm-ownerkey-self-pass",
+    "schemas": [
+      {
+        "name": "UserW", "collection": "users_w", "idPrefix": "USR", "timestamps": false,
+        "write": ["creator"],
+        "ownerKey": "_id",
+        "fields": { "name": { "type": "string" } },
+        "relations": {}
+      }
+    ],
+    "model": "UserW",
+    "condition": { "_id": "USR1" },
+    "context": { "userId": "USR1", "roles": ["user"] },
+    "now": 1700000000000,
+    "deletedCount": 1
   }
 ]

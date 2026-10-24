@@ -1031,6 +1031,18 @@ fn build_schema(
     ids.extend(relations.keys().map(String::as_str));
     ids.extend(computes.iter().map(|(k, _)| k.as_str()));
     crate::naming::detect_conflicts(ids)?;
+    // ownerKey（漉金Core 接入扩展 01）：归属键，缺省 = `createdBy`（零破坏）；
+    // 存在时必须为非空字符串，非法注册期显式 Err（禁静默回落）。
+    // 不要求键必须出现在 fields 中（`_id` 等系统键合法）。
+    let owner_key = match obj.get("ownerKey") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(other) => {
+            return Err(format!(
+                "schema \"{name}\" 的 ownerKey 必须为非空字符串，实际 {other}"
+            ))
+        }
+    };
     Ok(Schema {
         name,
         collection,
@@ -1058,6 +1070,7 @@ fn build_schema(
         },
         database: loc.database.clone().filter(|s| !s.is_empty()),
         schema: loc.schema.clone().filter(|s| !s.is_empty()),
+        owner_key,
     })
 }
 
