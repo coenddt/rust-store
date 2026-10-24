@@ -597,6 +597,39 @@ pub(super) fn translate_aggregate(
                     .iter()
                     .all(|k| compute_aggs.iter().any(|ca| &ca.key == k));
             if !all_resolved {
+                // 04：inline-array agg 计算列（路径首段 = 本模型数组字段）不进 compute_aggs
+                // （其 $addFields 无对应 $lookup）→ SQL 无翻译。命中时给专属报错，
+                // 指导改用 Mongo/本地后端；其余维持泛化报错。
+                for k in &keys {
+                    if compute_aggs.iter().any(|ca| &ca.key == k) {
+                        continue;
+                    }
+                    let inline_hit = schema
+                        .computes
+                        .iter()
+                        .find(|(ck, _)| ck == k)
+                        .and_then(|(_, comp)| comp.agg.as_ref())
+                        .and_then(|agg| {
+                            agg.as_object()
+                                .and_then(|o| o.values().next())
+                                .and_then(Value::as_str)
+                                .map(|path| path.split('.').next().unwrap_or(path).to_string())
+                        })
+                        .map(|head| {
+                            schema.relations.get(&head).is_none()
+                                && schema
+                                    .fields
+                                    .get(&head)
+                                    .map(|f| f.field_type == "array")
+                                    .unwrap_or(false)
+                        })
+                        .unwrap_or(false);
+                    if inline_hit {
+                        return Err(format!(
+                            "SQL 后端暂不支持 inline-array agg 计算列 \"{k}\"（文档内数组聚合无 SQL 翻译，仅 Mongo/本地后端支持）"
+                        ));
+                    }
+                }
                 return Err(
                     "SQL 后端暂不支持的聚合阶段 $addFields：拒绝静默忽略后返回未聚合的原始行"
                         .to_string(),

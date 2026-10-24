@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
 
-use crate::types::{is_truthy, str_list, AGG_OPS};
+use crate::types::{is_truthy, str_list, COMPUTE_AGG_OPS};
 
 use super::definition::{
     normalize_fields, validate_vector_fields, ComputeDef, FieldDef, Location, RelationDef, Schema,
@@ -1006,8 +1006,8 @@ fn build_schema(
         add_timestamp_fields(&mut fields);
     }
     let relations = parse_relations(obj);
-    // 计算列的 agg 需要校验「引用的关系存在」→ 必须晚于 relations 解析
-    let computes = parse_computes(obj, &relations)?;
+    // 计算列的 agg 需要校验「路径首段命中关系或数组字段」→ 必须晚于 relations/fields 解析
+    let computes = parse_computes(obj, &relations, &fields)?;
     // 写触发器声明（onFields 校验依赖已归一 fields；非法声明注册期 Err）
     let triggers = super::triggers::parse_triggers(obj, &name, &fields)?;
     // `_score` 是向量检索评分列（04），与 `fields ∪ relations ∪ computes` 同属结果文档命名空间；
@@ -1151,6 +1151,7 @@ fn parse_relations(obj: &Map<String, Value>) -> HashMap<String, RelationDef> {
 fn parse_computes(
     obj: &Map<String, Value>,
     relations: &HashMap<String, RelationDef>,
+    fields: &HashMap<String, FieldDef>,
 ) -> Result<Vec<(String, ComputeDef)>, String> {
     let mut computes = Vec::new();
     if let Some(Value::Object(cm)) = obj.get("computes") {
@@ -1159,7 +1160,14 @@ fn parse_computes(
             let get = |k: &str| vo.and_then(|o| o.get(k)).cloned();
             let has_fn = get("fn").map(|v| is_truthy(&v)).unwrap_or(false);
             let has_async_fn = get("asyncFn").map(|v| is_truthy(&v)).unwrap_or(false);
-            let agg = parse_agg(key, get("agg").as_ref(), relations, has_fn || has_async_fn)?;
+            let agg = parse_agg(
+                key,
+                get("agg").as_ref(),
+                relations,
+                fields,
+                str_list(get("depends").as_ref()).unwrap_or_default().as_slice(),
+                has_fn || has_async_fn,
+            )?;
             computes.push((
                 key.clone(),
                 ComputeDef {
@@ -1182,17 +1190,25 @@ fn parse_computes(
     Ok(computes)
 }
 
-/// 解析并校验归一聚合计算列（§9.2(2)）：`{"$count":"lessons"}` / `{"$sum":"lessons.duration"}`。
+/// 解析并校验归一聚合计算列（§9.2(2) + 漉金Core 接入扩展 04）。
 ///
-/// - 算子白名单 `$count/$sum/$avg/$min/$max`，不在白名单 → Err（绝不静默）；
-/// - 取值必须是**关系路径**：`$count` 仅关系整行计数（`lessons`，不接受字段），
-///   其余算子必须带字段（`lessons.duration`）；
-/// - 二级关系路径（`orders.items.price`）首批不支持 → Err；
+/// - 算子白名单 [`COMPUTE_AGG_OPS`]，不在白名单 → Err（绝不静默）；
+/// - agg 路径首段二分：
+///   - 命中 **relations** → relation-agg（现状不变）：`$count` 仅关系整行计数
+///     （`lessons`，不接受字段），其余算子必须带字段（`lessons.duration`）；
+///   - 命中 **fields 且为数组类型** → inline-array agg：`$size` 仅数组本身
+///     （`bidders`，不接受元素字段），其余算子必须带单级元素字段
+///     （`bidders.amount`）；`$count` 不适用（文档内数组计数用 `$size`）；
+///     且 `depends` 必须包含路径首段（宿主本地重算依据，缺失报错不兜底）；
+///   - 首段命中字段但非数组类型 / 两者皆未命中 → Err；
+/// - 单级元素字段即止（`a.b.c` 中 b 为数组的深层再入数组不做，§7）；
 /// - 与 `fn` / `asyncFn` 互斥。
 fn parse_agg(
     key: &str,
     raw: Option<&Value>,
     relations: &HashMap<String, RelationDef>,
+    fields: &HashMap<String, FieldDef>,
+    depends: &[String],
     has_callback: bool,
 ) -> Result<Option<Value>, String> {
     let Some(v) = raw.filter(|v| is_truthy(v)) else {
@@ -1211,43 +1227,72 @@ fn parse_agg(
         (Some(kv), None) => kv,
         _ => return Err(format!("计算列 \"{key}\" 的 agg 必须且只能声明一个算子键")),
     };
-    if !AGG_OPS.contains(&op.as_str()) {
+    if !COMPUTE_AGG_OPS.contains(&op.as_str()) {
         return Err(format!(
-            "计算列 \"{key}\" 的 agg 算子 {op} 不在白名单（$count/$sum/$avg/$min/$max）"
+            "计算列 \"{key}\" 的 agg 算子 {op} 不在白名单（$count/$size/$sum/$avg/$min/$max/$countDistinct）"
         ));
     }
     let path = arg
         .as_str()
         .filter(|s| !s.is_empty() && *s != "*")
         .ok_or_else(|| {
-            format!("计算列 \"{key}\" 的 agg 取值必须是关系路径字符串（如 \"lessons\" / \"lessons.duration\"）")
+            format!("计算列 \"{key}\" 的 agg 取值必须是路径字符串（如 \"lessons\" / \"lessons.duration\" / \"bidders.amount\"）")
         })?;
     let (rel, field) = match path.split_once('.') {
         Some((r, f)) => (r, Some(f)),
         None => (path, None),
     };
-    if !relations.contains_key(rel) {
-        return Err(format!(
-            "计算列 \"{key}\" 的 agg 引用的关系 \"{rel}\" 未在 schema 中定义"
-        ));
-    }
     if field
         .map(|f| f.is_empty() || f.contains('.'))
         .unwrap_or(false)
     {
         return Err(format!(
-            "计算列 \"{key}\" 的 agg 关系路径 \"{path}\" 非法：仅支持单级「关系.字段」（二级路径首批不支持）"
+            "计算列 \"{key}\" 的 agg 路径 \"{path}\" 非法：仅支持「关系.字段」/「数组.元素字段」单级路径（深层路径首批不支持）"
         ));
     }
-    match op.as_str() {
-        "$count" if field.is_some() => Err(format!(
-            "计算列 \"{key}\" 的 $count 仅支持关系整行计数（如 \"lessons\"），按字段计数待 P5"
-        )),
-        "$count" => Ok(Some(v.clone())),
-        _ if field.is_none() => Err(format!(
-            "计算列 \"{key}\" 的 agg 算子 {op} 必须引用关系字段（如 \"lessons.duration\"）"
-        )),
-        _ => Ok(Some(v.clone())),
+    if relations.contains_key(rel) {
+        // relation-agg：现状校验原样（04 红线：relation 分支零改动）
+        match op.as_str() {
+            "$count" if field.is_some() => Err(format!(
+                "计算列 \"{key}\" 的 $count 仅支持关系整行计数（如 \"lessons\"），按字段计数待 P5"
+            )),
+            "$count" => Ok(Some(v.clone())),
+            _ if field.is_none() => Err(format!(
+                "计算列 \"{key}\" 的 agg 算子 {op} 必须引用关系字段（如 \"lessons.duration\"）"
+            )),
+            _ => Ok(Some(v.clone())),
+        }
+    } else {
+        match fields.get(rel) {
+            Some(f) if f.field_type == "array" => {
+                // inline-array agg
+                if !depends.iter().any(|d| d == rel) {
+                    return Err(format!(
+                        "计算列 \"{key}\" 的 depends 必须包含 inline agg 路径首段 \"{rel}\"（宿主本地重算依据）"
+                    ));
+                }
+                match op.as_str() {
+                    "$size" if field.is_some() => Err(format!(
+                        "计算列 \"{key}\" 的 $size 仅支持数组本身（如 \"{rel}\"），不接受元素字段"
+                    )),
+                    "$size" => Ok(Some(v.clone())),
+                    "$count" => Err(format!(
+                        "计算列 \"{key}\" 的 $count 不适用于数组字段：文档内数组计数用 $size（如 {{\"$size\": \"{rel}\"}}）"
+                    )),
+                    _ if field.is_none() => Err(format!(
+                        "计算列 \"{key}\" 的 agg 算子 {op} 必须引用数组元素字段（如 \"{rel}.amount\"）"
+                    )),
+                    _ => Ok(Some(v.clone())),
+                }
+            }
+            Some(f) => Err(format!(
+                "计算列 \"{key}\" 的 agg 路径首段 \"{rel}\" 是字段但类型为 \"{}\"（非数组），inline agg 仅支持数组字段",
+                f.field_type
+            )),
+            None => Err(format!(
+                "计算列 \"{key}\" 的 agg 引用的路径首段 \"{rel}\" 既非已定义关系也非数组字段"
+            )),
+        }
     }
 }
 
@@ -1459,5 +1504,142 @@ mod tests {
         let kept = base.with_policy(&PolicyOverrides::from_value(&json!({})).unwrap());
         assert!(kept.rbac().is_some(), "缺键应继承");
         assert!(base.rbac().is_some(), "base 不受影响");
+    }
+
+    // ─── 04 inline-array agg：parse_agg 路径首段二分校验 ─────────────
+
+    /// 仅解析 computes（供 parse_agg 各分支直接断言，不经 Registry 全链路）
+    fn agg_computes(obj: &Value) -> Result<Vec<(String, ComputeDef)>, String> {
+        let o = obj.as_object().expect("obj");
+        let rels = parse_relations(o);
+        let fields = normalize_fields(o.get("fields"))?;
+        parse_computes(o, &rels, &fields)
+    }
+
+    /// 七算子 inline 合法形态全通过（$size/$max/$countDistinct/$sum/$avg/$min）
+    #[test]
+    fn inline_agg_all_ops_ok() {
+        let def = json!({
+            "name": "Auction", "collection": "auctions", "timestamps": false,
+            "fields": { "bidders": { "type": "array" } },
+            "relations": {},
+            "computes": {
+                "biddersCount": { "type": "int", "agg": { "$size": "bidders" }, "depends": ["bidders"] },
+                "maxBid": { "type": "number", "agg": { "$max": "bidders.amount" }, "depends": ["bidders"] },
+                "bidderCount": { "type": "int", "agg": { "$countDistinct": "bidders.bidderId" }, "depends": ["bidders"] },
+                "sumBid": { "type": "number", "agg": { "$sum": "bidders.amount" }, "depends": ["bidders"] },
+                "avgBid": { "type": "number", "agg": { "$avg": "bidders.amount" }, "depends": ["bidders"] },
+                "minBid": { "type": "number", "agg": { "$min": "bidders.amount" }, "depends": ["bidders"] }
+            }
+        });
+        let computes = agg_computes(&def).expect("六算子 inline agg 均合法");
+        assert_eq!(computes.len(), 6);
+        for (_, c) in &computes {
+            assert!(c.agg.is_some(), "inline agg 应保留");
+        }
+    }
+
+    /// inline agg 的 depends 必须包含路径首段（宿主本地重算依据）
+    #[test]
+    fn inline_agg_without_depends_head_is_err() {
+        let def = json!({
+            "name": "A", "collection": "a", "timestamps": false,
+            "fields": { "tags": { "type": "array" } },
+            "relations": {},
+            "computes": { "n": { "type": "int", "agg": { "$size": "tags" } } }
+        });
+        let err = agg_computes(&def).expect_err("缺 depends 应 Err");
+        assert!(err.contains("depends"), "{err}");
+    }
+
+    /// $size 仅支持数组本身，不接受元素字段
+    #[test]
+    fn inline_agg_size_with_element_field_is_err() {
+        let def = json!({
+            "name": "A", "collection": "a", "timestamps": false,
+            "fields": { "tags": { "type": "array" } },
+            "relations": {},
+            "computes": { "n": { "type": "int", "agg": { "$size": "tags.x" }, "depends": ["tags"] } }
+        });
+        let err = agg_computes(&def).expect_err("$size 带元素字段应 Err");
+        assert!(err.contains("仅支持数组本身"), "{err}");
+    }
+
+    /// 文档内数组计数用 $size，$count 不适用于数组字段
+    #[test]
+    fn inline_agg_count_is_err() {
+        let def = json!({
+            "name": "A", "collection": "a", "timestamps": false,
+            "fields": { "tags": { "type": "array" } },
+            "relations": {},
+            "computes": { "n": { "type": "int", "agg": { "$count": "tags" }, "depends": ["tags"] } }
+        });
+        let err = agg_computes(&def).expect_err("数组 $count 应 Err");
+        assert!(err.contains("$size"), "{err}");
+    }
+
+    /// $max 等元素算子必须引用数组元素字段
+    #[test]
+    fn inline_agg_element_op_without_field_is_err() {
+        let def = json!({
+            "name": "A", "collection": "a", "timestamps": false,
+            "fields": { "tags": { "type": "array" } },
+            "relations": {},
+            "computes": { "n": { "type": "int", "agg": { "$max": "tags" }, "depends": ["tags"] } }
+        });
+        let err = agg_computes(&def).expect_err("$max 无元素字段应 Err");
+        assert!(err.contains("元素字段"), "{err}");
+    }
+
+    /// 路径首段是字段但类型非数组 → Err
+    #[test]
+    fn agg_head_non_array_field_is_err() {
+        let def = json!({
+            "name": "A", "collection": "a", "timestamps": false,
+            "fields": { "state": { "type": "string" } },
+            "relations": {},
+            "computes": { "n": { "type": "int", "agg": { "$size": "state" }, "depends": ["state"] } }
+        });
+        let err = agg_computes(&def).expect_err("非数组字段应 Err");
+        assert!(err.contains("非数组"), "{err}");
+    }
+
+    /// 路径首段既非关系也非字段 → Err
+    #[test]
+    fn agg_head_unknown_is_err() {
+        let def = json!({
+            "name": "A", "collection": "a", "timestamps": false,
+            "fields": { "state": { "type": "string" } },
+            "relations": {},
+            "computes": { "n": { "type": "int", "agg": { "$size": "ghost" }, "depends": ["ghost"] } }
+        });
+        let err = agg_computes(&def).expect_err("未知首段应 Err");
+        assert!(err.contains("既非已定义关系也非数组字段"), "{err}");
+    }
+
+    /// relation 分支零改动红线：$count 整行 / $sum 字段合法；$count 带字段仍 Err；
+    /// relation 不做 inline 的 depends 校验
+    #[test]
+    fn relation_agg_unchanged_by_inline_extension() {
+        let def = json!({
+            "name": "Shop", "collection": "shops", "timestamps": false,
+            "fields": { "name": { "type": "string" } },
+            "relations": { "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "shopId" } },
+            "computes": {
+                "orderCount": { "type": "int", "agg": { "$count": "orders" } },
+                "totalAmount": { "type": "number", "agg": { "$sum": "orders.amount" } }
+            }
+        });
+        let computes = agg_computes(&def).expect("relation agg 不受 04 扩展影响");
+        assert_eq!(computes.len(), 2);
+
+        let bad = json!({
+            "name": "Shop", "collection": "shops", "timestamps": false,
+            "fields": { "name": { "type": "string" } },
+            "relations": { "orders": { "model": "Order", "type": "many", "localField": "_id", "foreignField": "shopId" } },
+            "computes": { "n": { "type": "int", "agg": { "$count": "orders.orderId" } } }
+        });
+        let err = agg_computes(&bad).expect_err("relation $count 带字段仍应 Err");
+        assert!(err.contains("整行计数"), "{err}");
     }
 }

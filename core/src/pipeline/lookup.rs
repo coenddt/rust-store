@@ -341,84 +341,153 @@ pub fn build_agg_stages(
             Some((r, f)) => (r.to_string(), Some(f.to_string())),
             None => (path.to_string(), None),
         };
-        let rel_def = schema.relations.get(&rel_name).ok_or_else(|| {
-            format!("计算列 \"{key}\" 的 agg 引用的关系 \"{rel_name}\" 未在 schema 中定义")
-        })?;
-        let rel_schema = registry.get(&rel_def.model)?;
+        // 04 路径首段二分：relation-agg（现状原样） vs inline-array agg（文档内数组）
+        if let Some(rel_def) = schema.relations.get(&rel_name) {
+            let rel_schema = registry.get(&rel_def.model)?;
 
-        // F6 / L6 / R0 决策 #3：计算列（含 agg 形态）的**依赖关系 / 子字段**不可读 → Err，
-        // 不因「只是派生值」而放行（可读计算列但其依赖不可读仍拒绝）。
-        if ctx.is_some() {
-            let field_unreadable = field
-                .as_deref()
-                .map(|f| {
-                    !is_field_readable(registry.role_rules(), rel_schema, ctx, f)
-                        || !crate::rbac::is_field_readable_overlay(registry, rel_schema, ctx, f)
-                })
-                .unwrap_or(false);
-            if !is_relation_readable(registry.role_rules(), schema, ctx, &rel_name)
-                || !can_read_schema(registry.role_rules(), rel_schema, ctx)
-                || field_unreadable
+            // F6 / L6 / R0 决策 #3：计算列（含 agg 形态）的**依赖关系 / 子字段**不可读 → Err，
+            // 不因「只是派生值」而放行（可读计算列但其依赖不可读仍拒绝）。
+            if ctx.is_some() {
+                let field_unreadable = field
+                    .as_deref()
+                    .map(|f| {
+                        !is_field_readable(registry.role_rules(), rel_schema, ctx, f)
+                            || !crate::rbac::is_field_readable_overlay(registry, rel_schema, ctx, f)
+                    })
+                    .unwrap_or(false);
+                if !is_relation_readable(registry.role_rules(), schema, ctx, &rel_name)
+                    || !can_read_schema(registry.role_rules(), rel_schema, ctx)
+                    || field_unreadable
+                {
+                    return Err(ERR_PERMISSION.to_string());
+                }
+                // RBAC 表级读判定（关系目标模型同样叠加，deny-wins）
+                ensure_read(registry, rel_schema, ctx)?;
+            }
+            let as_name = format!("_{}", key);
+
+            // $lookup：外键匹配 + 目标 owner 注入（子行越权防护）
+            let let_var = "aggv";
+            let is_array = is_array_local_field(schema, &rel_def.local_field);
+            let mut let_map = Map::new();
+            let_map.insert(
+                let_var.to_string(),
+                rel_let_expr(&rel_def.local_field, is_array),
+            );
+            let mut ands: Vec<Value> =
+                vec![rel_match_expr(&rel_def.foreign_field, let_var, is_array)];
+            push_row_conditions(&mut ands, rel_schema, registry, ctx);
+            let match_doc = if ands.len() == 1 {
+                ands.remove(0)
+            } else {
+                json!({ "$and": ands })
+            };
+            let mut inner = Map::new();
+            inner.insert(
+                "from".to_string(),
+                Value::String(rel_schema.collection.clone()),
+            );
+            inner.insert("let".to_string(), Value::Object(let_map));
+            inner.insert("pipeline".to_string(), json!([{ "$match": match_doc }]));
+            inner.insert("as".to_string(), Value::String(as_name.clone()));
+            stages.push(json!({ "$lookup": Value::Object(inner) }));
+
+            // $addFields：聚合标量（空集语义 §9.7：$count → 0；$sum/$avg/$min/$max → null）
+            let arr = json!({ "$ifNull": [format!("${}", as_name), []] });
+            let field_ref = format!("${}.{}", as_name, field.clone().unwrap_or_default());
+            match op.as_str() {
+                "$count" => {
+                    add_fields.insert(key.clone(), json!({ "$size": arr }));
+                }
+                "$sum" => {
+                    // Mongo 对空数组的 $sum 为 0 → 显式守卫为 null（对齐 SQL LEFT JOIN 空集）
+                    add_fields.insert(
+                        key.clone(),
+                        json!({ "$cond": [{ "$eq": [{ "$size": arr }, 0] }, null, { "$sum": field_ref }] }),
+                    );
+                }
+                "$avg" => {
+                    add_fields.insert(key.clone(), json!({ "$avg": field_ref }));
+                }
+                "$min" => {
+                    add_fields.insert(key.clone(), json!({ "$min": field_ref }));
+                }
+                "$max" => {
+                    add_fields.insert(key.clone(), json!({ "$max": field_ref }));
+                }
+                other => {
+                    return Err(format!(
+                        "计算列 \"{key}\" 的 agg 算子 {other} 不在白名单（$count/$sum/$avg/$min/$max）"
+                    ));
+                }
+            }
+        } else {
+            // inline-array agg（漉金Core 接入扩展 04）：文档内数组聚合，无 $lookup，
+            // 仅 $addFields。算子与空值语义（§4.2）：
+            // - $size           → {$size:{$ifNull:[arr,[]]}}      空数组/缺字段 = 0
+            // - $sum            → {$sum:  "<arr>.<field>"}        Mongo 内建 0
+            // - $avg/$min/$max  → {$op:   "<arr>.<field>"}        Mongo 内建 null
+            // - $countDistinct  → {$size:{$setUnion:[{$filter:{input:{$ifNull:[...]},as:"v",
+            //                      cond:{$ne:["$$v",null]}}},[]]}}  去重且剔 null，空 = 0
+            // 生成侧 $ifNull 是空值语义内建（§4.2），与「不兼容用户写 $ifNull 包裹」
+            // （§8：agg 表达式仍必须是纯路径）是两回事。
+            let fdef = schema.fields.get(&rel_name).ok_or_else(|| {
+                format!("计算列 \"{key}\" 的 agg 引用的路径首段 \"{rel_name}\" 既非已定义关系也非数组字段")
+            })?;
+            if fdef.field_type != "array" {
+                return Err(format!(
+                    "计算列 \"{key}\" 的 agg 路径首段 \"{rel_name}\" 是字段但类型为 \"{}\"（非数组），inline agg 仅支持数组字段",
+                    fdef.field_type
+                ));
+            }
+            // 权限：inline 目标是本模型数组字段 → 字段级读 + RBAC overlay（deny-wins）；
+            // 表级读由 aggregate 主链路对本模型的 ensure_read 覆盖，不重复。
+            if ctx.is_some()
+                && (!is_field_readable(registry.role_rules(), schema, ctx, &rel_name)
+                    || !crate::rbac::is_field_readable_overlay(registry, schema, ctx, &rel_name))
             {
                 return Err(ERR_PERMISSION.to_string());
             }
-            // RBAC 表级读判定（关系目标模型同样叠加，deny-wins）
-            ensure_read(registry, rel_schema, ctx)?;
-        }
-        let as_name = format!("_{}", key);
-
-        // $lookup：外键匹配 + 目标 owner 注入（子行越权防护）
-        let let_var = "aggv";
-        let is_array = is_array_local_field(schema, &rel_def.local_field);
-        let mut let_map = Map::new();
-        let_map.insert(
-            let_var.to_string(),
-            rel_let_expr(&rel_def.local_field, is_array),
-        );
-        let mut ands: Vec<Value> = vec![rel_match_expr(&rel_def.foreign_field, let_var, is_array)];
-        push_row_conditions(&mut ands, rel_schema, registry, ctx);
-        let match_doc = if ands.len() == 1 {
-            ands.remove(0)
-        } else {
-            json!({ "$and": ands })
-        };
-        let mut inner = Map::new();
-        inner.insert(
-            "from".to_string(),
-            Value::String(rel_schema.collection.clone()),
-        );
-        inner.insert("let".to_string(), Value::Object(let_map));
-        inner.insert("pipeline".to_string(), json!([{ "$match": match_doc }]));
-        inner.insert("as".to_string(), Value::String(as_name.clone()));
-        stages.push(json!({ "$lookup": Value::Object(inner) }));
-
-        // $addFields：聚合标量（空集语义 §9.7：$count → 0；$sum/$avg/$min/$max → null）
-        let arr = json!({ "$ifNull": [format!("${}", as_name), []] });
-        let field_ref = format!("${}.{}", as_name, field.clone().unwrap_or_default());
-        match op.as_str() {
-            "$count" => {
-                add_fields.insert(key.clone(), json!({ "$size": arr }));
-            }
-            "$sum" => {
-                // Mongo 对空数组的 $sum 为 0 → 显式守卫为 null（对齐 SQL LEFT JOIN 空集）
-                add_fields.insert(
-                    key.clone(),
-                    json!({ "$cond": [{ "$eq": [{ "$size": arr }, 0] }, null, { "$sum": field_ref }] }),
-                );
-            }
-            "$avg" => {
-                add_fields.insert(key.clone(), json!({ "$avg": field_ref }));
-            }
-            "$min" => {
-                add_fields.insert(key.clone(), json!({ "$min": field_ref }));
-            }
-            "$max" => {
-                add_fields.insert(key.clone(), json!({ "$max": field_ref }));
-            }
-            other => {
-                return Err(format!(
-                    "计算列 \"{key}\" 的 agg 算子 {other} 不在白名单（$count/$sum/$avg/$min/$max）"
-                ));
+            match op.as_str() {
+                "$size" => {
+                    let arr = json!({ "$ifNull": [format!("${}", rel_name), []] });
+                    add_fields.insert(key.clone(), json!({ "$size": arr }));
+                }
+                "$countDistinct" => {
+                    let elems = format!("${}", path);
+                    add_fields.insert(
+                        key.clone(),
+                        json!({
+                            "$size": {
+                                "$setUnion": [
+                                    {
+                                        "$filter": {
+                                            "input": { "$ifNull": [elems, []] },
+                                            "as": "v",
+                                            "cond": { "$ne": ["$$v", null] },
+                                        }
+                                    },
+                                    [],
+                                ]
+                            }
+                        }),
+                    );
+                }
+                "$sum" | "$avg" | "$min" | "$max" => {
+                    let mut expr = Map::new();
+                    expr.insert(op.clone(), Value::String(format!("${}", path)));
+                    add_fields.insert(key.clone(), Value::Object(expr));
+                }
+                "$count" => {
+                    return Err(format!(
+                        "计算列 \"{key}\" 的 $count 不适用于数组字段：文档内数组计数用 $size（如 {{\"$size\": \"{rel_name}\"}}）"
+                    ));
+                }
+                other => {
+                    return Err(format!(
+                        "计算列 \"{key}\" 的 agg 算子 {other} 不在白名单（$count/$size/$sum/$avg/$min/$max/$countDistinct）"
+                    ));
+                }
             }
         }
     }
@@ -427,4 +496,59 @@ pub fn build_agg_stages(
         stages.push(json!({ "$addFields": Value::Object(add_fields) }));
     }
     Ok(stages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// inline-array agg（04）：无 $lookup，仅一个 $addFields，三算子形态精确断言
+    #[test]
+    fn inline_agg_stages_shape() {
+        let mut registry = Registry::new();
+        registry
+            .register(&json!({
+                "name": "Auction", "collection": "auctions", "timestamps": false,
+                "fields": { "bidders": { "type": "array" } },
+                "relations": {},
+                "computes": {
+                    "biddersCount": { "type": "int", "agg": { "$size": "bidders" }, "depends": ["bidders"] },
+                    "maxBid": { "type": "number", "agg": { "$max": "bidders.amount" }, "depends": ["bidders"] },
+                    "bidderCount": { "type": "int", "agg": { "$countDistinct": "bidders.bidderId" }, "depends": ["bidders"] }
+                }
+            }))
+            .expect("注册成功");
+        let schema = registry.get("Auction").expect("可取");
+        let requested: HashSet<String> = ["biddersCount", "maxBid", "bidderCount"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let stages =
+            build_agg_stages(schema, &registry, None, &requested).expect("inline agg 构建成功");
+
+        assert_eq!(stages.len(), 1, "inline 无 $lookup，仅一个 $addFields");
+        let af = stages[0].get("$addFields").expect("$addFields");
+        assert_eq!(
+            af.get("biddersCount"),
+            Some(&json!({ "$size": { "$ifNull": ["$bidders", []] } }))
+        );
+        assert_eq!(af.get("maxBid"), Some(&json!({ "$max": "$bidders.amount" })));
+        assert_eq!(
+            af.get("bidderCount"),
+            Some(&json!({
+                "$size": {
+                    "$setUnion": [
+                        {
+                            "$filter": {
+                                "input": { "$ifNull": ["$bidders.bidderId", []] },
+                                "as": "v",
+                                "cond": { "$ne": ["$$v", null] }
+                            }
+                        },
+                        []
+                    ]
+                }
+            }))
+        );
+    }
 }

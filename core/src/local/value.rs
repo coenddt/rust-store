@@ -326,6 +326,8 @@ fn regex_parts(v: &Value) -> (String, String) {
 /// - `{ "$eq": [a, b] }`、`{ "$and": [...] }`、`{ "$or": [...] }`、`{ "$ifNull": [a, b] }`；
 /// - `{ "$size": <数组> }`、`{ "$sum/$avg/$min/$max": <数组或单值> }`
 ///   （core 关系聚合计算列 `$addFields` 的表达式形态，语义对齐 `pipeline.rs::accumulate`）；
+/// - `{ "$ne": [a, b] }`、`{ "$filter": {input, as?, cond} }`、`{ "$setUnion": [...] }`
+///   （inline-array agg 计算列 `$countDistinct` 编译形态的求值面，04）；
 /// - 普通对象 `{k: <expr>, …}` 逐键求值构造新文档；普通数组逐元素求值。
 ///
 /// 未知算子一律 `Err`（禁静默）。
@@ -446,6 +448,60 @@ fn eval_operator(
             // 越界 → `null`（Mongo 为 missing，在 `$ifNull` 兜底语境下等价）
             Ok(items.get(i as usize).cloned().unwrap_or(Value::Null))
         }
+        // `$ne` / `$filter` / `$setUnion`：inline-array agg 计算列 `$countDistinct`
+        // 编译形态 `{$size:{$setUnion:[{$filter:{input,as,cond:{$ne:["$$v",null]}}},[]]}}`
+        // 的求值面（漉金Core 接入扩展 04）。
+        "ne" => {
+            let (a, b) = two_operands("$ne", arg)?;
+            Ok(Value::Bool(!values_equal(
+                &eval_expr(a, doc, vars)?,
+                &eval_expr(b, doc, vars)?,
+            )))
+        }
+        "filter" => {
+            let obj = arg
+                .as_object()
+                .ok_or_else(|| "$filter 的参数必须是对象 {input, as?, cond}")?;
+            let input = obj.get("input").ok_or_else(|| "$filter 缺少 input")?;
+            let cond = obj.get("cond").ok_or_else(|| "$filter 缺少 cond")?;
+            let as_name = obj.get("as").and_then(|v| v.as_str()).unwrap_or("this");
+            let arr = eval_expr(input, doc, vars)?;
+            let items = arr.as_array().ok_or_else(|| {
+                format!(
+                    "$filter 的 input 必须是数组，收到 {}",
+                    value_type_name(&arr)
+                )
+            })?;
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                let mut inner_vars = vars.clone();
+                inner_vars.insert(as_name.to_string(), item.clone());
+                if truthy(&eval_expr(cond, doc, &inner_vars)?) {
+                    out.push(item.clone());
+                }
+            }
+            Ok(Value::Array(out))
+        }
+        "setUnion" => {
+            // 按序并集去重（线性判等；Mongo 语义：null 参数报错，null 元素保留——
+            // 剔 null 由上游 $filter 完成）
+            let mut out: Vec<Value> = Vec::new();
+            for e in array_operands("$setUnion", arg)? {
+                let v = eval_expr(e, doc, vars)?;
+                let items = v.as_array().ok_or_else(|| {
+                    format!(
+                        "$setUnion 的操作数必须是数组，收到 {}",
+                        value_type_name(&v)
+                    )
+                })?;
+                for item in items {
+                    if !out.iter().any(|c| values_equal(item, c)) {
+                        out.push(item.clone());
+                    }
+                }
+            }
+            Ok(Value::Array(out))
+        }
         // `$size`：数组长度（core 关系聚合计算列 `$count` 发射 `{$size: {$ifNull: [..., []]}}`）
         "size" => {
             let arr = eval_expr(arg, doc, vars)?;
@@ -466,7 +522,7 @@ fn eval_operator(
             }
         }
         other => Err(format!(
-            "不支持的聚合表达式算子: ${other}（本地求值器仅支持 $eq/$and/$or/$ifNull/$cond/$isArray/$in/$arrayElemAt/$size/$sum/$avg/$min/$max，拒绝静默）"
+            "不支持的聚合表达式算子: ${other}（本地求值器仅支持 $eq/$and/$or/$ifNull/$cond/$isArray/$in/$arrayElemAt/$size/$sum/$avg/$min/$max/$ne/$filter/$setUnion，拒绝静默）"
         )),
     }
 }
@@ -1062,5 +1118,84 @@ mod tests {
         assert!(apply_projection(&doc, &json!({ "a": 1, "d": 0 })).is_err());
         // 非法投影值 → Err
         assert!(apply_projection(&doc, &json!({ "a": 2 })).is_err());
+    }
+
+    /// 04 inline-array agg 新增算子：$ne / $filter / $setUnion，
+    /// 以及 $countDistinct 编译形态端到端（与 lookup.rs inline 分支生成形态同款）
+    #[test]
+    fn ne_filter_set_union_eval() {
+        let vars = Map::new();
+        let empty = json!({});
+        // $ne：不等 → true；null == null → false（剔 null 过滤的语义根基）
+        assert_eq!(
+            eval_expr(&json!({ "$ne": [1, 2] }), &empty, &vars).unwrap(),
+            json!(true)
+        );
+        assert_eq!(
+            eval_expr(&json!({ "$ne": [null, null] }), &empty, &vars).unwrap(),
+            json!(false)
+        );
+
+        // $filter：as 变量绑定 + cond 逐元素过滤（剔 null）
+        let doc = json!({ "arr": ["a", null, "b", null] });
+        assert_eq!(
+            eval_expr(
+                &json!({
+                    "$filter": {
+                        "input": "$arr",
+                        "as": "v",
+                        "cond": { "$ne": ["$$v", null] }
+                    }
+                }),
+                &doc,
+                &vars
+            )
+            .unwrap(),
+            json!(["a", "b"])
+        );
+
+        // $setUnion：按序并集 + 线性去重
+        assert_eq!(
+            eval_expr(
+                &json!({ "$setUnion": [["a", "b"], ["b", "c"], []] }),
+                &empty,
+                &vars
+            )
+            .unwrap(),
+            json!(["a", "b", "c"])
+        );
+
+        // $countDistinct 编译形态端到端：去重且剔 null；空数组 / 缺字段 → 0
+        let shape = |path: &str| {
+            json!({
+                "$size": {
+                    "$setUnion": [
+                        {
+                            "$filter": {
+                                "input": { "$ifNull": [path, []] },
+                                "as": "v",
+                                "cond": { "$ne": ["$$v", null] }
+                            }
+                        },
+                        []
+                    ]
+                }
+            })
+        };
+        let doc = json!({ "tags": ["x", "y", "x", null] });
+        assert_eq!(
+            eval_expr(&shape("$tags"), &doc, &vars).unwrap(),
+            json!(2)
+        );
+        let no_elems = json!({ "tags": [] });
+        assert_eq!(
+            eval_expr(&shape("$tags"), &no_elems, &vars).unwrap(),
+            json!(0)
+        );
+        let missing = json!({});
+        assert_eq!(
+            eval_expr(&shape("$tags"), &missing, &vars).unwrap(),
+            json!(0)
+        );
     }
 }

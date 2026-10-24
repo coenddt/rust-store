@@ -59,9 +59,20 @@ pub fn str_list(v: Option<&Value>) -> Option<Vec<String>> {
 /// 都不允许进入规划，命中即显式报错。
 const FORBIDDEN_COND_OPS: [&str; 3] = ["$where", "$function", "$accumulator"];
 
-/// 聚合算子白名单（§9.5 批次一）：计算列 `agg`、根级 `$group.agg`、§9.6
-/// 关系聚合谓词共用同一集合。单点定义，避免多处字面量数组漂移（新增算子时漏改）。
+/// 聚合算子白名单（§9.5 批次一）：根级 `$group.agg`、§9.6 关系聚合谓词共用
+/// 此集合。单点定义，避免多处字面量数组漂移（新增算子时漏改）。
 pub(crate) const AGG_OPS: [&str; 5] = ["$count", "$sum", "$avg", "$min", "$max"];
+
+/// 计算列 `agg` 专属白名单 = [`AGG_OPS`] ∪ `$size` ∪ `$countDistinct`
+/// （漉金Core 接入扩展 04）。
+///
+/// `$size`（文档内数组长度）与 `$countDistinct`（去重计数，编译为
+/// `$size($setUnion($filter(...)))`）是 inline-array agg 专属算子——
+/// `$group` 累积器与关系聚合谓词不消费这两种形态，故不并入 [`AGG_OPS`]，
+/// 防止白名单扩容泄入不支持的消费面。
+pub(crate) const COMPUTE_AGG_OPS: [&str; 7] = [
+    "$count", "$sum", "$avg", "$min", "$max", "$size", "$countDistinct",
+];
 
 /// 校验查询/写入条件：递归遍历条件树，命中拒绝名单即显式报错。
 ///
