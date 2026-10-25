@@ -13,6 +13,8 @@
 
 `rust-store` 是 [`nodejs-store`](https://github.com/coenddt/nodejs-store) 与 [`py-store`](https://github.com/coenddt/py-store) 共享的引擎。它**不持有任何数据库驱动、不做任何 IO**：把一条查询（GQL）或一次写入编译为后端无关的**命令**（MongoDB 命令 JSON）交给宿主执行，并把命令翻译为 MySQL / PostgreSQL / SQLite 的参数化 SQL。
 
+> **Store 家族（Gitee）：** [`rust-store`](https://gitee.com/coenddt/rust-store)（本仓库 —— 共享 Rust 核心）· [`nodejs-store`](https://gitee.com/coenddt/nodejs-store)（Node.js 宿主，npm `nodejs-store`）· [`py-store`](https://gitee.com/coenddt/py-store)（Python 宿主，pip `storepy`）
+
 ---
 
 ## 目录
@@ -446,8 +448,8 @@ node tools/verify-fixtures.js
 
 ## 相关项目
 
-- [`nodejs-store`](https://github.com/coenddt/nodejs-store) —— Node.js 宿主（npm `nodejs-store`）。
-- [`py-store`](https://github.com/coenddt/py-store) —— Python 宿主（pip `storepy`）。
+- [`nodejs-store`](https://github.com/coenddt/nodejs-store)（[Gitee](https://gitee.com/coenddt/nodejs-store)）—— Node.js 宿主（npm `nodejs-store`）。
+- [`py-store`](https://github.com/coenddt/py-store)（[Gitee](https://gitee.com/coenddt/py-store)）—— Python 宿主（pip `storepy`）。
 - `text-to-query` —— 配套技能：把自然语言问题编译为本引擎所需的 GQL + params。
 
 ## License

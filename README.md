@@ -11,6 +11,8 @@
 
 `rust-store` is the engine behind [`nodejs-store`](https://github.com/coenddt/nodejs-store) and [`py-store`](https://github.com/coenddt/py-store). It contains **no database driver and performs no IO**: it turns a query (GQL) or a write into a backend-agnostic **command** (MongoDB command JSON) for its host to execute, and translates those commands into parameterized SQL for MySQL / PostgreSQL / SQLite.
 
+> **Store family on Gitee:** [`rust-store`](https://gitee.com/coenddt/rust-store) (this repo — shared Rust core) · [`nodejs-store`](https://gitee.com/coenddt/nodejs-store) (Node.js host, npm `nodejs-store`) · [`py-store`](https://gitee.com/coenddt/py-store) (Python host, pip `storepy`)
+
 > 中文文档见 [README.zh-CN.md](README.zh-CN.md)。
 
 **Documentation site:** <https://coenddt.github.io/rust-store/> — every scenario walkthrough with runnable code and the engine's exact limits, one indexable page per scenario.
@@ -450,8 +452,8 @@ Yes — `rust-store-core` is a plain Rust library (published to crates.io, so `c
 
 ## Related projects
 
-- [`nodejs-store`](https://github.com/coenddt/nodejs-store) — Node.js host (npm `nodejs-store`).
-- [`py-store`](https://github.com/coenddt/py-store) — Python host (pip `storepy`).
+- [`nodejs-store`](https://github.com/coenddt/nodejs-store) ([Gitee](https://gitee.com/coenddt/nodejs-store)) — Node.js host (npm `nodejs-store`).
+- [`py-store`](https://github.com/coenddt/py-store) ([Gitee](https://gitee.com/coenddt/py-store)) — Python host (pip `storepy`).
 - `text-to-query` — a companion skill that compiles natural-language questions into GQL + params for this engine.
 
 ## License
