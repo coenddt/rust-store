@@ -277,9 +277,11 @@ Course($condition:@c0, $group:@g0, $having:@h0, $sort:@s0, $skip:@sk, $limit:@l0
 | --- | --- | --- |
 | `fn` | 宿主（同步，经 `set_fn`） | 依赖字段自动注入投影 |
 | `asyncFn` | 宿主（异步，两段式） | 同样的注入，查询返回后再求值 |
-| `agg` | **引擎内联** | `{"$count": "<relation>"}` 或 `{"$sum"|"$avg"|"$min"|"$max": "<relation>.<field>"}` |
+| `agg` | **引擎内联** | 关系聚合：`{"$count": "<relation>"}` 或 `{"$sum"|"$avg"|"$min"|"$max": "<relation>.<field>"}`；内联数组聚合：`{"$size": "<arrayField>"}` 或 `{"$sum"|"$avg"|"$max"|"$min"|"$countDistinct": "<arrayField>.<elementField>"}` |
 
 `agg` 与 `fn` / `asyncFn` 互斥。空集语义：`$count → 0`，其余 → `None`（nullable）。SQL 走派生表 `LEFT JOIN (… GROUP BY fk)`；MongoDB 走 `$lookup` + `$addFields`。
+
+`agg` 路径目标按首段二分：命中 relations 键 → 关系聚合（上表）；命中 fields 声明的**数组字段** → 对文档自身数组的内联聚合 —— 空数组 / 缺字段：`$size`/`$sum`/`$countDistinct` → `0`，`$avg`/`$max`/`$min` → `null`；`$countDistinct` 去重并剔除 null 后计数；`depends` 须含首段字段；数组元素仅一层；仅 MongoDB 与 local 求值可用，SQL 后端显式报错。其余首段一律注册期报错。
 
 ## 后端与方言
 

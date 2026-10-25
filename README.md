@@ -280,9 +280,11 @@ Declared in the schema; three forms:
 | --- | --- | --- |
 | `fn` | host (sync, via `set_fn`) | dependencies are injected into the projection automatically |
 | `asyncFn` | host (async, two-phase) | same injection, resolved after the query returns |
-| `agg` | **engine inline** | `{"$count": "<relation>"}` or `{"$sum"|"$avg"|"$min"|"$max": "<relation>.<field>"}` |
+| `agg` | **engine inline** | relation agg: `{"$count": "<relation>"}` or `{"$sum"|"$avg"|"$min"|"$max": "<relation>.<field>"}`; inline array agg: `{"$size": "<arrayField>"}` or `{"$sum"|"$avg"|"$max"|"$min"|"$countDistinct": "<arrayField>.<elementField>"}` |
 
 `agg` is mutually exclusive with `fn` / `asyncFn`. Empty-set semantics: `$count → 0`, others → `None` (nullable). SQL uses a derived table `LEFT JOIN (… GROUP BY fk)`; MongoDB uses `$lookup` + `$addFields`.
+
+The `agg` path target is resolved by its first segment: a relations key → relation agg (above); a declared **array field** → inline array agg over the document's own array — empty array / missing field: `$size`/`$sum`/`$countDistinct` → `0`, `$avg`/`$max`/`$min` → `null`; `$countDistinct` counts distinct non-null values; `depends` must include the first segment; one element level only; available on MongoDB and the local evaluator, SQL backends reject it explicitly. Any other first segment fails at registration.
 
 ## Backends and dialects
 
