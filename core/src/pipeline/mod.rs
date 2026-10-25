@@ -33,7 +33,7 @@ pub(crate) use build::flatten_object_fields_impl;
 pub use build::{build_pipeline, flatten_object_fields};
 pub use lookup::{build_agg_stages, build_empty_lookup, build_lookup};
 pub use parse::{parse, parse_gql};
-pub use projection::{build_pipeline_projection, build_projection};
+pub use projection::build_projection;
 pub(crate) use relation_filter::merge_and;
 pub(crate) use relation_filter::plan as plan_relation_filter;
 pub use relation_filter::{

@@ -919,24 +919,24 @@ fn dialect_group_object_dotted_key_is_rejected() {
     assert!(err.contains("meta.level"), "错误应指明分组键: {err}");
 }
 
-/// §4.1 #5 `$pipeline` 直通（standard 档放行）：用户自带阶段在 Mongo 侧原样下发，
-/// SQL 侧无对应翻译 → dialect 显式 Err（维持既有 unsupported/Err 机制，绝不静默忽略）。
+/// `$pipeline` 直通已移除：解析层显式 Err（两档一致，不再放行）。
 #[test]
-fn dialect_user_pipeline_stage_is_explicit_error_on_sql() {
-    let registry = registry_with(&schemas());
-    let mut ast = parse_gql("Post($pipeline:@p0){ title }").expect("parse_gql");
-    let params: Map<String, Value> =
-        serde_json::from_str(r#"{ "p0": [ { "$addFields": { "x": 1 } } ] }"#).expect("params 解析");
-    let pipeline = build_pipeline(&mut ast, &params, &registry, None)
-        .expect("standard 档 `$pipeline` 直通应放行");
-    let stages = pipeline.as_array().cloned().expect("应为阶段数组");
-    assert_eq!(
-        stages[0],
-        json!({ "$addFields": { "x": 1 } }),
-        "用户阶段应原样进 pipeline（Mongo 源执行）"
+fn dialect_user_pipeline_is_parse_error() {
+    let err = parse_gql("Post($pipeline:@p0){ title }")
+        .expect_err("`$pipeline` 直通已移除，解析必须显式失败");
+    assert!(
+        err.starts_with("ERR_GQL_PARSE:") && err.contains("$pipeline 直通已移除"),
+        "应显式报「$pipeline 直通已移除」: {err}"
     );
+}
 
-    let cmd = json!({ "kind": "aggregate", "collection": "posts", "pipeline": stages });
+/// SQL 侧对无法翻译的阶段显式报错（不做静默忽略）。
+#[test]
+fn dialect_unsupported_stage_is_explicit_error_on_sql() {
+    let registry = registry_with(&schemas());
+    let cmd = json!({ "kind": "aggregate", "collection": "posts", "pipeline": [
+        { "$addFields": { "x": 1 } }
+    ] });
     for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
         let err =
             translate(backend, &cmd, &registry).expect_err("SQL 侧应显式报错（不做静默忽略）");

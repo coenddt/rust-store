@@ -54,8 +54,8 @@ impl Parser {
             if matches!(self.peek(), Some(t) if t.value == ")") {
                 break;
             }
-            // 语法层只做「按名取值」：`$pipeline` 的档位判决不在解析层
-            // （判决唯一在消费点 `pipeline/build.rs::build_pipeline`，那里有 §4.5 注释块）。
+            // 语法层只做「按名取值」：`$pipeline` 一律拒绝（见 `parse()` 根级拒绝），
+            // 其余参数按名取值，语义判决在消费点。
             let key = self
                 .consume("id", None)?
                 .value
@@ -105,11 +105,10 @@ impl Parser {
             } else {
                 HashMap::new()
             };
-            // 关系级 `$pipeline` 从不被消费（`$pipeline` 直通仅限根级 GQL）→ 两档一律显式报错，
-            // 否则该参数会被静默丢弃（与「绝不静默」冲突）。
+            // 关系级 `$pipeline` 同样不被接受 → 显式报错，绝不静默丢弃。
             if prm.contains_key("pipeline") {
                 return Err(format!(
-                    "ERR_GQL_PARSE:关系 \"{name}\" 的参数不支持 $pipeline（$pipeline 直通仅限根级 GQL）"
+                    "ERR_GQL_PARSE:关系 \"{name}\" 的参数不支持 $pipeline（$pipeline 直通已移除）"
                 ));
             }
             let has_brace = matches!(self.peek(), Some(t) if t.kind == "p" && t.value == "{");
@@ -146,6 +145,14 @@ pub fn parse(tokens: &[Token]) -> Result<Ast, String> {
     };
     let model = p.consume("id", None)?.value;
     let params = p.parse_params()?;
+    // 根级 `$pipeline` 直通已移除（原生聚合逃生舱只保留显式入口 executeNative / execute_raw）。
+    // 在解析层统一显式报错，与文档承诺一致；不允许静默忽略或按档位放行。
+    if params.contains_key("pipeline") {
+        return Err(
+            "ERR_GQL_PARSE:$pipeline 直通已移除（原生聚合请改用 executeNative / execute_raw）"
+                .to_string(),
+        );
+    }
     let (fields, relations) = p.parse_body()?;
     Ok(Ast {
         model,

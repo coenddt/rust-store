@@ -118,7 +118,7 @@ pub fn validate_condition(filter: &Value) -> Result<(), String> {
     }
 }
 
-// ─── 聚合/`$pipeline` 阶段校验（缺陷 R3；DB 独有能力准入见 pipeline/build.rs） ──
+// ─── 聚合阶段校验（缺陷 R3） ──
 
 /// 写副作用阶段拒绝名单：不允许在查询/聚合中落盘。
 const STAGE_FORBIDDEN: [&str; 2] = ["$out", "$merge"];
@@ -126,8 +126,7 @@ const STAGE_FORBIDDEN: [&str; 2] = ["$out", "$merge"];
 /// 校验聚合/管道阶段：拒绝 `$out`/`$merge` 写副作用阶段，并递归拒绝危险执行算子
 /// （`$where` 等，复用 [`validate_condition`] 的拒绝名单与空逻辑组校验）。
 ///
-/// 仅覆盖「标准 GQL 骨架各后端早已产出」与「用户 `$pipeline` 直通」两类阶段；
-/// 后者为 ⚠️ DB 独有能力（仅 MongoDB，准入见 `pipeline/build.rs::custom_pipeline_branch`）。
+/// 覆盖标准 GQL 骨架由各后端产出的阶段。
 pub fn validate_pipeline_stages(pipeline: &[Value]) -> Result<(), String> {
     for stage in pipeline {
         match stage {

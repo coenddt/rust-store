@@ -4,6 +4,35 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 5.0.0 (2026-10-25)
+
+### Breaking（撤销：用户 `$pipeline` 直通）
+
+- **根级 `$pipeline` 直通恢复为「一律显式拒绝」**：撤销「双门禁分离」中
+  `standard` 档放行 `$pipeline` 的裁定，恢复文档长期承诺的语义 —— GQL 中出现
+  `$pipeline` 即在解析层（`pipeline/parse.rs::parse`）返回
+  `ERR_GQL_PARSE:$pipeline 直通已移除（原生聚合请改用 executeNative / execute_raw）`。
+  两档（`standard` / `text2query`）一致，不再按档位放行、不再静默忽略。
+- 撤销理由（实测证据）：该路径的投影由 `build_pipeline_projection` 单独构建，
+  只请求 `{ _id }` 时返回 `None` → 不下发 `$project` → **全字段返回**；且该函数
+  从不调用 `apply_permission_prune` → **字段级读权限不裁剪**；同时
+  `postprocess = None` → 计算列不参与。即「文档说已移除、代码里按档放行、且伴随
+  两个静默绕过」，无法如实描述为契约。
+- 连带移除（死代码 / 分支）：
+  - `pipeline/build.rs`：`custom_pipeline_branch`、`override_or_append`（根参数
+    「覆盖/追加」落位语义）、`$pipeline` 分支块；
+  - `pipeline/projection.rs`：`build_pipeline_projection`（含上述两个绕过）；
+  - `command/query.rs`：`has_pipeline` 及全部分支（依赖注入 / 展平 / 投影 /
+    postprocess / find 快路径 / 两阶段优化判定）；
+  - `federation/plan/mod.rs`：`has_pipeline` 用法与「联邦不支持 `$pipeline`」判定；
+  - `pipeline/util.rs`：`find_stage_idx`。
+- 行为影响：`nodejs-store` / `py-store` 共用本 core，两宿主同步变化；不存在
+  「Mongo 源可用 / SQL 源报 unsupported」的分流。原生聚合逃生口仍由**显式入口**
+  提供：`store.aggregate()`（Host 侧严格 opt-in）、`executeNative()` / `execute_raw()`。
+- 前史：本条撤销宿主侧执行文档
+  `py-store/doc/execution/2026/09/已完成-双门禁分离-执行.md` §4.1 #5
+  「DB 独有能力可用」的裁定，并覆盖 CHANGELOG 4.x「根级 `$pipeline` 按档分流」条目。
+
 ## 4.9.0 (2026-10-25)
 
 ### Fixed（严重设计 bug：字段名保留字误伤）

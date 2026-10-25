@@ -341,7 +341,7 @@ fn apply_unwind(rows: Vec<Value>, arg: &Value) -> Result<Vec<Value>, String> {
 // ---------------------------------------------------------------------------
 
 /// `$lookup` 两形态：
-/// 1. `{from, localField, foreignField, as}`（用户 `$pipeline` 直通常见形态）；
+/// 1. `{from, localField, foreignField, as}`（简写形态，兼容外部构造的 pipeline）；
 /// 2. `{from, let, pipeline, as}`（**core 关系下推的实际形态**：`let` 在父文档求值，
 ///    作为 `$$变量` 注入子管道，子管道以 `{$expr: {$eq: ["$fk", "$$var"]}}` 匹配外键）。
 fn apply_lookup(

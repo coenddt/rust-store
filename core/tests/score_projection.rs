@@ -8,7 +8,7 @@ use serde_json::{json, Map, Value};
 use rust_store_core::command::plan_query;
 use rust_store_core::dialect::{translate, Backend};
 use rust_store_core::local::pipeline;
-use rust_store_core::pipeline::{build_pipeline_projection, build_projection, parse_gql};
+use rust_store_core::pipeline::{build_projection, parse_gql};
 use rust_store_core::schema::Registry;
 
 const GQL_SCORE: &str = "Artwork($condition:@c0){ _id, title, _score }";
@@ -66,13 +66,6 @@ fn projection_of(gql: &str) -> Option<Value> {
     build_projection(&ast, schema, None, &reg)
 }
 
-fn pipeline_projection_of(gql: &str) -> Option<Value> {
-    let reg = registry();
-    let ast = parse_gql(gql).expect("GQL 应可解析");
-    let schema = reg.get(&ast.model).expect("schema 应存在");
-    build_pipeline_projection(&ast, schema)
-}
-
 fn pipeline_of_gql(gql: &str, condition: Value) -> Vec<Value> {
     let reg = registry();
     let p = plan_query(gql, &params(condition), &reg, None).expect("应规划成功");
@@ -117,24 +110,6 @@ fn only_compute_projection_is_still_none() {
         projection_of("Computed { fnField }"),
         None,
         "既有行为不变：无真实字段不投影"
-    );
-}
-
-// ─── §4.2 `$pipeline` 顶层投影 ──────────────────────────────
-
-#[test]
-fn pipeline_projection_keeps_score() {
-    assert_eq!(
-        pipeline_projection_of("Artwork { _id, title, _score }"),
-        Some(json!({ "_id": 1, "title": 1, "_score": 1 }))
-    );
-}
-
-#[test]
-fn pipeline_projection_without_score_is_unchanged() {
-    assert_eq!(
-        pipeline_projection_of("Artwork { _id, title }"),
-        Some(json!({ "_id": 1, "title": 1 }))
     );
 }
 

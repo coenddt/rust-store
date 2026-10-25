@@ -76,9 +76,8 @@ pub use mutate::{
 };
 pub use mutation::plan_mutation;
 pub use query::{
-    build_plan, check_readable_relations, has_pipeline, plan_query, plan_query_ast_mut,
-    plan_query_mut, plan_query_one, resolve_page, restore_sort_order, sorts_by_relation, Mode,
-    Page, QueryPlan,
+    build_plan, check_readable_relations, plan_query, plan_query_ast_mut, plan_query_mut,
+    plan_query_one, resolve_page, restore_sort_order, sorts_by_relation, Mode, Page, QueryPlan,
 };
 pub use triggers::{before_probe_fields, expand_schedule_triggers, expand_triggers, has_triggers};
 pub use write::{check_write_perm, plan_count, plan_exists, plan_insert, Probe};

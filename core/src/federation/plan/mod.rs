@@ -19,10 +19,10 @@ use std::collections::HashMap;
 use serde_json::{json, Map, Value};
 
 use crate::command::{
-    build_plan, check_readable_relations, ensure_context, has_pipeline, plan_query_ast_mut,
-    ERR_PERMISSION, T2Q_MAX_FEDERATION_ROWS,
+    build_plan, check_readable_relations, ensure_context, plan_query_ast_mut, ERR_PERMISSION,
+    T2Q_MAX_FEDERATION_ROWS,
 };
-use crate::computes::{merge_depends_into_ast, InjectInfo};
+use crate::computes::merge_depends_into_ast;
 use crate::datasource::DataSourceConfig;
 use crate::permission::{can_read_schema, merge_owner_condition, Context};
 use crate::pipeline::{flatten_object_fields, parse_gql, Ast};
@@ -144,28 +144,17 @@ pub fn plan_federated(
         }
     }
 
-    // 用户 `$pipeline` 全权模式（⚠️ DB 独有能力，准入判决见 `pipeline/build.rs`）：
-    // 不做依赖注入 / 对象字段展平，仅按 GQL 请求字段做顶层投影；且**无法跨源下推**，
-    // 故与跨源 join 互斥（下方 `edges` 非空即 Err）。
-    let has_pipeline = has_pipeline(&ast, &params);
-
     // asyncFn 依赖注入在**完整 AST** 上做：postprocess 才能带全注入信息
-    let inject = if has_pipeline {
-        InjectInfo::default()
-    } else {
-        merge_depends_into_ast(&mut ast.relations, &root_schema)?
-    };
+    let inject = merge_depends_into_ast(&mut ast.relations, &root_schema)?;
 
     // L1 / L2 / L5 / L6：完整 AST（含跨源关系与 depends 注入关系）的关系可读性 ——
     // 关系不可读 → Err，绝不静默省略。跨源关系会被 `walk` 剥离出根取数 AST，
     // 故必须在剥离前的完整 AST 上判定。
     check_readable_relations(&ast.relations, &root_schema, registry, ctx)?;
 
-    // 后处理 AST 快照：展平后、含全部关系（与单库同形状）；`$pipeline` 全权模式不展平
+    // 后处理 AST 快照：展平后、含全部关系（与单库同形状）
     let mut post_ast = ast.clone();
-    if !has_pipeline {
-        flatten_object_fields(&mut post_ast, &root_schema);
-    }
+    flatten_object_fields(&mut post_ast, &root_schema);
 
     // ── 落点择优（拆源之前；约束先于优化） ──
     // 预扫涉及 schema 与关系边 → 取候选链路 → 约束过滤 → 两级字典序择优，
@@ -218,12 +207,6 @@ pub fn plan_federated(
     )?;
 
     detect_cross_source_sort(&fetch_ast, &params, &edges, &mut degraded);
-
-    // 用户 `$pipeline` 是「单源原生 pipeline」，**无法跨源下推**：与跨源 join 互斥，
-    // 显式报错而非静默丢弃跨源关系（自动反馈：允许拦截，禁止静默失守）。
-    if has_pipeline && !edges.is_empty() {
-        return Err("联邦查询不支持用户 $pipeline（无法跨源下推）".to_string());
-    }
 
     // 父层级深度升序：merge 依序物化，保证「用前已挂载」
     edges.sort_by_key(|e| e.path.len());

@@ -7,7 +7,7 @@
 
 use serde_json::{json, Map, Value};
 
-use rust_store_core::command::{plan_query, plan_query_with_count, QueryPlan, ERR_TEXT2QUERY};
+use rust_store_core::command::{plan_query, plan_query_with_count, ERR_TEXT2QUERY};
 use rust_store_core::federation::plan_federated;
 use rust_store_core::schema::{Profile, Registry};
 
@@ -264,7 +264,7 @@ fn permission_errors_carry_stable_prefix() {
     assert_eq!(ERR_NO_WRITE, format!("{ERR_PERM_PREFIX}无写入权限"));
 }
 
-// ─── DB 独有能力受控放开（§4.1 #5 `$pipeline` 直通）：standard 放行 / text2query Err ──
+// ─── `$pipeline` 直通已移除：两档一律 ERR_GQL_PARSE，绝不静默放行 / 静默忽略 ──
 
 const PIPELINE_GQL: &str = "Post($pipeline:@p0){ title }";
 
@@ -278,77 +278,50 @@ fn t2q_registry() -> Registry {
     reg
 }
 
-fn pipeline_plan(reg: &Registry, ctx: Option<&Context>) -> Result<QueryPlan, String> {
-    plan_query(
+fn assert_pipeline_removed(err: &str) {
+    assert!(
+        err.starts_with("ERR_GQL_PARSE:") && err.contains("$pipeline 直通已移除"),
+        "应显式报「$pipeline 直通已移除」: {err}"
+    );
+}
+
+#[test]
+fn user_pipeline_rejected_in_both_profiles() {
+    let params = params_of(json!({ "p0": [{ "$match": { "title": "a" } }] }));
+
+    // standard 档：不再放行（此前为 DB 独有能力受控放开，现已移除）
+    let err = plan_query(PIPELINE_GQL, &params, &standard_registry(), None)
+        .expect_err("standard 档 `$pipeline` 必须显式报错");
+    assert_pipeline_removed(&err);
+
+    // text2query 档：同样在解析层拒绝（不再走到档位门禁）
+    let err = plan_query(
         PIPELINE_GQL,
-        &params_of(json!({ "p0": [{ "$match": { "title": "a" } }] })),
-        reg,
-        ctx,
+        &params,
+        &t2q_registry(),
+        Some(&Context::system()),
     )
+    .expect_err("text2query 档 `$pipeline` 必须显式报错");
+    assert_pipeline_removed(&err);
 }
 
 #[test]
-fn user_pipeline_allowed_in_standard_and_projected() {
-    let plan = pipeline_plan(&standard_registry(), None)
-        .expect("standard 档 `$pipeline` 直通应放行（Mongo 源 DB 独有能力）");
-    let stages = plan.commands[0]["pipeline"]
-        .as_array()
-        .expect("应为聚合命令（含 pipeline 数组）");
-    assert_eq!(
-        stages[0],
-        json!({ "$match": { "title": "a" } }),
-        "用户阶段应原样下发"
-    );
-    assert_eq!(
-        stages.last(),
-        Some(&json!({ "$project": { "_id": 1, "title": 1 } })),
-        "R9：`$pipeline` 模式仍按 GQL 请求字段施加顶层投影"
-    );
-    assert!(
-        plan.postprocess.is_none(),
-        "`$pipeline` 全权模式不做后处理（postprocess = None）"
-    );
-}
-
-#[test]
-fn user_pipeline_rejected_in_text2query() {
-    let ctx = Context::system();
-    let err = pipeline_plan(&t2q_registry(), Some(&ctx))
-        .expect_err("text2query 档 `$pipeline` 直通必须显式报错");
-    assert!(
-        err.starts_with(ERR_TEXT2QUERY) && err.contains("$pipeline 直通"),
-        "应携带档位哨兵前缀并点明命中项: {err}"
-    );
-}
-
-#[test]
-fn user_pipeline_write_stages_rejected_in_both_profiles() {
+fn user_pipeline_write_stages_do_not_bypass_removal() {
+    // 写副作用阶段不因 `$pipeline` 已移除而改变结论：仍是显式 Err（解析层先拦）
     for stage in [
         json!({ "$out": "dest" }),
         json!({ "$merge": { "into": "dest" } }),
     ] {
-        let params = params_of(json!({ "p0": [stage.clone()] }));
-
-        // standard 档：档位放行 → 落到阶段安全校验（R3，拒绝写副作用）
+        let params = params_of(json!({ "p0": [stage] }));
         let err = plan_query(PIPELINE_GQL, &params, &standard_registry(), None)
-            .expect_err("standard 档 `$out`/`$merge` 写副作用阶段必须拒绝");
-        assert!(err.contains("写副作用"), "应点明写副作用拒绝: {err}");
-
-        // text2query 档：档位收缩优先（`$pipeline` 直通整体禁用），亦为显式 Err
-        let err = plan_query(
-            PIPELINE_GQL,
-            &params,
-            &t2q_registry(),
-            Some(&Context::system()),
-        )
-        .expect_err("text2query 档 `$pipeline` 整体禁用（含写副作用阶段）");
-        assert!(err.starts_with(ERR_TEXT2QUERY), "应携带档位哨兵前缀: {err}");
+            .expect_err("含写副作用阶段的 `$pipeline` 必须显式报错");
+        assert_pipeline_removed(&err);
     }
 }
 
 #[test]
 fn user_pipeline_with_relation_field_is_rejected() {
-    // `$pipeline` 全权模式不做关系下推：GQL 里声明关系 → 显式 Err，绝不静默丢弃
+    // 根级 `$pipeline` 一律在解析层拒绝，与是否声明关系无关（绝不静默丢弃关系）
     let reg = registry_with(json!({
         "name": "Post",
         "collection": "posts",
@@ -358,7 +331,6 @@ fn user_pipeline_with_relation_field_is_rejected() {
             "comments": { "model": "Comment", "type": "many", "localField": "_id", "foreignField": "postId" }
         },
     }));
-    // 关系目标 model 未注册亦不透传（先于关系下推报「不支持」）
     let err = plan_query(
         "Post($pipeline:@p0){ title, comments{ _id } }",
         &params_of(json!({ "p0": [{ "$match": {} }] })),
@@ -366,10 +338,7 @@ fn user_pipeline_with_relation_field_is_rejected() {
         None,
     )
     .expect_err("`$pipeline` + 关系字段应显式报错");
-    assert!(
-        err.contains("$pipeline") && err.contains("关系字段"),
-        "应点明 `$pipeline` 不支持关系字段: {err}"
-    );
+    assert_pipeline_removed(&err);
 }
 
 // ─── require_context fail-secure 开关（默认关闭 = JS parity） ──
@@ -1616,7 +1585,7 @@ fn unreadable_relation_write_is_degraded_not_silent() {
 
 #[test]
 fn t2q_shape_errors_carry_stable_prefix_and_feature_tag() {
-    // U1~U4 / 8c-2 收缩 Err 与 `$pipeline` 直通 / 深度超限（见各自用例）同一哨兵前缀
+    // U1~U4 / 8c-2 收缩 Err 与深度超限（见各自用例）同一哨兵前缀
     // `ERR_TEXT2QUERY:`，且带 `[feature]` 方括号标签（Host 正则 `\[(.+?)\]` 提取为
     // `profile_blocked` 告警的 feature 字段，缺括号即 feature 留白）——形锁在此。
     let ctx = Context::system();

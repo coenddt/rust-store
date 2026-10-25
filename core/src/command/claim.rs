@@ -56,7 +56,7 @@ pub fn plan_claim(
     now: i64,
 ) -> Result<Value, String> {
     ensure_context(registry, ctx)?;
-    // 并发原语属 DB 独有能力：text2query 档收缩（同 triggers / $pipeline 直通先例）
+    // 并发原语属 DB 独有能力：text2query 档收缩（同 triggers 先例）
     forbid_t2q(registry, "claim")?;
     let schema = registry.get(schema_name)?;
     validate_condition(filter)?;

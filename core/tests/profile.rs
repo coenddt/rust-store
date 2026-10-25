@@ -165,13 +165,13 @@ fn ensure_profile_ctx_forces_context_only_in_t2q() {
 #[test]
 fn forbid_t2q_blocks_only_in_t2q() {
     let std_reg = Registry::new();
-    forbid_t2q(&std_reg, "$pipeline 直通").expect("standard 档不得拦截（放行 DB 独有能力）");
+    forbid_t2q(&std_reg, "claim").expect("standard 档不得拦截（放行 DB 独有能力）");
 
     let mut t2q_reg = Registry::new();
     t2q_reg.set_profile(Profile::Text2Query);
-    let err = forbid_t2q(&t2q_reg, "$pipeline 直通").expect_err("text2query 档必须拒绝");
+    let err = forbid_t2q(&t2q_reg, "claim").expect_err("text2query 档必须拒绝");
     assert!(
-        err.starts_with(ERR_TEXT2QUERY) && err.contains("$pipeline 直通"),
+        err.starts_with(ERR_TEXT2QUERY) && err.contains("claim"),
         "应携带前缀并点明命中项: {err}"
     );
 }
