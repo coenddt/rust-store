@@ -1479,14 +1479,17 @@ mod tests {
     fn archive_derivation_inherits_timestamps() {
         let mut r = Registry::new();
         r.register_batch(
-            &[(json!({
-                "name": "Vector", "collection": "vector", "timestamps": false,
-                "fields": {
-                    "_id": { "type": "string" },
-                    "created_at": { "type": "string" },
-                    "updated_at": { "type": "string" }
-                }
-            }), Location::default())],
+            &[(
+                json!({
+                    "name": "Vector", "collection": "vector", "timestamps": false,
+                    "fields": {
+                        "_id": { "type": "string" },
+                        "created_at": { "type": "string" },
+                        "updated_at": { "type": "string" }
+                    }
+                }),
+                Location::default(),
+            )],
             None,
         )
         .expect("timestamps:false + snake_case 时间戳列应注册成功（归档派生不撞名）");
@@ -1494,13 +1497,19 @@ mod tests {
         let s = r.get("Vector").expect("主表可取");
         assert!(!s.timestamps);
         assert!(s.fields.contains_key("created_at"));
-        assert!(!s.fields.contains_key("createdAt"), "timestamps:false 不注入 createdAt");
+        assert!(
+            !s.fields.contains_key("createdAt"),
+            "timestamps:false 不注入 createdAt"
+        );
         // 归档表：继承 timestamps:false，保留主表字段且不自动注入
         let arch = r.get("VectorDeleted").expect("归档表自动派生");
         assert_eq!(arch.collection, "vector_deleted");
         assert!(!arch.timestamps, "归档表应继承主表 timestamps:false");
         assert!(arch.fields.contains_key("created_at"), "归档表保留主表字段");
-        assert!(!arch.fields.contains_key("createdAt"), "归档表继承 timestamps:false，不注入 createdAt");
+        assert!(
+            !arch.fields.contains_key("createdAt"),
+            "归档表继承 timestamps:false，不注入 createdAt"
+        );
     }
 
     /// T3：目录快照——派生视图见 base 已注册目录；快照不承诺 base 后续注册可见

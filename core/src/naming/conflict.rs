@@ -65,7 +65,10 @@ mod tests {
     #[test]
     fn contract_keys_are_valid_field_names() {
         assert!(detect_conflicts(["type"]).is_ok());
-        assert!(detect_conflicts(["type", "required", "default", "read", "write", "fields", "strategy", "fnRef"]).is_ok());
+        assert!(detect_conflicts([
+            "type", "required", "default", "read", "write", "fields", "strategy", "fnRef"
+        ])
+        .is_ok());
         assert!(detect_conflicts(["fn_ref", "localField", "foreignField"]).is_ok());
     }
 
