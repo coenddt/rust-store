@@ -532,7 +532,10 @@ mod tests {
             af.get("biddersCount"),
             Some(&json!({ "$size": { "$ifNull": ["$bidders", []] } }))
         );
-        assert_eq!(af.get("maxBid"), Some(&json!({ "$max": "$bidders.amount" })));
+        assert_eq!(
+            af.get("maxBid"),
+            Some(&json!({ "$max": "$bidders.amount" }))
+        );
         assert_eq!(
             af.get("bidderCount"),
             Some(&json!({

@@ -1235,10 +1235,7 @@ mod tests {
             })
         };
         let doc = json!({ "tags": ["x", "y", "x", null] });
-        assert_eq!(
-            eval_expr(&shape("$tags"), &doc, &vars).unwrap(),
-            json!(2)
-        );
+        assert_eq!(eval_expr(&shape("$tags"), &doc, &vars).unwrap(), json!(2));
         let no_elems = json!({ "tags": [] });
         assert_eq!(
             eval_expr(&shape("$tags"), &no_elems, &vars).unwrap(),
@@ -1273,11 +1270,16 @@ mod tests {
         );
         // 扇出形态：缺子路径元素不产出 → 元素列 [ "u1", "u2", "u1" ]
         assert_eq!(
-            eval_expr(&json!({ "$filter": {
+            eval_expr(
+                &json!({ "$filter": {
                 "input": { "$ifNull": ["$bidders.bidderId", []] },
                 "as": "v",
                 "cond": { "$ne": ["$$v", null] }
-            } }), &doc, &vars).unwrap(),
+            } }),
+                &doc,
+                &vars
+            )
+            .unwrap(),
             json!(["u1", "u2", "u1"])
         );
         // 空数组：扇出产出空数组（非 missing；$ifNull 不触发兜底）

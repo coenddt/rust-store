@@ -1165,7 +1165,9 @@ fn parse_computes(
                 get("agg").as_ref(),
                 relations,
                 fields,
-                str_list(get("depends").as_ref()).unwrap_or_default().as_slice(),
+                str_list(get("depends").as_ref())
+                    .unwrap_or_default()
+                    .as_slice(),
                 has_fn || has_async_fn,
             )?;
             computes.push((

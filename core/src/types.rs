@@ -71,7 +71,13 @@ pub(crate) const AGG_OPS: [&str; 5] = ["$count", "$sum", "$avg", "$min", "$max"]
 /// `$group` 累积器与关系聚合谓词不消费这两种形态，故不并入 [`AGG_OPS`]，
 /// 防止白名单扩容泄入不支持的消费面。
 pub(crate) const COMPUTE_AGG_OPS: [&str; 7] = [
-    "$count", "$sum", "$avg", "$min", "$max", "$size", "$countDistinct",
+    "$count",
+    "$sum",
+    "$avg",
+    "$min",
+    "$max",
+    "$size",
+    "$countDistinct",
 ];
 
 /// 校验查询/写入条件：递归遍历条件树，命中拒绝名单即显式报错。

@@ -301,7 +301,13 @@ pub fn is_relation_readable(
 // ─── Schema 级检查 ────────────────────────────────────────────
 
 pub fn can_read_schema(rules: &RoleRules, schema: &Schema, ctx: Option<&Context>) -> bool {
-    evaluate(rules, ctx, schema.read.as_deref(), Doc::Missing, schema.owner_key())
+    evaluate(
+        rules,
+        ctx,
+        schema.read.as_deref(),
+        Doc::Missing,
+        schema.owner_key(),
+    )
 }
 
 /// 拒写清单命中者一切写路径拒绝（读不受影响，默认空——无拒写）；
@@ -319,7 +325,13 @@ pub fn can_write_schema(rules: &RoleRules, schema: &Schema, ctx: Option<&Context
             return false;
         }
     }
-    evaluate(rules, ctx, schema.write.as_deref(), Doc::Missing, schema.owner_key())
+    evaluate(
+        rules,
+        ctx,
+        schema.write.as_deref(),
+        Doc::Missing,
+        schema.owner_key(),
+    )
 }
 
 /// 有效角色集：`roles` 非空用之，否则回落单 `role`——对齐 `rbac::effective_roles`

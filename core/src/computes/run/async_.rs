@@ -32,8 +32,13 @@ pub fn select_async_fns(
                     .and_then(|comp| comp.read.as_ref());
                 match rl {
                     Some(roles) => {
-                        if evaluate(rules, Some(c), Some(roles), Doc::Missing, schema.owner_key())
-                        {
+                        if evaluate(
+                            rules,
+                            Some(c),
+                            Some(roles),
+                            Doc::Missing,
+                            schema.owner_key(),
+                        ) {
                             selected.push(entry.clone());
                         }
                     }

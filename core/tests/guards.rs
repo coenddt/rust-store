@@ -72,7 +72,10 @@ fn base_schema_with_owner_key(owner_key: Value) -> Value {
 #[test]
 fn owner_key_defaults_to_created_by_and_accepts_custom_keys() {
     // 缺省 / null → "createdBy"（零破坏）
-    for defn in [base_schema(json!(true)), base_schema_with_owner_key(Value::Null)] {
+    for defn in [
+        base_schema(json!(true)),
+        base_schema_with_owner_key(Value::Null),
+    ] {
         let reg = registry_with(defn);
         assert_eq!(
             reg.get("Post").expect("schema 应存在").owner_key(),
@@ -83,7 +86,10 @@ fn owner_key_defaults_to_created_by_and_accepts_custom_keys() {
     let reg = registry_with(base_schema_with_owner_key(json!("_id")));
     assert_eq!(reg.get("Post").expect("schema 应存在").owner_key(), "_id");
     let reg = registry_with(base_schema_with_owner_key(json!("ownerRef")));
-    assert_eq!(reg.get("Post").expect("schema 应存在").owner_key(), "ownerRef");
+    assert_eq!(
+        reg.get("Post").expect("schema 应存在").owner_key(),
+        "ownerRef"
+    );
 }
 
 #[test]
@@ -155,8 +161,8 @@ fn owner_key_creator_doc_check_uses_owner_key() {
     // → creator 恒通过）静态放行遮蔽，行级 creator 判定的可达判定点即 evaluate。
     use rust_store_core::permission::{context_from_value, evaluate, Doc, RoleRules};
 
-    let ctx = context_from_value(&json!({ "userId": "USR1", "roles": ["user"] }))
-        .expect("ctx 应可构造");
+    let ctx =
+        context_from_value(&json!({ "userId": "USR1", "roles": ["user"] })).expect("ctx 应可构造");
     let creators: Vec<String> = vec!["creator".to_string()];
     let rules = RoleRules::default();
 
