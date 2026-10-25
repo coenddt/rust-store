@@ -616,7 +616,7 @@ pub(super) fn translate_aggregate(
                                 .map(|path| path.split('.').next().unwrap_or(path).to_string())
                         })
                         .map(|head| {
-                            schema.relations.get(&head).is_none()
+                            !schema.relations.contains_key(&head)
                                 && schema
                                     .fields
                                     .get(&head)

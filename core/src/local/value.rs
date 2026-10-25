@@ -461,9 +461,9 @@ fn eval_operator(
         "filter" => {
             let obj = arg
                 .as_object()
-                .ok_or_else(|| "$filter 的参数必须是对象 {input, as?, cond}")?;
-            let input = obj.get("input").ok_or_else(|| "$filter 缺少 input")?;
-            let cond = obj.get("cond").ok_or_else(|| "$filter 缺少 cond")?;
+                .ok_or("$filter 的参数必须是对象 {input, as?, cond}")?;
+            let input = obj.get("input").ok_or("$filter 缺少 input")?;
+            let cond = obj.get("cond").ok_or("$filter 缺少 cond")?;
             let as_name = obj.get("as").and_then(|v| v.as_str()).unwrap_or("this");
             let arr = eval_expr(input, doc, vars)?;
             let items = arr.as_array().ok_or_else(|| {
