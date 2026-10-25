@@ -4,6 +4,29 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 4.9.0 (2026-10-25)
+
+### Fixed（严重设计 bug：字段名保留字误伤）
+
+- **`fields` 键空间恢复完全开放（原初设计）**：`naming::conflict` 的 `RESERVED_KEYS`
+  保留键检查被移除——field/relation/compute 级契约键（`type`/`required`/`default`/…）
+  位于字段定义**对象内部**，与 `fields` 盒子的键（字段名）处于不同对象层，无天然冲突；
+  把它们当字段名保留字是一刀切误伤（字段名叫 `type` 的合法 schema 注册即抛
+  `ERR_NAME_CONFLICT`）。修复后 `fields: { type: { type: "string", default: "text" } }`
+  合法。`detect_conflicts` 仅保留「归一撞名」检测（`orderTotal` vs `order_total` 报错，
+  设计 §6.3 本意不变）；字面保留名仅 `_id`（豁免检测）与 `_score`（registry 字面拦截，
+  保持现状）。`RESERVED_KEYS` 常量随之移除（core 内部无其他消费方，绑定层未透出）。
+
+### Fixed（归档派生 timestamps 继承）
+
+- **归档派生 def 丢失主 def 的 `timestamps` 键（既有缺陷，同版本修复）**：
+  `register_batch` 对每个主 schema 自动派生 `<Name>Deleted` 归档表，派生 def 未携带
+  主 def 的 `timestamps` 语义 ⇒ 归档表恒按缺省 `true` 注入 `createdAt`/`updatedAt`。
+  主表为 `timestamps:false` 且字段含 `created_at`/`updated_at`（introspect 同步
+  snake_case 存量库场景）时，归档构建即归一撞名抛 `ERR_NAME_CONFLICT`
+  （`updated_at` vs `updatedAt`）。修复：派生 def 继承主 def 的 `timestamps`
+  （缺省仍为 `true`，与 `parse_timestamps` 一致），归档表不再注入重复时间戳列。
+
 ## 4.6.2 (2026-10-19)
 
 ### Fixed（pg 向量检索查询向量参数）

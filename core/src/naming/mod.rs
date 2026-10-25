@@ -4,7 +4,7 @@ mod canonical;
 mod conflict;
 
 pub use canonical::{canonical, to_camel, to_pascal, to_snake};
-pub use conflict::{detect_conflicts, ERR_NAME_CONFLICT, RESERVED_KEYS};
+pub use conflict::{detect_conflicts, ERR_NAME_CONFLICT};
 
 /// 目标命名风格（设计 §6.1）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

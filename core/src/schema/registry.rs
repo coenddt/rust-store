@@ -1027,8 +1027,10 @@ fn build_schema(
             ));
         }
     }
-    // 命名冲突检测（A7）：fields ∪ relations ∪ computes 归一后撞名 / 撞保留键 ⇒ 报错
-    // （三者同属结果文档命名空间；`_id` 已在 detect_conflicts 内豁免）
+    // 命名冲突检测（A7）：fields ∪ relations ∪ computes 归一后撞名 ⇒ 报错
+    // （三者同属结果文档命名空间；`_id` 已在 detect_conflicts 内豁免。
+    // fields 键空间完全开放、无字段名保留字——`type` 等契约键作字段名合法，
+    // 契约键位于字段定义对象内部，与本层标识符不同层无冲突）
     let mut ids: Vec<&str> = Vec::new();
     ids.extend(fields.keys().map(String::as_str));
     ids.extend(relations.keys().map(String::as_str));
@@ -1321,6 +1323,11 @@ fn archive_defn(obj: &Map<String, Value>, name: &str, collection: &str) -> Value
         "_isArchive": true,
         "fields": Value::Object(arch_fields),
         "indexes": obj.get("indexes").cloned().unwrap_or_else(|| json!([])),
+        // 归档表继承主表 timestamps 语义（true/false/'ms'/'s'；缺省 = true 同 parse_timestamps）。
+        // 此前派生 def 丢失该键 ⇒ 归档表恒按 true 注入 createdAt/updatedAt，主表为
+        // timestamps:false 且字段含 created_at/updated_at（introspect 同步 snake_case 存量库）
+        // 时归档构建即 ERR_NAME_CONFLICT（既有缺陷，4.9.0 修复）。
+        "timestamps": obj.get("timestamps").cloned().unwrap_or(json!(true)),
     });
     arch
 }
@@ -1441,6 +1448,59 @@ mod tests {
         let base = Registry::new();
         let mut view = base.with_policy(&PolicyOverrides::default());
         view.clear();
+    }
+
+    /// fields 键空间完全开放（原初设计修复回归）：契约键 `type` 作字段名合法，
+    /// 类型声明在定义对象内部的 `type` 键——不同对象层，注册成功且定义保真。
+    #[test]
+    fn field_named_type_is_allowed() {
+        let mut r = Registry::new();
+        r.register(&json!({
+            "name": "Msg", "collection": "msg", "timestamps": false,
+            "fields": {
+                "_id": { "type": "string" },
+                "type": { "type": "string", "default": "text" },
+                "content": { "type": "string" }
+            },
+            "relations": {}
+        }))
+        .expect("字段名 type 合法，注册应成功");
+        let s = r.get("Msg").expect("可取");
+        let f = s.fields.get("type").expect("type 字段存在");
+        assert_eq!(f.field_type, "string");
+        assert_eq!(f.default, Some(json!("text")));
+    }
+
+    /// 归档派生继承主 def 的 timestamps 语义（4.9.0 修复回归）：timestamps:false +
+    /// snake_case 时间戳列（introspect 同步存量库场景）。修复前派生 def 丢 timestamps
+    /// 键 ⇒ 归档表恒按 true 注入 createdAt/updatedAt，与主表 created_at/updated_at
+    /// 归一撞名 ERR_NAME_CONFLICT。
+    #[test]
+    fn archive_derivation_inherits_timestamps() {
+        let mut r = Registry::new();
+        r.register_batch(
+            &[(json!({
+                "name": "Vector", "collection": "vector", "timestamps": false,
+                "fields": {
+                    "_id": { "type": "string" },
+                    "created_at": { "type": "string" },
+                    "updated_at": { "type": "string" }
+                }
+            }), Location::default())],
+            None,
+        )
+        .expect("timestamps:false + snake_case 时间戳列应注册成功（归档派生不撞名）");
+        // 主表：不自动注入
+        let s = r.get("Vector").expect("主表可取");
+        assert!(!s.timestamps);
+        assert!(s.fields.contains_key("created_at"));
+        assert!(!s.fields.contains_key("createdAt"), "timestamps:false 不注入 createdAt");
+        // 归档表：继承 timestamps:false，保留主表字段且不自动注入
+        let arch = r.get("VectorDeleted").expect("归档表自动派生");
+        assert_eq!(arch.collection, "vector_deleted");
+        assert!(!arch.timestamps, "归档表应继承主表 timestamps:false");
+        assert!(arch.fields.contains_key("created_at"), "归档表保留主表字段");
+        assert!(!arch.fields.contains_key("createdAt"), "归档表继承 timestamps:false，不注入 createdAt");
     }
 
     /// T3：目录快照——派生视图见 base 已注册目录；快照不承诺 base 后续注册可见
