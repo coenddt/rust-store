@@ -15,8 +15,8 @@ authors:
 repository-code: "https://github.com/coenddt/rust-store"
 url: "https://github.com/coenddt/rust-store"
 license: MIT
-version: "4.8.0"
-date-released: "2026-09-14"
+version: "5.0.0"
+date-released: "2026-10-25"
 keywords:
   - rust
   - multi-backend
