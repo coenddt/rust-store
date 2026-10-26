@@ -1027,15 +1027,31 @@ fn build_schema(
             ));
         }
     }
-    // 命名冲突检测（A7）：fields ∪ relations ∪ computes 归一后撞名 ⇒ 报错
-    // （三者同属结果文档命名空间；`_id` 已在 detect_conflicts 内豁免。
+    // 命名冲突检测（A7，分组口径）：`detect_conflicts` 的 `seen` 是调用内局部量，
+    // 分组调用天然实现「组内 + 指定跨组」拦截：
+    //   ① fields / relations / computes 各自组内归一撞名 ⇒ 报错（不变）；
+    //   ② fields ∩ relations、relations ∩ computes ⇒ 报错（不变）；
+    //   ③ fields ∩ computes **放行**：computed 值拥有同名键的输出所有权，fields 仍保留
+    //      该键的类型声明（写入校验 / DDL / `$inc` 等原生增量更新），两者职责不同层。
+    //      nodejs-store 的 schema 注册不做此检测，py-store / go-store 由此对齐同名覆盖语义。
+    // `_id` 已在 detect_conflicts 内豁免；`_score` 由上方字面拦截。
     // fields 键空间完全开放、无字段名保留字——`type` 等契约键作字段名合法，
-    // 契约键位于字段定义对象内部，与本层标识符不同层无冲突）
-    let mut ids: Vec<&str> = Vec::new();
-    ids.extend(fields.keys().map(String::as_str));
-    ids.extend(relations.keys().map(String::as_str));
-    ids.extend(computes.iter().map(|(k, _)| k.as_str()));
-    crate::naming::detect_conflicts(ids)?;
+    // 契约键位于字段定义对象内部，与本层标识符不同层无冲突。
+    crate::naming::detect_conflicts(fields.keys().map(String::as_str))?;
+    crate::naming::detect_conflicts(relations.keys().map(String::as_str))?;
+    crate::naming::detect_conflicts(computes.iter().map(|(k, _)| k.as_str()))?;
+    crate::naming::detect_conflicts(
+        fields
+            .keys()
+            .map(String::as_str)
+            .chain(relations.keys().map(String::as_str)),
+    )?;
+    crate::naming::detect_conflicts(
+        relations
+            .keys()
+            .map(String::as_str)
+            .chain(computes.iter().map(|(k, _)| k.as_str())),
+    )?;
     // ownerKey（漉金Core 接入扩展 01）：归属键，缺省 = `createdBy`（零破坏）；
     // 存在时必须为非空字符串，非法注册期显式 Err（禁静默回落）。
     // 不要求键必须出现在 fields 中（`_id` 等系统键合法）。

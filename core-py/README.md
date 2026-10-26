@@ -46,6 +46,8 @@ Definitions (`collection`, fields, referenced relation fields, computed-column k
 Canonicalization (single implementation `core::naming`, re-exported by the bindings; hosts must not re-implement it): split on `_`, `-`, `.`, space and at lower/digit-to-upper boundaries; a trailing uppercase in a run followed by a lowercase starts the next token (`HTTPServer` -> `[http, server]`, `userID` -> `[user, id]`); digits stay inside a token (`order2Items` -> `[order2, items]`). Reassembly: snake = `t1_t2`, camel = `t1T2`, pascal = `T1T2`.
 
 Two logical names in one schema that canonicalize equal (`orderTotal` vs `order_total`) is an error `ERR_NAME_CONFLICT:` and the service does not start (never silently overwritten). The `fields` key space is fully open — no field name is reserved: contract keys (`type`, `default`, ...) live inside a field's definition object at a different level, so `fields: { type: { type: "string" } }` is valid. Literal reserved names are only `_id` (framework primary key) and `_score` (vector score column).
+
+Conflict detection is per group: duplicates inside `fields`, inside `relations`, inside `computes`, plus `fields` ∩ `relations` and `relations` ∩ `computes`, are all errors. **`fields` ∩ `computes` is allowed** — a computed column may override a stored field of the same name: on reads the computed value owns the output key (evaluated after the stored value is fetched / defaults are filled, so it overwrites it), while the `fields` declaration is kept for write validation, DDL and native incremental updates (`$inc`, `$set`). The two declarations serve different layers; neither is removed. `_score` remains forbidden in all three namespaces.
 <!-- SPEC:NAMING-STYLE:END -->
 
 <!-- SPEC:FNREF:BEGIN -->

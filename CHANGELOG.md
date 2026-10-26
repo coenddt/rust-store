@@ -4,6 +4,36 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 5.1.0 (2026-10-26)
+
+### Added（feat：`fields` ∩ `computes` 同名放行——计算列可覆盖同名字段）
+
+- **命名冲突检测改为分组口径**（`schema/registry.rs::build_schema`）：
+  `fields` / `relations` / `computes` 三者各自组内归一撞名仍报错；
+  `fields` ∩ `relations`、`relations` ∩ `computes` 仍报错；
+  **`fields` ∩ `computes` 放行** —— computed 值拥有同名键的输出所有权，
+  `fields` 声明保留用于写入校验、DDL 与 `$inc` / `$set` 等原生增量更新，
+  两者职责不同层，均不删除。字面保留键仅 `_score`（三命名空间仍拦截），
+  `_id` 豁免逻辑不变。`detect_conflicts` 本身签名与行为未改，由 5 次分组调用实现
+  「组内 + 指定跨组」拦截（`seen` 为调用内局部量）。
+- **与 `nodejs-store` 对齐**：JS 宿主 schema 注册不做 fields/computes 同名检测，
+  该组合在 JS 端一直可用；本次补齐 rust core（py-store / go-store 随之对齐），
+  消除「同一 schema 在 JS 端可注册、Python 端注册即抛 `ERR_NAME_CONFLICT`」的缺口。
+- **执行期覆盖顺序核实（无需改执行代码，新增测试固化）**：
+  - `fn`：`process_node` 时序为 flatten → collect → fill_defaults → run_computes，
+    computed 值直接 `insert` 覆盖同名键，位于字段默认值回填之后；
+  - `asyncFn`：`prepare_query`（同步 fn）→ `run_async_fns` → `strip_query`，覆盖顺序正确；
+  - `agg`（Mongo）：`$match` → `$lookup` → `$addFields` → … → 最终 `$project`，
+    agg 键在投影阶段被重新加入（`agg_compute_keys`），覆盖发生在字段带入之后；
+  - `agg`（local）：存储 7 → 输出计算值。
+- **SQL 方言路径**：`translate_find` 跳过计算列（不为同名键重复下推物理列）；
+  `translate_aggregate` 的 `root_selected` 排除 `compute_aggs` 键，派生表以
+  `AS "<key>"` 单次输出计算列别名 ⇒ 不产生重复列名，也不返回 DB 旧值。
+- **写入路径不变**：insert 只落 `fields` 值；`$inc` 原样透传、`$set` 仅做 RBAC 过滤，
+  同名键按 `fields` 声明正常通过（已有测试固化，7 → 8）。
+- 测试：新增 `core/tests/compute_override.rs`（12 例，覆盖 6 种命名组合与
+  执行期覆盖顺序 / Mongo `$addFields` 位置 / SQL 列名唯一性）。
+
 ## 5.0.0 (2026-10-25)
 
 ### Breaking（撤销：用户 `$pipeline` 直通）
