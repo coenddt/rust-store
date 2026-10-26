@@ -1,6 +1,6 @@
 {
   "name": "rust-store-node-darwin-arm64",
-  "version": "5.0.1",
+  "version": "5.1.0",
   "os": [
     "darwin"
   ],
