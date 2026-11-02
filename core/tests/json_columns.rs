@@ -306,6 +306,86 @@ fn json_field_unsupported_operator_is_error() {
     assert!(err.contains("$gt"), "错误信息应含操作符: {err}");
 }
 
+/// accessKeys：数组字段 `$in`（ctx 清单 → 交集命中）→ 各方言集合重叠谓词
+#[test]
+fn access_in_array_uses_overlap_per_dialect() {
+    let cmd = json!({
+        "kind": "find", "collection": "courses",
+        "filter": { "tags": { "$in": ["GEO", "LEO"] } },
+        "projection": { "_id": 1 }
+    });
+    const LIST_JSON: &str = "[\"GEO\",\"LEO\"]";
+
+    // MySQL：JSON_OVERLAPS + 清单 JSON 文本参数
+    let my = translate(Backend::Mysql, &cmd, &reg()).unwrap();
+    let text = my["stmts"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("JSON_OVERLAPS(t.`tags`, CAST(? AS JSON))"),
+        "MySQL $in: {text}"
+    );
+    let params = my["stmts"][0]["params"].as_array().unwrap();
+    assert!(
+        params.iter().any(|p| p.as_str() == Some(LIST_JSON)),
+        "MySQL $in 参数应为清单 JSON 文本: {params:?}"
+    );
+
+    // PG：&& + 清单 jsonb 参数
+    let pg = translate(Backend::Postgres, &cmd, &reg()).unwrap();
+    let text = pg["stmts"][0]["text"].as_str().unwrap();
+    assert!(text.contains("t.\"tags\" && $1::jsonb"), "PG $in: {text}");
+    let params = pg["stmts"][0]["params"].as_array().unwrap();
+    assert!(
+        params.iter().any(|p| p.as_str() == Some(LIST_JSON)),
+        "PG $in 参数应为清单 JSON 文本: {params:?}"
+    );
+
+    // SQLite：json_each 子查询交集 + 清单 JSON 文本参数
+    let sq = translate(Backend::Sqlite, &cmd, &reg()).unwrap();
+    let text = sq["stmts"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains(
+            "EXISTS (SELECT 1 FROM json_each(t.\"tags\") WHERE json_each.value IN \
+             (SELECT value FROM json_each(?)))"
+        ),
+        "SQLite $in: {text}"
+    );
+    let params = sq["stmts"][0]["params"].as_array().unwrap();
+    assert!(
+        params.iter().any(|p| p.as_str() == Some(LIST_JSON)),
+        "SQLite $in 参数应为清单 JSON 文本: {params:?}"
+    );
+}
+
+/// accessKeys：空清单 `$in` → 恒假，不消耗占位符（读路径空结果 / 写路径全拒）
+#[test]
+fn access_in_empty_list_is_always_false() {
+    let cmd = json!({
+        "kind": "find", "collection": "courses",
+        "filter": { "tags": { "$in": [] } },
+        "projection": { "_id": 1 }
+    });
+    let sq = translate(Backend::Sqlite, &cmd, &reg()).unwrap();
+    let text = sq["stmts"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("WHERE 0"),
+        "空清单应翻译为恒假: {text}"
+    );
+    let params = sq["stmts"][0]["params"].as_array().unwrap();
+    assert!(params.is_empty(), "空清单不应消耗占位符: {params:?}");
+}
+
+/// accessKeys：对象字段不支持 `$in`（无对应语义）→ 显式 Err
+#[test]
+fn access_in_object_field_is_error() {
+    let cmd = json!({
+        "kind": "find", "collection": "courses",
+        "filter": { "meta": { "$in": ["a"] } },
+        "projection": { "_id": 1 }
+    });
+    let err = translate(Backend::Sqlite, &cmd, &reg()).expect_err("对象字段 $in 应显式报错");
+    assert!(err.contains("$in"), "错误信息应说明 $in 不适用: {err}");
+}
+
 /// 读取：JSON 列（文本）还原为嵌套对象（跨后端对齐 Mongo）
 #[test]
 fn json_column_restores_nested_object() {

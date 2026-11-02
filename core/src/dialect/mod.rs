@@ -312,6 +312,27 @@ impl Backend {
         }
     }
 
+    /// JSON 数组「与清单相交」谓词（`$in` 作用于 `array` 字段 = 交集命中）
+    ///
+    /// - MySQL：`JSON_OVERLAPS(col, CAST(? AS JSON))`
+    /// - PG：`col && ?::jsonb`
+    /// - SQLite：`EXISTS (SELECT 1 FROM json_each(col) WHERE json_each.value IN
+    ///   (SELECT value FROM json_each(?)))`
+    ///
+    /// 参数契约统一为**清单的数组 JSON 文本**，如 `["GEO","LEO"]`
+    /// （与 [`Self::json_array_contains`] 的单元素契约不同，勿复用）。
+    pub fn json_array_overlaps(&self, col: &str, ph: &str) -> String {
+        match self {
+            Backend::Mysql => format!("JSON_OVERLAPS({}, CAST({} AS JSON))", col, ph),
+            Backend::Postgres => format!("{} && {}::jsonb", col, ph),
+            Backend::Sqlite => format!(
+                "EXISTS (SELECT 1 FROM json_each({}) WHERE json_each.value IN \
+                 (SELECT value FROM json_each({})))",
+                col, ph
+            ),
+        }
+    }
+
     /// JSON 整值等值比较（U1 数组整体等值 / U2 对象结构等值）
     ///
     /// - MySQL：`col [<>] CAST(? AS JSON)`；PG：`col [<>] ?::jsonb`；SQLite：`json(col) [<>] json(?)`

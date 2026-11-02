@@ -172,22 +172,28 @@ pub(in crate::command) fn build_raw_update(
     ctx: Option<&Context>,
     data: &Value,
     now: i64,
-) -> Value {
+) -> Result<Value, String> {
     let mut data = data.clone();
     if ctx.is_some() {
         if let Some(set_part) = data.get("$set").filter(|v| !v.is_null()).cloned() {
             // RBAC 感知版：静态 writable ∩ RBAC writeFields（无策略时直通静态过滤）
             let filtered = filter_writable_data_overlay(registry, schema, ctx, &set_part);
+            // accessKeys：$set 目标值校验（过滤后；被白名单剔除字段不落库）
+            if let Some(obj) = filtered.as_object() {
+                crate::access::validate_write_values(schema, ctx, obj)?;
+            }
             data["$set"] = remove_undefined(&filtered);
         }
     }
+    // accessKeys：其余原生操作符（$unset/$inc/...）不得改写受控字段
+    crate::access::validate_raw_operators(schema, ctx, &data)?;
     if schema.timestamps {
         let set_part = data.get("$set").cloned().unwrap_or_else(|| json!({}));
         let mut merged = object_of(&set_part);
         merged.insert("updatedAt".to_string(), json!(now));
         data["$set"] = Value::Object(merged);
     }
-    data
+    Ok(data)
 }
 
 /// update/updateMany 共用：$set 模式数据（过滤 + 去 null + 去 _id；
@@ -197,13 +203,17 @@ pub(in crate::command) fn build_set_data(
     schema: &Schema,
     ctx: Option<&Context>,
     data: &Value,
-) -> Map<String, Value> {
+) -> Result<Map<String, Value>, String> {
     let src = match ctx {
         // RBAC 感知版：静态 writable ∩ RBAC writeFields（无策略时直通静态过滤）
         Some(_) => filter_writable_data_overlay(registry, schema, ctx, data),
         None => data.clone(),
     };
+    // accessKeys：$set 目标值校验（过滤后；被白名单剔除字段不落库）
+    if let Some(obj) = src.as_object() {
+        crate::access::validate_write_values(schema, ctx, obj)?;
+    }
     let mut set_data = object_of(&remove_undefined(&src));
     set_data.remove("_id");
-    set_data
+    Ok(set_data)
 }

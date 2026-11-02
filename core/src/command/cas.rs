@@ -68,9 +68,9 @@ pub fn plan_compare_and_set(
         .unwrap_or_else(|| json!({}));
 
     let update_doc = if has_raw_operators(update) {
-        build_raw_update(registry, schema, ctx, update, now)
+        build_raw_update(registry, schema, ctx, update, now)?
     } else {
-        let mut set_data = build_set_data(registry, schema, ctx, update);
+        let mut set_data = build_set_data(registry, schema, ctx, update)?;
         if schema.timestamps {
             set_data.insert("updatedAt".to_string(), json!(now));
         }

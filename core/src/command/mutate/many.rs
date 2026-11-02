@@ -104,9 +104,9 @@ pub fn plan_update_many(
             .unwrap_or_else(|| json!({}));
 
     let update_doc = if has_raw_operators(data) {
-        build_raw_update(registry, schema, ctx, data, now)
+        build_raw_update(registry, schema, ctx, data, now)?
     } else {
-        let mut set_data = build_set_data(registry, schema, ctx, data);
+        let mut set_data = build_set_data(registry, schema, ctx, data)?;
         if schema.timestamps {
             set_data.insert("updatedAt".to_string(), json!(now));
         }

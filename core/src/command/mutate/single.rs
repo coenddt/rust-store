@@ -63,9 +63,9 @@ pub fn plan_update(
     }
 
     let update_doc = if has_raw_operators(data) {
-        build_raw_update(registry, schema, ctx, data, now)
+        build_raw_update(registry, schema, ctx, data, now)?
     } else {
-        let mut set_data = build_set_data(registry, schema, ctx, data);
+        let mut set_data = build_set_data(registry, schema, ctx, data)?;
         // JS：空字段检查在追加时间戳之前
         if set_data.is_empty() {
             return Err("没有提供要更新的字段".to_string());

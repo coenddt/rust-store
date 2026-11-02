@@ -171,6 +171,10 @@ pub fn plan_upsert(
         Some(_) => filter_writable_data_overlay(registry, schema, ctx, data),
         None => data.clone(),
     };
+    // accessKeys：payload 目标值校验（过滤后；不被写入的字段无需校验）
+    if let Some(obj) = filtered_data.as_object() {
+        crate::access::validate_write_values(schema, ctx, obj)?;
+    }
 
     // JS：options.returnNew !== undefined ? options.returnNew : true
     let return_new = options

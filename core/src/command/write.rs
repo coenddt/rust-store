@@ -71,6 +71,10 @@ pub(super) fn build_insert_doc(
         Some(_) => filter_writable_data_overlay(registry, schema, ctx, data),
         None => data.clone(),
     };
+    // accessKeys：字段白名单过滤后校验目标值（被过滤掉的字段不落库，无需校验）
+    if let Some(obj) = filtered.as_object() {
+        crate::access::validate_write_values(schema, ctx, obj)?;
+    }
 
     // 保留显式 null：历史实现把 null 一律剔除（当成缺失），导致「空串/NULL/缺失」三态
     // 无法区分（F-07），null 字段读回也被吞（H-01）。显式 `null` 应原样落库，SQL 落 NULL。
@@ -272,12 +276,33 @@ pub fn check_write_perm(
     }
     // RBAC 表级写判定（deny-wins；拒绝文案自带 RBAC 标识，不走入参 deny_msg）
     ensure_write(registry, schema, Some(c), action)?;
+    // accessKeys 写受限判定（缺清单键 / 非法形态 → Err，fail closed）
+    let access_restricted = crate::access::write_restricted(schema, Some(c))?;
+    // access 受控但条件为空 → 拒绝（否则会无条件下写整表）。
+    // 注意：空对象 `{}` 在 `is_truthy` 下为真，必须显式按「无键」判定为空条件。
+    let has_condition = condition
+        .as_object()
+        .map(|o| !o.is_empty())
+        .unwrap_or_else(|| is_truthy(condition));
+    if access_restricted && !has_condition {
+        return Err(format!(
+            "{}条件为空，拒绝无条件下写入受 accessKeys 管控的模型",
+            crate::access::ERR_ACCESS_PREFIX
+        ));
+    }
     // RBAC 行级限制是否存在（存在则探针投影需并入 condition 字段键）
     let rbac_row_restricted =
         crate::rbac::row_condition(registry, schema, Some(c), action.as_str()).is_some();
+    let row_restricted = rbac_row_restricted || access_restricted;
 
     // 探针投影字段全集：RBAC 行级条件字段 ∪ 触发器 onFields / before 引用字段
+    // ∪ accessKeys 受控字段（探针文档需按子集判定当前值）
     let mut merged = probe_condition_fields(registry, schema, Some(c), action.as_str());
+    for f in crate::access::probe_fields(schema, Some(c))? {
+        if !merged.contains(&f) {
+            merged.push(f);
+        }
+    }
     for f in extra_probe_fields {
         if !merged.contains(f) {
             merged.push(f.clone());
@@ -285,8 +310,8 @@ pub fn check_write_perm(
     }
 
     if can_write_schema(registry.role_rules(), schema, Some(c)) {
-        // 静态放行：RBAC 行级受限时仍需探针（否则静默放行越权行更新/删除）
-        if rbac_row_restricted && is_truthy(condition) {
+        // 静态放行：RBAC 行级 / accessKeys 受控时仍需探针（否则静默放行越权行更新/删除）
+        if row_restricted && is_truthy(condition) {
             return match probe {
                 Probe::NotProbed => Ok(Some(cmd_find_one(
                     schema,
@@ -295,7 +320,14 @@ pub fn check_write_perm(
                 ))),
                 Probe::NoResult => Err(deny_msg.to_string()),
                 Probe::Found(doc) => {
-                    ensure_write_on_doc(registry, schema, Some(c), action, doc).map(|_| None)
+                    if access_restricted {
+                        crate::access::validate_doc_values(schema, Some(c), doc)?;
+                    }
+                    if rbac_row_restricted {
+                        ensure_write_on_doc(registry, schema, Some(c), action, doc).map(|_| None)
+                    } else {
+                        Ok(None)
+                    }
                 }
             };
         }
@@ -320,7 +352,6 @@ pub fn check_write_perm(
         .map(|w| w.iter().any(|r| r == "creator"))
         .unwrap_or(false);
     if creator_only && is_truthy(condition) {
-        let needs_row_check = rbac_row_restricted;
         return match probe {
             Probe::NotProbed => Ok(Some(cmd_find_one(
                 schema,
@@ -336,7 +367,11 @@ pub fn check_write_perm(
                     Doc::Doc(doc),
                     schema.owner_key(),
                 ) {
-                    if needs_row_check {
+                    // accessKeys 子集判定先于 RBAC 行级判定（两者都过才放行）
+                    if access_restricted {
+                        crate::access::validate_doc_values(schema, Some(c), doc)?;
+                    }
+                    if rbac_row_restricted {
                         // 静态 creator 过 → RBAC 行级再判（两引擎都过才放行）
                         ensure_write_on_doc(registry, schema, Some(c), action, doc).map(|_| None)
                     } else {

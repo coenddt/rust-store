@@ -9,7 +9,9 @@
 
 use serde_json::{json, Value};
 
-use rust_store_core::command::{plan_query, QueryPlan};
+use rust_store_core::command::{
+    plan_insert, plan_query, plan_remove, plan_update, Probe, QueryPlan,
+};
 use rust_store_core::permission::{context_from_value, Context};
 use rust_store_core::schema::Registry;
 
@@ -390,4 +392,285 @@ fn ctx_none_is_transparent() {
         !s.contains("satCode"),
         "ctx=None 沿用系统内部调用契约（不注入）: {s}"
     );
+}
+
+// ─── 写路径：payload 子集校验 ───────────────────────────────
+
+/// 数组字段 + 写键
+fn bid_write_schema() -> Value {
+    json!({
+        "name": "Bid",
+        "collection": "bids",
+        "timestamps": false,
+        "fields": {
+            "title": { "type": "string" },
+            "bidders": { "type": "array" }
+        },
+        "relations": {},
+        "accessKeys": {
+            "bidders": { "read": "biddersRead", "write": "biddersWrite" }
+        },
+    })
+}
+
+/// 写键 + bypassRoles
+fn bypass_write_schema() -> Value {
+    json!({
+        "name": "Sat",
+        "collection": "sats",
+        "timestamps": false,
+        "fields": {
+            "title": { "type": "string" },
+            "satCode": { "type": "string" }
+        },
+        "relations": {},
+        "accessKeys": {
+            "satCode": { "read": "satsRead", "write": "satsWrite", "bypassRoles": ["admin"] }
+        },
+    })
+}
+
+/// 字段级写白名单（satCode 仅 admin 可写）
+fn field_whitelist_schema() -> Value {
+    json!({
+        "name": "Sat",
+        "collection": "sats",
+        "timestamps": false,
+        "idPrefix": "s",
+        "fields": {
+            "title": { "type": "string" },
+            "satCode": { "type": "string", "write": ["admin"] }
+        },
+        "relations": {},
+        "accessKeys": {
+            "satCode": { "read": "satsRead", "write": "satsWrite" }
+        },
+    })
+}
+
+fn insert_sat(reg: &Registry, c: &Context, data: Value) -> Result<Value, String> {
+    plan_insert("Sat", reg, Some(c), &data, 0, "s1", None)
+}
+
+#[test]
+fn insert_single_value_out_of_list_denied() {
+    let reg = registry_with(&[sat_schema()]);
+    let c = ctx_of(json!({ "userId": "u1", "satsWrite": ["C1"] }));
+    let err = insert_sat(&reg, &c, json!({ "_id": "s1", "title": "x", "satCode": "C2" }))
+        .expect_err("单值目标越权应拒绝");
+    assert!(err.starts_with(ACCESS_PREFIX), "{err}");
+    assert!(err.contains("satCode"), "{err}");
+}
+
+#[test]
+fn insert_array_target_with_outside_element_denied() {
+    let reg = registry_with(&[bid_write_schema()]);
+    let c = ctx_of(json!({ "userId": "u1", "biddersWrite": ["u1", "u2"] }));
+    let err = plan_insert(
+        "Bid",
+        &reg,
+        Some(&c),
+        &json!({ "_id": "b1", "title": "x", "bidders": ["u1", "u3"] }),
+        0,
+        "b1",
+        None,
+    )
+    .expect_err("array 目标含清单外元素应拒绝");
+    assert!(err.starts_with(ACCESS_PREFIX), "{err}");
+    assert!(err.contains("u3"), "{err}");
+}
+
+#[test]
+fn insert_array_target_subset_ok() {
+    let reg = registry_with(&[bid_write_schema()]);
+    let c = ctx_of(json!({ "userId": "u1", "biddersWrite": ["u1", "u2"] }));
+    let plan = plan_insert(
+        "Bid",
+        &reg,
+        Some(&c),
+        &json!({ "_id": "b1", "title": "x", "bidders": ["u1"] }),
+        0,
+        "b1",
+        None,
+    )
+    .expect("array 目标为清单子集应放行");
+    let s = plan["command"].to_string();
+    assert!(s.contains("u1"), "{s}");
+}
+
+#[test]
+fn insert_missing_write_key_fails_closed() {
+    let reg = registry_with(&[sat_schema()]);
+    let c = ctx_of(json!({ "userId": "u1", "satsRead": ["C1"] }));
+    let err = insert_sat(&reg, &c, json!({ "_id": "s1", "title": "x", "satCode": "C1" }))
+        .expect_err("ctx 缺 write 清单键应拒绝");
+    assert!(err.starts_with(ACCESS_PREFIX), "{err}");
+    assert!(err.contains("satsWrite"), "{err}");
+}
+
+#[test]
+fn insert_empty_write_list_denied() {
+    let reg = registry_with(&[sat_schema()]);
+    let c = ctx_of(json!({ "userId": "u1", "satsWrite": [] }));
+    let err = insert_sat(&reg, &c, json!({ "_id": "s1", "title": "x", "satCode": "C1" }))
+        .expect_err("空写清单应拒绝");
+    assert!(err.starts_with(ACCESS_PREFIX), "{err}");
+    assert!(err.contains("为空"), "{err}");
+}
+
+#[test]
+fn insert_bypass_role_ok() {
+    let reg = registry_with(&[bypass_write_schema()]);
+    let c = ctx_of(json!({ "userId": "u1", "roles": ["admin"] }));
+    insert_sat(&reg, &c, json!({ "_id": "s1", "title": "x", "satCode": "ANY" }))
+        .expect("bypassRoles 命中应跳过该键写校验");
+}
+
+#[test]
+fn field_whitelist_filtered_access_field_not_validated() {
+    let reg = registry_with(&[field_whitelist_schema()]);
+    // satCode 仅 admin 可写 → member 写入被字段白名单剔除；空写清单不应误报
+    let c = ctx_of(json!({ "userId": "u1", "roles": ["member"], "satsWrite": [] }));
+    let plan = insert_sat(&reg, &c, json!({ "title": "x", "satCode": "C2" }))
+        .expect("被字段白名单过滤掉的字段不应校验");
+    assert!(
+        plan["command"].to_string().contains("satCode") == false,
+        "satCode 不应落库: {plan}"
+    );
+}
+
+// ─── 写路径：探针文档子集判定 ───────────────────────────────
+
+#[test]
+fn update_probe_doc_value_out_of_list_denied() {
+    let reg = registry_with(&[sat_schema()]);
+    let c = ctx_of(json!({ "userId": "u1", "satsWrite": ["C1"] }));
+    let cond = json!({ "_id": "s1" });
+    let data = json!({ "title": "y" });
+
+    // 首入：access 受控且有条件 → 必须探针，投影含受控字段
+    let first = plan_update("Sat", &reg, Some(&c), &cond, &data, &json!({}), 0, Probe::NotProbed)
+        .expect("首入应返回探针");
+    let probe = &first["needsProbe"];
+    let proj = probe["projection"].as_object().expect("探针应有投影");
+    assert!(proj.contains_key("satCode"), "探针投影应含受控字段: {probe}");
+
+    // 重入：文档当前值越权 → 拒绝
+    let err = plan_update(
+        "Sat",
+        &reg,
+        Some(&c),
+        &cond,
+        &data,
+        &json!({}),
+        0,
+        Probe::Found(&json!({ "_id": "s1", "satCode": "C2" })),
+    )
+    .expect_err("文档当前值越权应拒绝");
+    assert!(err.starts_with(ACCESS_PREFIX), "{err}");
+
+    // 重入：文档当前值合法 → 放行
+    plan_update(
+        "Sat",
+        &reg,
+        Some(&c),
+        &cond,
+        &data,
+        &json!({}),
+        0,
+        Probe::Found(&json!({ "_id": "s1", "satCode": "C1" })),
+    )
+    .expect("文档当前值在清单内应放行");
+}
+
+#[test]
+fn remove_probe_doc_value_out_of_list_denied() {
+    let reg = registry_with(&[sat_schema()]);
+    let c = ctx_of(json!({ "userId": "u1", "satsWrite": ["C1"] }));
+    let cond = json!({ "_id": "s1" });
+    let err = plan_remove(
+        "Sat",
+        &reg,
+        Some(&c),
+        &cond,
+        Probe::Found(&json!({ "_id": "s1", "satCode": "C2" })),
+    )
+    .expect_err("删除越权文档应拒绝");
+    assert!(err.starts_with(ACCESS_PREFIX), "{err}");
+    plan_remove(
+        "Sat",
+        &reg,
+        Some(&c),
+        &cond,
+        Probe::Found(&json!({ "_id": "s1", "satCode": "C1" })),
+    )
+    .expect("删除清单内文档应放行");
+}
+
+/// 受控更新 + 合法当前值（使探针重入走到写数据构造）
+fn found_sat() -> Value {
+    json!({ "_id": "s1", "satCode": "C1" })
+}
+
+#[test]
+fn raw_unset_access_field_denied_and_set_ok() {
+    let reg = registry_with(&[sat_schema()]);
+    let c = ctx_of(json!({ "userId": "u1", "satsWrite": ["C1"] }));
+    let cond = json!({ "_id": "s1" });
+    let err = plan_update(
+        "Sat",
+        &reg,
+        Some(&c),
+        &cond,
+        &json!({ "$unset": { "satCode": "" } }),
+        &json!({}),
+        0,
+        Probe::Found(&found_sat()),
+    )
+    .expect_err("$unset 受控字段应拒绝");
+    assert!(err.starts_with(ACCESS_PREFIX), "{err}");
+
+    let err_set = plan_update(
+        "Sat",
+        &reg,
+        Some(&c),
+        &cond,
+        &json!({ "$set": { "satCode": "C3" } }),
+        &json!({}),
+        0,
+        Probe::Found(&found_sat()),
+    )
+    .expect_err("$set 越权值应拒绝");
+    assert!(err_set.starts_with(ACCESS_PREFIX), "{err_set}");
+
+    plan_update(
+        "Sat",
+        &reg,
+        Some(&c),
+        &cond,
+        &json!({ "$set": { "satCode": "C1" } }),
+        &json!({}),
+        0,
+        Probe::Found(&found_sat()),
+    )
+    .expect("$set 清单内值应放行");
+}
+
+#[test]
+fn update_without_condition_denied_when_restricted() {
+    let reg = registry_with(&[sat_schema()]);
+    let c = ctx_of(json!({ "userId": "u1", "satsWrite": ["C1"] }));
+    let err = plan_update(
+        "Sat",
+        &reg,
+        Some(&c),
+        &json!({}),
+        &json!({ "title": "y" }),
+        &json!({}),
+        0,
+        Probe::NotProbed,
+    )
+    .expect_err("无条件下写受控模型应拒绝");
+    assert!(err.starts_with(ACCESS_PREFIX), "{err}");
+    assert!(err.contains("条件为空"), "{err}");
 }

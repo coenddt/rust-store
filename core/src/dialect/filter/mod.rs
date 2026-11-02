@@ -295,12 +295,14 @@ impl Ctx<'_> {
             }
         };
         let base = self.ident_of(name);
-        // 直写值 ⇒ `$eq` 简写；操作符对象（全 `$` 前缀键）⇒ 仅允许 `$eq` / `$ne` / `$exists`。
+        // 直写值 ⇒ `$eq` 简写；操作符对象（全 `$` 前缀键）⇒ 仅允许 `$eq` / `$ne` / `$exists`
+        // / `$in`（`$in` 仅 array 字段，语义 = 交集命中）。
         // 注意：非 `$` 前缀键的对象是**整值等值目标**（Mongo `{meta: {level: "a"}}` 是子文档等值），
         // 不能被误当操作符对象；混用（既有 `$eq` 又有普通键）语义歧义 → 显式 Err。
         let mut negate = false;
         let mut value: Option<&Value> = None;
         let mut present: Option<bool> = None;
+        let mut in_values: Option<&Value> = None;
         match cond {
             Value::Object(map) => {
                 let dollar = map.keys().filter(|k| k.starts_with('$')).count();
@@ -321,10 +323,11 @@ impl Ctx<'_> {
                                 negate = true;
                             }
                             "$exists" => present = Some(v.as_bool().unwrap_or(true)),
+                            "$in" => in_values = Some(v),
                             other => {
                                 return Err(format!(
                                     "JSON 字段 \"{field}\" 不支持条件操作符 {other}\
-                                     （U1/U2：仅 $eq/$ne/$exists；拒绝静默丢弃）"
+                                     （U1/U2：仅 $eq/$ne/$exists/$in（$in 仅 array 字段）；拒绝静默丢弃）"
                                 ))
                             }
                         }
@@ -336,6 +339,29 @@ impl Ctx<'_> {
         let mut parts: Vec<WhereClause> = Vec::new();
         if let Some(v) = value {
             parts.push(self.json_value_clause(&base, kind, v, negate, field)?);
+        }
+        if let Some(items) = in_values {
+            // `$in` 仅对 array 字段有意义（= 交集命中）；对象字段无对应语义
+            if kind != JsonKind::Array {
+                return Err(format!(
+                    "JSON 对象字段 \"{field}\" 不支持 $in（仅 array 字段支持）"
+                ));
+            }
+            let Some(arr) = items.as_array() else {
+                return Err(format!("JSON 字段 \"{field}\" 的 $in 值必须为数组"));
+            };
+            if arr.is_empty() {
+                // 空清单 = 恒假（不消耗占位符）
+                parts.push(WhereClause::new("0".to_string(), Vec::new()));
+            } else {
+                let ph = self.backend.placeholder(*self.param_seq);
+                *self.param_seq += 1;
+                let expr = self.backend.json_array_overlaps(&base, &ph);
+                parts.push(WhereClause::new(
+                    expr,
+                    vec![Value::String(json_text(items)?)],
+                ));
+            }
         }
         if let Some(exists) = present {
             parts.push(self.json_exists_clause(&base, field, exists));
