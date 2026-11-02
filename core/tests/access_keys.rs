@@ -186,8 +186,7 @@ fn parse_rejects_missing_or_empty_read() {
         })
     };
     assert!(
-        reg.register(&base(json!({ "satCode": { } })))
-            .is_err(),
+        reg.register(&base(json!({ "satCode": { } }))).is_err(),
         "缺少 read 应 Err"
     );
     assert!(
@@ -221,18 +220,24 @@ fn parse_rejects_bad_write_and_bypass_roles() {
         "write 非字符串应 Err"
     );
     assert!(
-        reg.register(&base(json!({ "satCode": { "read": "r", "bypassRoles": "admin" } })))
-            .is_err(),
+        reg.register(&base(
+            json!({ "satCode": { "read": "r", "bypassRoles": "admin" } })
+        ))
+        .is_err(),
         "bypassRoles 非数组应 Err"
     );
     assert!(
-        reg.register(&base(json!({ "satCode": { "read": "r", "bypassRoles": [""] } })))
-            .is_err(),
+        reg.register(&base(
+            json!({ "satCode": { "read": "r", "bypassRoles": [""] } })
+        ))
+        .is_err(),
         "bypassRoles 空串元素应 Err"
     );
     assert!(
-        reg.register(&base(json!({ "satCode": { "read": "r", "bypassRoles": [1] } })))
-            .is_err(),
+        reg.register(&base(
+            json!({ "satCode": { "read": "r", "bypassRoles": [1] } })
+        ))
+        .is_err(),
         "bypassRoles 非字符串元素应 Err"
     );
     // write: null 合法（只读控）
@@ -285,8 +290,8 @@ fn empty_list_reads_nothing() {
 fn array_field_read_uses_in_intersection() {
     let reg = registry_with(&[bid_schema()]);
     let c = ctx_of(json!({ "userId": "u1", "biddersRead": ["u9", "u8"] }));
-    let plan = plan_query("Bid{ title }", &params_of(json!({})), &reg, Some(&c))
-        .expect("规划应成功");
+    let plan =
+        plan_query("Bid{ title }", &params_of(json!({})), &reg, Some(&c)).expect("规划应成功");
     let s = plan.commands[0].to_string();
     assert!(s.contains("bidders"), "数组字段同样以 $in 表达交集: {s}");
     assert!(s.contains("u9"), "{s}");
@@ -300,8 +305,8 @@ fn multiple_keys_combine_with_and() {
         "satsRead": ["C1"],
         "regionsRead": ["R1"]
     }));
-    let plan = plan_query("Multi{ title }", &params_of(json!({})), &reg, Some(&c))
-        .expect("规划应成功");
+    let plan =
+        plan_query("Multi{ title }", &params_of(json!({})), &reg, Some(&c)).expect("规划应成功");
     let s = plan.commands[0].to_string();
     assert!(s.contains("$and"), "多键应 $and 组合: {s}");
     assert!(s.contains("satCode") && s.contains("regionCode"), "{s}");
@@ -456,8 +461,12 @@ fn insert_sat(reg: &Registry, c: &Context, data: Value) -> Result<Value, String>
 fn insert_single_value_out_of_list_denied() {
     let reg = registry_with(&[sat_schema()]);
     let c = ctx_of(json!({ "userId": "u1", "satsWrite": ["C1"] }));
-    let err = insert_sat(&reg, &c, json!({ "_id": "s1", "title": "x", "satCode": "C2" }))
-        .expect_err("单值目标越权应拒绝");
+    let err = insert_sat(
+        &reg,
+        &c,
+        json!({ "_id": "s1", "title": "x", "satCode": "C2" }),
+    )
+    .expect_err("单值目标越权应拒绝");
     assert!(err.starts_with(ACCESS_PREFIX), "{err}");
     assert!(err.contains("satCode"), "{err}");
 }
@@ -502,8 +511,12 @@ fn insert_array_target_subset_ok() {
 fn insert_missing_write_key_fails_closed() {
     let reg = registry_with(&[sat_schema()]);
     let c = ctx_of(json!({ "userId": "u1", "satsRead": ["C1"] }));
-    let err = insert_sat(&reg, &c, json!({ "_id": "s1", "title": "x", "satCode": "C1" }))
-        .expect_err("ctx 缺 write 清单键应拒绝");
+    let err = insert_sat(
+        &reg,
+        &c,
+        json!({ "_id": "s1", "title": "x", "satCode": "C1" }),
+    )
+    .expect_err("ctx 缺 write 清单键应拒绝");
     assert!(err.starts_with(ACCESS_PREFIX), "{err}");
     assert!(err.contains("satsWrite"), "{err}");
 }
@@ -512,8 +525,12 @@ fn insert_missing_write_key_fails_closed() {
 fn insert_empty_write_list_denied() {
     let reg = registry_with(&[sat_schema()]);
     let c = ctx_of(json!({ "userId": "u1", "satsWrite": [] }));
-    let err = insert_sat(&reg, &c, json!({ "_id": "s1", "title": "x", "satCode": "C1" }))
-        .expect_err("空写清单应拒绝");
+    let err = insert_sat(
+        &reg,
+        &c,
+        json!({ "_id": "s1", "title": "x", "satCode": "C1" }),
+    )
+    .expect_err("空写清单应拒绝");
     assert!(err.starts_with(ACCESS_PREFIX), "{err}");
     assert!(err.contains("为空"), "{err}");
 }
@@ -522,8 +539,12 @@ fn insert_empty_write_list_denied() {
 fn insert_bypass_role_ok() {
     let reg = registry_with(&[bypass_write_schema()]);
     let c = ctx_of(json!({ "userId": "u1", "roles": ["admin"] }));
-    insert_sat(&reg, &c, json!({ "_id": "s1", "title": "x", "satCode": "ANY" }))
-        .expect("bypassRoles 命中应跳过该键写校验");
+    insert_sat(
+        &reg,
+        &c,
+        json!({ "_id": "s1", "title": "x", "satCode": "ANY" }),
+    )
+    .expect("bypassRoles 命中应跳过该键写校验");
 }
 
 #[test]
@@ -549,11 +570,23 @@ fn update_probe_doc_value_out_of_list_denied() {
     let data = json!({ "title": "y" });
 
     // 首入：access 受控且有条件 → 必须探针，投影含受控字段
-    let first = plan_update("Sat", &reg, Some(&c), &cond, &data, &json!({}), 0, Probe::NotProbed)
-        .expect("首入应返回探针");
+    let first = plan_update(
+        "Sat",
+        &reg,
+        Some(&c),
+        &cond,
+        &data,
+        &json!({}),
+        0,
+        Probe::NotProbed,
+    )
+    .expect("首入应返回探针");
     let probe = &first["needsProbe"];
     let proj = probe["projection"].as_object().expect("探针应有投影");
-    assert!(proj.contains_key("satCode"), "探针投影应含受控字段: {probe}");
+    assert!(
+        proj.contains_key("satCode"),
+        "探针投影应含受控字段: {probe}"
+    );
 
     // 重入：文档当前值越权 → 拒绝
     let err = plan_update(
