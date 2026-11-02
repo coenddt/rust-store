@@ -167,7 +167,7 @@ pub fn plan_count(
     };
     // 静态 owner 条件叠加 RBAC 行条件（两引擎 $and，deny-wins）
     let owner_merged = merge_owner_condition(registry.role_rules(), schema, ctx, Some(base));
-    let filter = merge_row_condition(registry, schema, ctx, "read", owner_merged)
+    let filter = merge_row_condition(registry, schema, ctx, "read", owner_merged)?
         .unwrap_or_else(|| json!({}));
     Ok(cmd_count_documents(schema, &filter))
 }

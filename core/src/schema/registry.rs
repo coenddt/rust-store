@@ -1052,6 +1052,9 @@ fn build_schema(
             .map(String::as_str)
             .chain(computes.iter().map(|(k, _)| k.as_str())),
     )?;
+    // accessKeys（声明式行级权限）：外层键必须在已声明字段中，read/write/bypassRoles
+    // 形态非法即注册期 Err（禁静默回落）。归档模型不继承（与 ownerKey 现状一致）。
+    let access_keys = super::access_keys::parse_access_keys(obj, &fields)?;
     // ownerKey（漉金Core 接入扩展 01）：归属键，缺省 = `createdBy`（零破坏）；
     // 存在时必须为非空字符串，非法注册期显式 Err（禁静默回落）。
     // 不要求键必须出现在 fields 中（`_id` 等系统键合法）。
@@ -1103,6 +1106,7 @@ fn build_schema(
         database: loc.database.clone().filter(|s| !s.is_empty()),
         schema: loc.schema.clone().filter(|s| !s.is_empty()),
         owner_key,
+        access_keys,
     })
 }
 

@@ -7,6 +7,7 @@
 //! 1. 权限上下文 `ctx` 由隐式 `AsyncLocalStorage` 改为**显式入参**；
 //! 2. schema 注册表由模块级全局 `_schemas` 改为显式 `Registry` 实例。
 
+pub mod access;
 pub mod bson;
 pub mod capability;
 pub mod command;

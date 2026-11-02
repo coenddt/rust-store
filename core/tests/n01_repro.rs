@@ -27,8 +27,7 @@ fn non_creator_ctx() -> Context {
     Context {
         user_id: Some("u1".to_string()),
         roles: Some(vec!["member".to_string()]),
-        role: None,
-        internal: false,
+        ..Default::default()
     }
 }
 

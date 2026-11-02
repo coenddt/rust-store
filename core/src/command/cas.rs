@@ -64,7 +64,7 @@ pub fn plan_compare_and_set(
         }
     }
     ensure_write(registry, schema, ctx, WriteAction::Update)?;
-    let eff_condition = merge_row_condition(registry, schema, ctx, "update", Some(filter.clone()))
+    let eff_condition = merge_row_condition(registry, schema, ctx, "update", Some(filter.clone()))?
         .unwrap_or_else(|| json!({}));
 
     let update_doc = if has_raw_operators(update) {

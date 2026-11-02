@@ -100,7 +100,7 @@ pub fn plan_update_many(
     // ownerOnly / condition 并入 filter——匹配不到即 0 行，与读路径语义一致）
     ensure_write(registry, schema, ctx, WriteAction::Update)?;
     let eff_condition =
-        merge_row_condition(registry, schema, ctx, "update", Some(condition.clone()))
+        merge_row_condition(registry, schema, ctx, "update", Some(condition.clone()))?
             .unwrap_or_else(|| json!({}));
 
     let update_doc = if has_raw_operators(data) {

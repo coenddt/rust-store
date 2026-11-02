@@ -211,6 +211,9 @@ pub struct Schema {
     /// 归属键（creator 伪角色判定 / owner-condition 注入 / update-remove 所有权检查
     /// 读取的文档字段名）。`None` = 缺省 `"createdBy"`（零破坏）；空串在注册期拦截。
     pub owner_key: Option<String>,
+    /// 声明式行级权限绑定键（`accessKeys`；注册期已校验字段存在性）。
+    /// 判决逻辑见 [`crate::access`]；空表 = 未声明（零行为变化）。
+    pub access_keys: Vec<super::access_keys::AccessKeyDef>,
 }
 
 impl Schema {

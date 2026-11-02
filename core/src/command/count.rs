@@ -93,7 +93,7 @@ pub fn plan_query_with_count(
     // 静态 owner 条件叠加 RBAC 行条件（两引擎 $and，deny-wins）
     let owner_merged =
         merge_owner_condition(registry.role_rules(), schema, ctx, Some(count_filter));
-    let count_filter = merge_row_condition(registry, schema, ctx, "read", owner_merged)
+    let count_filter = merge_row_condition(registry, schema, ctx, "read", owner_merged)?
         .unwrap_or_else(|| json!({}));
 
     // §9.6 关系聚合谓词（`$condition` 中以**关系名**作键）无法用标量 `countDocuments` 表达：

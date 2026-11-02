@@ -191,6 +191,7 @@ fn value_to_ctx(v: &Value) -> Result<Option<Context>, String> {
         roles,
         role,
         internal,
+        ..Default::default()
     }))
 }
 

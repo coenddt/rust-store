@@ -6,11 +6,13 @@
 //! 对外 API（`Registry` / `Schema` / `FieldDef` / `RelationDef` / `ComputeDef` / `map_of`）
 //! 由本模块统一再导出，拆分不改语义。
 
+mod access_keys;
 mod definition;
 mod load;
 mod registry;
 mod triggers;
 
+pub use access_keys::{parse_access_keys, AccessKeyDef};
 pub use definition::{
     map_of, ComputeDef, FieldDef, Location, RelationDef, Role, Schema, MAX_VECTOR_DIM,
 };

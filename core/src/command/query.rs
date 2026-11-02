@@ -199,7 +199,7 @@ pub fn plan_query_ast_mut(
                 ctx,
                 params.get(&key).cloned(),
             );
-            match merge_row_condition(registry, schema, ctx, "read", owner_merged) {
+            match merge_row_condition(registry, schema, ctx, "read", owner_merged)? {
                 Some(v) => {
                     params.insert(key, v);
                 }
@@ -212,7 +212,7 @@ pub fn plan_query_ast_mut(
             // 注入合成条件为基准 $match，防越权读全表（RBAC 关闭时叠加直通 None，
             // 行为零变化）
             let static_owner = merge_owner_condition(registry.role_rules(), schema, ctx, None);
-            if let Some(owner) = merge_row_condition(registry, schema, ctx, "read", static_owner)
+            if let Some(owner) = merge_row_condition(registry, schema, ctx, "read", static_owner)?
                 .filter(|v| v.as_object().map(|o| !o.is_empty()).unwrap_or(false))
             {
                 ast.params

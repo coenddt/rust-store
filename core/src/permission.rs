@@ -12,12 +12,15 @@
 //! 2. 内部调用（索引创建、归档回填等）显式传 [`Context::system`]，
 //!    与「忘传 ctx」在语义上彻底分离。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Map, Value};
 
 use crate::schema::Schema;
 use crate::types::{is_truthy, str_list};
+
+/// ctx 中的身份保留键；其余数组键视为 `accessKeys` 清单候选
+const CTX_IDENTITY_KEYS: [&str; 4] = ["userId", "roles", "role", "internal"];
 
 #[derive(Debug, Clone, Default)]
 pub struct Context {
@@ -25,6 +28,11 @@ pub struct Context {
     pub roles: Option<Vec<String>>,
     pub role: Option<String>,
     pub internal: bool,
+    /// ctx 中非身份键的数组清单（键 = ctx 键名，值 = 原样 JSON 数组）。
+    /// 仅被 schema 的 `accessKeys.read/write` 引用时生效（见 [`crate::access`]）。
+    pub access_lists: HashMap<String, Value>,
+    /// 清单形态非法的 ctx 键（命中时报错，禁静默忽略）
+    pub access_list_errors: HashMap<String, String>,
 }
 
 impl Context {
@@ -34,10 +42,8 @@ impl Context {
     /// 与 `None`（调用方未传上下文，`require_context` 开启时会报错）区分开。
     pub fn system() -> Self {
         Self {
-            user_id: None,
-            roles: None,
-            role: None,
             internal: true,
+            ..Default::default()
         }
     }
 }
@@ -48,11 +54,39 @@ pub fn context_from_value(v: &Value) -> Option<Context> {
         return None;
     }
     let o = v.as_object()?;
+    // 身份键之外的数组键 → accessKeys 清单候选；形态非法记入错误表，
+    // 由 `crate::access::resolve_list` 在真正引用时显式报错（禁静默忽略）。
+    let mut access_lists: HashMap<String, Value> = HashMap::new();
+    let mut access_list_errors: HashMap<String, String> = HashMap::new();
+    for (k, val) in o {
+        if CTX_IDENTITY_KEYS.contains(&k.as_str()) || val.is_null() {
+            continue;
+        }
+        match val {
+            Value::Array(items)
+                if items.iter().all(|x| x.is_string() || x.is_number()) =>
+            {
+                access_lists.insert(k.clone(), val.clone());
+            }
+            Value::Array(_) => {
+                access_list_errors.insert(
+                    k.clone(),
+                    "清单数组元素必须为字符串或数字".to_string(),
+                );
+            }
+            _ => {
+                access_list_errors
+                    .insert(k.clone(), "清单必须为数组".to_string());
+            }
+        }
+    }
     Some(Context {
         user_id: o.get("userId").and_then(|x| x.as_str()).map(String::from),
         roles: str_list(o.get("roles")),
         role: o.get("role").and_then(|x| x.as_str()).map(String::from),
         internal: o.get("internal").map(is_truthy).unwrap_or(false),
+        access_lists,
+        access_list_errors,
     })
 }
 

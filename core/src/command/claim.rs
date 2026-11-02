@@ -80,7 +80,7 @@ pub fn plan_claim(
     // RBAC 表级写判定（deny-wins）+ 行级条件合并（与 updateMany 语义一致：
     // ownerOnly / condition 并入 filter，匹配不到即 0 行）
     ensure_write(registry, schema, ctx, WriteAction::Update)?;
-    let eff_condition = merge_row_condition(registry, schema, ctx, "update", Some(filter.clone()))
+    let eff_condition = merge_row_condition(registry, schema, ctx, "update", Some(filter.clone()))?
         .unwrap_or_else(|| json!({}));
 
     let update_doc = if has_raw_operators(update) {

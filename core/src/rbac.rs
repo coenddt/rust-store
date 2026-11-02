@@ -478,24 +478,38 @@ pub fn row_condition(
     }
 }
 
-/// 在静态引擎产出的 owner 条件（`merge_owner_condition` 结果）之上叠加 RBAC 行
-/// 条件：两引擎间 `$and`（deny-wins）。任一为 `None` → 取另一者；空对象视为无条件。
+/// 在静态引擎产出的 owner 条件（`merge_owner_condition` 结果）之上叠加
+/// accessKeys 行条件与 RBAC 行条件：三者间 `$and`（deny-wins）。
+/// 任一为 `None` → 取另一者；空对象视为无条件。
+///
+/// accessKeys 先于 RBAC 计算：ctx 缺清单键时立即 `Err`（fail closed，禁止静默放行）。
 pub fn merge_row_condition(
     registry: &Registry,
     schema: &Schema,
     ctx: Option<&Context>,
     action: &str,
     base: Option<Value>,
-) -> Option<Value> {
+) -> Result<Option<Value>, String> {
     let meaningful = |v: Option<Value>| -> Option<Value> {
         v.filter(|x| x.as_object().map(|o| !o.is_empty()).unwrap_or(false))
     };
+    let access_cond = crate::access::row_condition(schema, ctx, action)?;
     let rbac_cond = row_condition(registry, schema, ctx, action);
-    match (meaningful(base), rbac_cond) {
-        (None, r) => r,
-        (b, None) => b,
-        (Some(b), Some(r)) => Some(json!({ "$and": [b, r] })),
+    let mut parts: Vec<Value> = Vec::new();
+    if let Some(b) = meaningful(base) {
+        parts.push(b);
     }
+    if let Some(a) = meaningful(access_cond) {
+        parts.push(a);
+    }
+    if let Some(r) = meaningful(rbac_cond) {
+        parts.push(r);
+    }
+    Ok(match parts.len() {
+        0 => None,
+        1 => Some(parts.remove(0)),
+        _ => Some(json!({ "$and": parts })),
+    })
 }
 
 /// 字段读交集：`base`（静态 `get_readable_fields` 结果）与 RBAC readFields 取交。
