@@ -113,11 +113,14 @@ pub fn write_restricted(schema: &Schema, ctx: Option<&Context>) -> Result<bool, 
     Ok(!active_write_keys(schema, c)?.is_empty())
 }
 
+/// 单个受控写键：`(定义, ctx 键, 清单)`。
+type ActiveWriteKey<'a> = (&'a AccessKeyDef, &'a str, &'a Vec<Value>);
+
 /// 收集本次写实际受控的 `(定义, ctx 键, 清单)`；缺键 / 非法形态 → `Err`。
 fn active_write_keys<'a>(
     schema: &'a Schema,
     c: &'a Context,
-) -> Result<Vec<(&'a AccessKeyDef, &'a str, &'a Vec<Value>)>, String> {
+) -> Result<Vec<ActiveWriteKey<'a>>, String> {
     let mut out = Vec::new();
     for def in &schema.access_keys {
         if is_bypassed(def, c) {

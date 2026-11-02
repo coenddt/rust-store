@@ -4,6 +4,18 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 5.2.1 (2026-11-02)
+
+### Fixed（发版 CI 修复，能力不变）
+
+- **pyo3 `0.29.2` → `0.29.3`**：`pyo3-ffi` 0.29.2 的 `PyPy + Py_3_12` cfg 缺陷（`fn PyUnstable_InterpreterFrame_*`
+  只判 `Py_3_12` 未排除 PyPy）导致 manylinux-aarch64 / musllinux 在构建 PyPy 3.12 wheel 时报
+  `cannot find type _PyInterpreterFrame / c_int`；0.29.3 已补 `#[cfg(not(PyPy))]`。
+- **版本声明点补齐**：npm 主包与 5 个平台子包、`core-py/pyproject.toml` 统一到 5.2.1
+  （此前滞留 5.1.0，导致 npm `E403` 重复版本、PyPI 构建产物版本与 tag 不一致）。
+- **clippy 门禁**：`access.rs` 抽 `ActiveWriteKey` 类型别名消除 `type_complexity`；
+  测试中 `== false` 改为 `!` 消除 `bool_comparison`。
+
 ## 5.2.0 (2026-11-02)
 
 ### Added（feat：`accessKeys` 声明式行级权限）

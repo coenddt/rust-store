@@ -555,7 +555,7 @@ fn field_whitelist_filtered_access_field_not_validated() {
     let plan = insert_sat(&reg, &c, json!({ "title": "x", "satCode": "C2" }))
         .expect("被字段白名单过滤掉的字段不应校验");
     assert!(
-        plan["command"].to_string().contains("satCode") == false,
+        !plan["command"].to_string().contains("satCode"),
         "satCode 不应落库: {plan}"
     );
 }
