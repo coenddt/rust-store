@@ -103,6 +103,7 @@ async fn insert_query_update_remove_e2e() {
         roles: Some(vec!["guest".into()]),
         role: None,
         internal: false,
+        ..Default::default()
     };
     let denied = store
         .update(

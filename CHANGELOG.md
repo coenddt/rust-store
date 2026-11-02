@@ -4,6 +4,14 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 5.2.0 (2026-11-02)
+
+### Added（feat：`accessKeys` 声明式行级权限）
+
+- schema 新增 `accessKeys` 声明式行级权限：`read`/`write` 引用 ctx 清单，`bypassRoles` 豁免；
+  单值字段成员判定、array 字段读交集 / 写子集；ctx 缺键 fail closed，空清单读空结果、写全拒。
+- 方言：MySQL `JSON_OVERLAPS`、PG `&&`、SQLite `json_each`；Mongo 原生 `$in`。
+
 ## 5.1.0 (2026-10-26)
 
 ### Added（feat：`fields` ∩ `computes` 同名放行——计算列可覆盖同名字段）

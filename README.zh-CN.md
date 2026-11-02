@@ -212,6 +212,36 @@ Node 名与 Python 名一一对应（camelCase ↔ snake_case）。下列方法�
 
 `canRead` / `can_read`、`canWrite` / `can_write`、`shouldInjectOwner` / `should_inject_owner`、`mergeOwnerCondition` / `merge_owner_condition`、`readableFields` / `readable_fields`、`readableRelations` / `readable_relations`、`writableFields` / `writable_fields`、`filterWritableData` / `filter_writable_data`。
 
+#### `accessKeys` 声明参考（声明式行级权限）
+
+schema 声明一行即可获得行级过滤：Host 在 ctx 携带对应清单数组，core 自动并入查询条件与写入校验，业务代码无需任何过滤逻辑。
+
+```json
+{
+  "name": "CacheCalendar",
+  "accessKeys": {
+    "satCode": { "read": "satsRead", "write": "satsWrite", "bypassRoles": ["admin", "internal"] }
+  },
+  "fields": { "satCode": { "type": "string" }, "total": { "type": "int" } }
+}
+```
+
+ctx 示例：
+
+```json
+{ "userId": "u1", "roles": ["viewer"], "satsRead": ["GEO","LEO"], "satsWrite": ["GEO"] }
+```
+
+语义：
+
+- **判定规则**：单值字段读 = 值 ∈ 清单；数组字段读 = 与清单有交集，写 = 目标数组 ⊆ 清单。
+- **与既有权限叠加（AND）**：字段白名单、`ownerKey`、RBAC 条件仍照常生效。
+- **缺键 fail closed**：ctx 未提供 `satsRead` / `satsWrite` 时直接报错（`ERR_PERMISSION:ACCESS:`），不会放宽成空条件。
+- **空清单**：读返回空结果，写全部拒绝。
+- **`bypassRoles` 只跳过该键**：命中角色仅豁免本字段的 access 条件，其余权限不变。
+
+方言下推：Mongo 原生 `$in`；MySQL `JSON_OVERLAPS`；PG `&&`；SQLite `json_each`。
+
 ### 计算列与后处理
 
 `processNode` / `process_node`、`asyncFnRefs` / `async_fn_refs`、`injectDepends` / `inject_depends`、`stripDepInjected` / `strip_dep_injected`、`prepareQuery` / `prepare_query`（两段式阶段一，返回 `{items, fnRefs}`）、`stripQuery` / `strip_query`（阶段三）。

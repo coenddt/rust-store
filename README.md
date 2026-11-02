@@ -215,6 +215,36 @@ Notes:
 
 `canRead` / `can_read`, `canWrite` / `can_write`, `shouldInjectOwner` / `should_inject_owner`, `mergeOwnerCondition` / `merge_owner_condition`, `readableFields` / `readable_fields`, `readableRelations` / `readable_relations`, `writableFields` / `writable_fields`, `filterWritableData` / `filter_writable_data`.
 
+#### `accessKeys` reference (declarative row-level permission)
+
+A single schema declaration gives row-level filtering: the host passes the matching list arrays in `ctx`, and the core merges them into query conditions and write validation — no filtering code in business logic.
+
+```json
+{
+  "name": "CacheCalendar",
+  "accessKeys": {
+    "satCode": { "read": "satsRead", "write": "satsWrite", "bypassRoles": ["admin", "internal"] }
+  },
+  "fields": { "satCode": { "type": "string" }, "total": { "type": "int" } }
+}
+```
+
+Example `ctx`:
+
+```json
+{ "userId": "u1", "roles": ["viewer"], "satsRead": ["GEO","LEO"], "satsWrite": ["GEO"] }
+```
+
+Semantics:
+
+- **Rule**: scalar read = value ∈ list; array read = intersects the list, array write = target array ⊆ list.
+- **AND with existing permissions**: field whitelist, `ownerKey` and RBAC conditions still apply.
+- **Missing key fails closed**: if `ctx` lacks `satsRead` / `satsWrite`, planning errors (`ERR_PERMISSION:ACCESS:`) instead of degrading to an empty condition.
+- **Empty list**: reads return nothing, writes are all rejected.
+- **`bypassRoles` skips that key only**: matching roles exempt this field's access condition and nothing else.
+
+Dialect pushdown: Mongo native `$in`; MySQL `JSON_OVERLAPS`; PG `&&`; SQLite `json_each`.
+
 ### Computed columns and post-processing
 
 `processNode` / `process_node`, `asyncFnRefs` / `async_fn_refs`, `injectDepends` / `inject_depends`, `stripDepInjected` / `strip_dep_injected`, `prepareQuery` / `prepare_query` (phase one, returns `{items, fnRefs}`), `stripQuery` / `strip_query` (phase three).
