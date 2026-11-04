@@ -137,10 +137,12 @@ pub(super) fn build_insert_doc(
     //
     // `DefaultFill::Insert`：只在**键缺失**时补、只补**显式声明**的 default ——
     // 显式传入 `null` 原样落库（F-07 / H-01 三态契约），未声明默认的字段不补类型零值。
-    Ok(apply_field_defaults(&Value::Object(doc), schema, DefaultFill::Insert)
-        .as_object()
-        .cloned()
-        .unwrap_or_default())
+    Ok(
+        apply_field_defaults(&Value::Object(doc), schema, DefaultFill::Insert)
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    )
 }
 
 /// 判断存在性（对应 JS `exists`）

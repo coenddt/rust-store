@@ -386,7 +386,10 @@ fn owner_only_uses_custom_owner_key() {
         .expect("ownerOnly read 应放行规划");
     let s = plan.commands[0].to_string();
     assert!(s.contains("creatorId"), "应按 ownerKey 注入行条件: {s}");
-    assert!(!s.contains("createdBy"), "自定义 ownerKey 不得注入 createdBy: {s}");
+    assert!(
+        !s.contains("createdBy"),
+        "自定义 ownerKey 不得注入 createdBy: {s}"
+    );
 }
 
 #[test]
@@ -559,7 +562,10 @@ fn owner_only_probe_projection_uses_custom_owner_key() {
         .as_object()
         .expect("探针应有投影");
     assert!(proj.contains_key("creatorId"), "投影应按 ownerKey 取键");
-    assert!(!proj.contains_key("createdBy"), "自定义 ownerKey 不得投影 createdBy");
+    assert!(
+        !proj.contains_key("createdBy"),
+        "自定义 ownerKey 不得投影 createdBy"
+    );
 }
 
 #[test]

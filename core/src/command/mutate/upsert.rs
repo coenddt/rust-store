@@ -88,12 +88,7 @@ pub(in crate::command) fn build_upsert_update(
     // JS：setOnInsert.<ownerKey> = setOnInsert._id（_id 缺席时为 undefined，JSON 序列化会丢弃该键）
     // 键名取 schema.owner_key()（ownerKey 自定义时不写 createdBy 字面量）。
     let owner = schema.owner_key();
-    if has_creator_permission(schema)
-        && !set_on_insert
-            .get(owner)
-            .map(is_truthy)
-            .unwrap_or(false)
-    {
+    if has_creator_permission(schema) && !set_on_insert.get(owner).map(is_truthy).unwrap_or(false) {
         if let Some(v) = set_on_insert.get("_id").cloned() {
             set_on_insert.insert(owner.to_string(), v);
         }
@@ -211,12 +206,7 @@ pub fn plan_upsert(
 
     // 自动设置归属键（JS：setOnInsert._id || condition._id；undefined 键被 JSON 丢弃）
     let owner = schema.owner_key();
-    if has_creator_permission(schema)
-        && !set_on_insert
-            .get(owner)
-            .map(is_truthy)
-            .unwrap_or(false)
-    {
+    if has_creator_permission(schema) && !set_on_insert.get(owner).map(is_truthy).unwrap_or(false) {
         let idv = match set_on_insert.get("_id") {
             Some(v) if is_truthy(v) => Some(v.clone()),
             _ => condition.get("_id").cloned(),

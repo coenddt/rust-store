@@ -1025,7 +1025,10 @@ fn build_schema(
     let read_roles = str_list(obj.get("read"));
     let write_roles = str_list(obj.get("write"));
     if roles_have_creator(&read_roles) || roles_have_creator(&write_roles) {
-        add_owner_field(&mut fields, owner_key.as_deref().unwrap_or(DEFAULT_OWNER_KEY));
+        add_owner_field(
+            &mut fields,
+            owner_key.as_deref().unwrap_or(DEFAULT_OWNER_KEY),
+        );
     }
     let relations = parse_relations(obj);
     // 计算列的 agg 需要校验「路径首段命中关系或数组字段」→ 必须晚于 relations/fields 解析

@@ -129,7 +129,7 @@ pub type CoreResult<T> = Result<T, CoreError>;
 mod tests {
     use super::CoreError;
     use crate::command::{
-        ERR_NO_BATCH_WRITE, ERR_NO_CONTEXT, ERR_NO_DELETE, ERR_NO_WRITE, ERR_NOT_FOUND,
+        ERR_NOT_FOUND, ERR_NO_BATCH_WRITE, ERR_NO_CONTEXT, ERR_NO_DELETE, ERR_NO_WRITE,
         ERR_PERMISSION, ERR_TEXT2QUERY,
     };
 

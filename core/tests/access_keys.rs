@@ -718,13 +718,15 @@ fn a1_probe_three_states_update() {
     let c = ctx_of(json!({ "userId": "u1", "satsWrite": ["C1"] }));
     let cond = json!({ "_id": "s1" });
     let data = json!({ "title": "y" });
-    let call = |probe: Probe<'_>| {
-        plan_update("Sat", &reg, Some(&c), &cond, &data, &json!({}), 0, probe)
-    };
+    let call =
+        |probe: Probe<'_>| plan_update("Sat", &reg, Some(&c), &cond, &data, &json!({}), 0, probe);
 
     // ① NotProbed：仅返回探针，不判定（不得凭空报错）
     let first = call(Probe::NotProbed).expect("首入应返回探针");
-    assert!(first.get("needsProbe").is_some(), "应含 needsProbe: {first}");
+    assert!(
+        first.get("needsProbe").is_some(),
+        "应含 needsProbe: {first}"
+    );
 
     // ② NotFound：行不存在 → ERR_NOT_FOUND，**不得**映射成权限拒绝
     let err = call(Probe::NotFound).expect_err("探针未命中应显式报不存在");
@@ -752,7 +754,10 @@ fn a1_probe_three_states_remove() {
     let call = |probe: Probe<'_>| plan_remove("Sat", &reg, Some(&c), &cond, probe);
 
     let first = call(Probe::NotProbed).expect("首入应返回探针");
-    assert!(first.get("needsProbe").is_some(), "应含 needsProbe: {first}");
+    assert!(
+        first.get("needsProbe").is_some(),
+        "应含 needsProbe: {first}"
+    );
 
     let err = call(Probe::NotFound).expect_err("探针未命中应显式报不存在");
     assert!(err.starts_with(NOT_FOUND_PREFIX), "{err}");
