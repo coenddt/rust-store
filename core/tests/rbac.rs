@@ -364,6 +364,31 @@ fn owner_only_read_injects_row_condition() {
     assert!(s.contains("u1"), "行条件应绑定当前 userId: {s}");
 }
 
+/// ownerOnly 行条件必须按 schema.ownerKey 取键（自定义 ownerKey 不得再注入 createdBy）
+#[test]
+fn owner_only_uses_custom_owner_key() {
+    let custom = json!({
+        "name": "Doc",
+        "collection": "docs",
+        "timestamps": false,
+        "ownerKey": "creatorId",
+        "fields": { "title": { "type": "string" } },
+        "relations": {},
+    });
+    let mut reg = registry_with(&[custom]);
+    reg.set_rbac(Some(&policy(json!({
+        "roles": { "reader": {} },
+        "grants": [ { "role": "reader", "model": "Doc", "actions": ["read"], "ownerOnly": true } ]
+    }))))
+    .unwrap();
+    let r = ctx_of("u1", &["reader"]);
+    let plan = plan_query("Doc{ title }", &params_of(json!({})), &reg, Some(&r))
+        .expect("ownerOnly read 应放行规划");
+    let s = plan.commands[0].to_string();
+    assert!(s.contains("creatorId"), "应按 ownerKey 注入行条件: {s}");
+    assert!(!s.contains("createdBy"), "自定义 ownerKey 不得注入 createdBy: {s}");
+}
+
 #[test]
 fn static_condition_merges_with_rbac_row_condition() {
     // 静态 read=[creator] + RBAC read 全开 → owner 条件仍注入（deny-wins：RBAC 不放大静态限制）
@@ -500,6 +525,42 @@ fn condition_based_row_filter_in_read() {
 }
 
 // ─── 行级写（单条探针 / 批量合并） ───────────────────────────
+
+/// ownerOnly 探针投影必须含 schema.ownerKey（自定义键），不含 createdBy
+#[test]
+fn owner_only_probe_projection_uses_custom_owner_key() {
+    let custom = json!({
+        "name": "Doc",
+        "collection": "docs",
+        "timestamps": false,
+        "ownerKey": "creatorId",
+        "fields": { "title": { "type": "string" } },
+        "relations": {},
+    });
+    let mut reg = registry_with(&[custom]);
+    reg.set_rbac(Some(&policy(json!({
+        "roles": { "editor": {} },
+        "grants": [ { "role": "editor", "model": "Doc", "actions": ["update"], "ownerOnly": true } ]
+    }))))
+    .unwrap();
+    let e = ctx_of("u1", &["editor"]);
+    let first = plan_update(
+        "Doc",
+        &reg,
+        Some(&e),
+        &json!({ "_id": "d1" }),
+        &json!({ "title": "y" }),
+        &json!({}),
+        0,
+        Probe::NotProbed,
+    )
+    .expect("首入应返回探针");
+    let proj = first["needsProbe"]["projection"]
+        .as_object()
+        .expect("探针应有投影");
+    assert!(proj.contains_key("creatorId"), "投影应按 ownerKey 取键");
+    assert!(!proj.contains_key("createdBy"), "自定义 ownerKey 不得投影 createdBy");
+}
 
 #[test]
 fn owner_only_update_probes_and_judges_doc() {

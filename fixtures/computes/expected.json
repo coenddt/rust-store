@@ -281,6 +281,7 @@
       ]
     },
     "readableFields": [
+      "createdBy",
       "locked",
       "meta",
       "note",
@@ -290,6 +291,7 @@
       "reviewer"
     ],
     "writableFields": [
+      "createdBy",
       "meta",
       "title"
     ],
@@ -325,10 +327,12 @@
       "a": 1
     },
     "readableFields": [
+      "createdBy",
       "title"
     ],
     "readableRelations": [],
     "writableFields": [
+      "createdBy",
       "title"
     ],
     "filteredData": {
@@ -345,10 +349,12 @@
       "a": 1
     },
     "readableFields": [
+      "createdBy",
       "title"
     ],
     "readableRelations": [],
     "writableFields": [
+      "createdBy",
       "title"
     ],
     "filteredData": {
@@ -365,10 +371,12 @@
       "a": 1
     },
     "readableFields": [
+      "createdBy",
       "title"
     ],
     "readableRelations": [],
     "writableFields": [
+      "createdBy",
       "title"
     ],
     "filteredData": {
@@ -405,10 +413,12 @@
       "createdBy": "u1"
     },
     "readableFields": [
+      "createdBy",
       "title"
     ],
     "readableRelations": [],
     "writableFields": [
+      "createdBy",
       "title"
     ],
     "filteredData": {

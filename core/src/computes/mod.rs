@@ -20,7 +20,10 @@ mod registry;
 mod run;
 
 pub use cache::{ensure_cache, Cache, ComputeEntry};
-pub use defaults::{apply_defaults_and_computes, field_default, fill_nested_defaults};
+pub use defaults::{
+    apply_defaults_and_computes, apply_field_defaults, field_default, fill_nested_defaults,
+    DefaultFill,
+};
 pub use inject::{
     collect_field_deps, collect_rel_deps, inject_into_ast, merge_depends_into_ast,
     strip_dep_injected, InjectInfo, Injected, RelDep,

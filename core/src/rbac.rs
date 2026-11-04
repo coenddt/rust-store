@@ -425,7 +425,7 @@ pub fn ensure_write_on_doc(
         g.actions.iter().any(|a| a == action.as_str())
             && (g.model == schema.name || g.model == "*")
             && roles.iter().any(|r| r == &g.role)
-            && match grant_row_restriction(g, c) {
+            && match grant_row_restriction(g, c, schema.owner_key()) {
                 None => true,
                 Some(cond) => doc_matches_eq(doc, &cond),
             }
@@ -468,7 +468,7 @@ pub fn row_condition(
             && (g.model == schema.name || g.model == "*")
             && roles.iter().any(|r| r == &g.role)
     }) {
-        let v = grant_row_restriction(g, c)?;
+        let v = grant_row_restriction(g, c, schema.owner_key())?;
         conds.push(v);
     }
     match conds.len() {
@@ -643,8 +643,8 @@ pub fn is_field_readable_overlay(
 }
 
 /// 探针命令需额外投影的字段（单条 update/remove 的 RBAC 行级判定依赖）：
-/// 各 grant condition 的字段键（ownerOnly 的 `createdBy` 由调用方静态并入）。
-/// 无 RBAC 行级限制 → 空表（调用方维持既有 `{_id, createdBy}` 投影）。
+/// 各 grant condition 的字段键（ownerOnly 的归属键由调用方按 `schema.owner_key()` 静态并入）。
+/// 无 RBAC 行级限制 → 空表（调用方维持既有 `{_id, 归属键}` 投影）。
 pub fn probe_condition_fields(
     registry: &Registry,
     schema: &Schema,
@@ -690,10 +690,13 @@ pub fn probe_condition_fields(
 
 // ─── 内部工具 ────────────────────────────────────────────────
 
-/// 单 grant 的行限制：`None` = 无限制；`ownerOnly` → `{createdBy: userId}`；
+/// 单 grant 的行限制：`None` = 无限制；`ownerOnly` → `{<ownerKey>: userId}`；
 /// `condition` → 原样；两者并存 → `$and`。`ownerOnly` 但 userId 缺失 → 恒假哨兵
 /// （禁当 `None`——那是静默放大）。
-fn grant_row_restriction(g: &Grant, c: &Context) -> Option<Value> {
+///
+/// `owner_key` 必须取 [`crate::schema::Schema::owner_key`]（缺省 createdBy），
+/// 不得写 `createdBy` 字面量——ownerKey 自定义时行条件会指向不存在的列。
+fn grant_row_restriction(g: &Grant, c: &Context, owner_key: &str) -> Option<Value> {
     if !g.owner_only && g.condition.is_none() {
         return None;
     }
@@ -703,7 +706,9 @@ fn grant_row_restriction(g: &Grant, c: &Context) -> Option<Value> {
             // 恒假条件：__rbac_impossible__ 不可能在文档出现 → doc_matches_eq 恒 false
             Some(json!({ "__rbac_impossible__": true }))
         } else {
-            Some(json!({ "createdBy": uid }))
+            let mut m = Map::new();
+            m.insert(owner_key.to_string(), json!(uid));
+            Some(Value::Object(m))
         }
     } else {
         None

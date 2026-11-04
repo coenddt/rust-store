@@ -96,6 +96,14 @@ pub const ERR_NO_WRITE: &str = "ERR_PERMISSION:无写入权限";
 pub const ERR_NO_DELETE: &str = "ERR_PERMISSION:无删除权限";
 pub const ERR_NO_BATCH_WRITE: &str = "ERR_PERMISSION:无批量写入权限";
 
+/// 写探针未命中（条件本身查不到行：`_id` 拼错 / 已物理删除 / 已不满足条件）。
+///
+/// 与 [`ERR_NO_WRITE`] **语义严格区分**：本态表示「行不存在」，不是「无权限」——
+/// 禁止再翻译成权限错误，否则用户会误以为缺授权去找管理员（A1 根因）。
+/// Host 可直接透传该前缀（对外映射 404 / 空结果由适配层决定）。
+pub const ERR_NOT_FOUND: &str =
+    "ERR_NOT_FOUND:目标记录不存在（写条件未命中任何行，_id 不存在或已被删除）";
+
 /// `require_context` 开启时 ctx 缺失的拒绝哨兵（fail-secure；Host 按前缀识别，
 /// 经 `CoreError::NoContext`（machine code `no_context`）映射对外语义 **403 / `PERMISSION_DENIED`**）。
 ///

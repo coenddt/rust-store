@@ -2,7 +2,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::computes::{apply_defaults_and_computes, FnRegistry};
+use crate::computes::{apply_defaults_and_computes, apply_field_defaults, DefaultFill, FnRegistry};
 use crate::permission::{can_write_schema, evaluate, merge_owner_condition, Context, Doc};
 use crate::rbac::{
     ensure_write, ensure_write_on_doc, filter_writable_data_overlay, merge_row_condition,
@@ -15,7 +15,7 @@ use crate::types::{
 
 use super::cmd::{cmd_count_documents, cmd_find_one, cmd_insert_one};
 use super::write_links::attach_write_links;
-use super::{ensure_context, ERR_NO_WRITE};
+use super::{ensure_context, ERR_NOT_FOUND, ERR_NO_WRITE};
 
 /// 生成插入命令（对应 JS `insert`）
 ///
@@ -57,7 +57,7 @@ pub fn plan_insert(
 }
 
 /// insert 文档规范化（对应 JS `insert` 主体）：
-/// 权限过滤 → 保留显式 null → 自动 _id / createdBy / 时间戳
+/// 权限过滤 → 保留显式 null → 自动 _id / 归属键 / 时间戳
 pub(super) fn build_insert_doc(
     registry: &Registry,
     schema: &Schema,
@@ -99,10 +99,25 @@ pub(super) fn build_insert_doc(
         }
     }
 
-    // 自动设置 createdBy（creator 权限场景）
-    if has_creator_permission(schema) && !doc.get("createdBy").map(is_truthy).unwrap_or(false) {
-        if let Some(uid) = ctx.and_then(|c| c.user_id.clone()) {
-            doc.insert("createdBy".to_string(), json!(uid));
+    // 自动设置归属键（owner 行控 / creator 权限场景）
+    //
+    // A2：注入前必须确认归属键已声明（注册期按 creator 权限自动补齐；绕过注册期手工
+    // 构造 Schema 时缺失 ⇒ 显式报错）。禁止静默注入未声明列——SQL 侧表现为
+    // 1054 Unknown column 'created_by'，错误发生在 SQL 层且不可读。
+    // 键名一律取 [`Schema::owner_key`]（ownerKey 自定义时不得再写 createdBy 字面量）。
+    if has_creator_permission(schema) {
+        let owner = schema.owner_key();
+        if owner != "_id" && !schema.fields.contains_key(owner) {
+            return Err(format!(
+                "schema \"{}\" 未声明 {owner}：creator 权限依赖归属键 {owner}，\
+                 请显式声明该字段（DDL 会按 creator 权限自动补列）",
+                schema.name
+            ));
+        }
+        if !doc.get(owner).map(is_truthy).unwrap_or(false) {
+            if let Some(uid) = ctx.and_then(|c| c.user_id.clone()) {
+                doc.insert(owner.to_string(), json!(uid));
+            }
         }
     }
 
@@ -113,7 +128,19 @@ pub(super) fn build_insert_doc(
         }
         doc.insert("updatedAt".to_string(), json!(now));
     }
-    Ok(doc)
+
+    // A3：schema 显式声明的 default 在**落库前**合并（与 returns 的
+    // `apply_defaults_and_computes` 同源，只是不补类型零值）。
+    // 顺序在自动注入之后 ⇒ 显式传入值 / 自动 _id / createdBy / 时间戳优先于 default。
+    // 根因：此前仅 returns 应用 default，落库文档不带默认值（deletedAt 落 NULL，
+    // 列表按 `deletedAt: 0` 过滤永远查不到）。
+    //
+    // `DefaultFill::Insert`：只在**键缺失**时补、只补**显式声明**的 default ——
+    // 显式传入 `null` 原样落库（F-07 / H-01 三态契约），未声明默认的字段不补类型零值。
+    Ok(apply_field_defaults(&Value::Object(doc), schema, DefaultFill::Insert)
+        .as_object()
+        .cloned()
+        .unwrap_or_default())
 }
 
 /// 判断存在性（对应 JS `exists`）
@@ -187,14 +214,14 @@ pub(super) fn has_creator_permission(schema: &Schema) -> bool {
 
 // ─── 写权限探针（对应 JS `_checkWritePerm`） ─────────────────
 
-/// creator 写权限的探针状态：
+/// 写探针的三态（A1：**未命中 ≠ 越权**）：
 /// `NotProbed` → 尚未探查（可能返回需要探针的命令）
-/// `NoResult` → 探针无结果（拒绝）
-/// `Found`    → 探针命中的 `{_id, createdBy}` 文档
+/// `NotFound`  → 探针条件本身未命中任何行（行不存在）⇒ 返回 [`ERR_NOT_FOUND`]
+/// `Found`     → 探针命中 `{_id, 归属键}` 文档 ⇒ 再判 creator / RBAC 行级 / accessKeys
 #[derive(Debug, Clone, Copy)]
 pub enum Probe<'a> {
     NotProbed,
-    NoResult,
+    NotFound,
     Found(&'a Value),
 }
 
@@ -214,7 +241,8 @@ pub enum Probe<'a> {
 /// 与无参版本**逐字节等价**（零回归契约）。
 ///
 /// 返回：`Ok(None)` = 放行；`Ok(Some(cmd))` = Host 先执行该 findOne 探针后携
-/// [`Probe::Found`] / [`Probe::NoResult`] 重入；`Err` = 拒绝（Host 映射 PermissionError）。
+/// [`Probe::Found`] / [`Probe::NotFound`] 重入；`Err` = 拒绝（Host 映射 PermissionError）；
+/// 探针未命中时 `Err(ERR_NOT_FOUND)`——**不是**权限错误（A1）。
 #[allow(clippy::too_many_arguments)]
 pub fn check_write_perm(
     registry: &Registry,
@@ -318,7 +346,7 @@ pub fn check_write_perm(
                     condition,
                     Some(&probe_projection(&merged)),
                 ))),
-                Probe::NoResult => Err(deny_msg.to_string()),
+                Probe::NotFound => Err(ERR_NOT_FOUND.to_string()),
                 Probe::Found(doc) => {
                     if access_restricted {
                         crate::access::validate_doc_values(schema, Some(c), doc)?;
@@ -340,7 +368,7 @@ pub fn check_write_perm(
                     condition,
                     Some(&probe_projection(&merged)),
                 ))),
-                Probe::NoResult => Err(deny_msg.to_string()),
+                Probe::NotFound => Err(ERR_NOT_FOUND.to_string()),
                 Probe::Found(_) => Ok(None),
             };
         }
@@ -358,7 +386,7 @@ pub fn check_write_perm(
                 condition,
                 Some(&probe_projection(&merged)),
             ))),
-            Probe::NoResult => Err(deny_msg.to_string()),
+            Probe::NotFound => Err(ERR_NOT_FOUND.to_string()),
             Probe::Found(doc) => {
                 if evaluate(
                     registry.role_rules(),
@@ -384,4 +412,47 @@ pub fn check_write_perm(
         };
     }
     Err(deny_msg.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::permission::context_from_value;
+    use crate::schema::Registry;
+    use serde_json::json;
+
+    use super::build_insert_doc;
+
+    /// A2：绕过注册期自动补齐（手工构造缺 `createdBy` 声明的 schema）⇒ 显式报错。
+    ///
+    /// 禁止静默注入未声明列——SQL 侧表现为 `1054 Unknown column 'created_by'`
+    /// （错误发生在数据库层且不可读），必须先于落库在此处给出可读原因。
+    #[test]
+    fn build_insert_doc_rejects_undeclared_created_by() {
+        let mut reg = Registry::new();
+        reg.register(&json!({
+            "name": "Task",
+            "collection": "tasks",
+            "idPrefix": "t",
+            "timestamps": false,
+            "fields": { "title": { "type": "string" } },
+            "relations": {},
+            "write": ["creator"],
+        }))
+        .expect("schema 注册应成功");
+        // 注册期已自动补 createdBy，这里模拟「手工构造 Schema」绕过该补齐
+        let mut schema = reg.get("Task").expect("Task 应已注册").clone();
+        schema.fields.remove("createdBy");
+
+        let ctx = context_from_value(&json!({ "userId": "u1" })).expect("ctx 应解析");
+        let err = build_insert_doc(
+            &reg,
+            &schema,
+            Some(&ctx),
+            &json!({ "title": "x" }),
+            0,
+            "t_new",
+        )
+        .expect_err("未声明 createdBy 应显式报错");
+        assert!(err.contains("未声明 createdBy"), "{err}");
+    }
 }

@@ -195,18 +195,23 @@ fn value_to_ctx(v: &Value) -> Result<Option<Context>, String> {
     }))
 }
 
-/// probe 编码：`"not_probed"` | `"no_result"` | `{"found": {...}}`
+/// probe 编码：`"not_probed"` | `"not_found"`（兼容旧串 `"no_result"`）| `{"found": {...}}`
+///
+/// `not_found` = 探针条件未命中（行不存在）⇒ core 返回 `ERR_NOT_FOUND`，**不是权限错误**。
 fn value_to_probe(v: &Value) -> Result<Probe<'_>, String> {
     match v {
         Value::String(s) if s == "not_probed" => Ok(Probe::NotProbed),
-        Value::String(s) if s == "no_result" => Ok(Probe::NoResult),
+        Value::String(s) if s == "not_found" || s == "no_result" => Ok(Probe::NotFound),
         Value::Object(_) => {
             let found = v
                 .get("found")
                 .ok_or_else(|| "probe 对象形态必须含 found 字段".to_string())?;
             Ok(Probe::Found(found))
         }
-        _ => Err("probe 必须是 \"not_probed\" / \"no_result\" 或 {\"found\":{...}}".to_string()),
+        _ => Err(
+            "probe 必须是 \"not_probed\" / \"not_found\"（旧串 \"no_result\"）或 {\"found\":{...}}"
+                .to_string(),
+        ),
     }
 }
 

@@ -19,7 +19,7 @@ use super::{
 /// 更新一条（对应 JS `update`，`findOneAndUpdate` + returnDocument AFTER）。
 ///
 /// creator 写权限需探针时返回 `{"needsProbe": cmd}`；Host 执行探针后携
-/// [`Probe::Found`] / [`Probe::NoResult`] 重入即得 `{"command": cmd}`。
+/// [`Probe::Found`] / [`Probe::NotFound`] 重入：命中再判权限，未命中返回 `ERR_NOT_FOUND`。
 /// `options` 为用户透传选项（如 upsert / arrayFilters）。
 ///
 /// 签名与 JS 参考实现逐一对应（跨语言 parity 优先于参数个数），保持位置参数。

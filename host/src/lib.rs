@@ -403,7 +403,7 @@ impl Store {
                 let reg = self.read_reg()?;
                 match &found {
                     Some(doc) => plan_remove(schema_name, &reg, ctx, condition, Probe::Found(doc))?,
-                    None => plan_remove(schema_name, &reg, ctx, condition, Probe::NoResult)?,
+                    None => plan_remove(schema_name, &reg, ctx, condition, Probe::NotFound)?,
                 }
             };
         }
@@ -565,7 +565,7 @@ impl Store {
                         data,
                         &json!({}),
                         now,
-                        Probe::NoResult,
+                        Probe::NotFound,
                     ),
                 }
             }

@@ -999,11 +999,33 @@ fn build_schema(
     loc: &Location,
 ) -> Result<Schema, String> {
     let timestamps = parse_timestamps(obj)?;
+    // ownerKey（漉金Core 接入扩展 01）：归属键，缺省 = `createdBy`（零破坏）；
+    // 存在时必须为非空字符串，非法注册期显式 Err（禁静默回落）。
+    // 不要求键必须出现在 fields 中（`_id` 等系统键合法）。
+    // 提前到 fields 补齐之前：creator 权限补字段要用解析后的键名。
+    let owner_key = match obj.get("ownerKey") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(other) => {
+            return Err(format!(
+                "schema \"{name}\" 的 ownerKey 必须为非空字符串，实际 {other}"
+            ))
+        }
+    };
     let mut fields = normalize_fields(obj.get("fields"))?;
     // 向量字段注册期校验（A1）：任一步 Err ⇒ 零副作用
     validate_vector_fields(&fields)?;
     if timestamps {
         add_timestamp_fields(&mut fields);
+    }
+    // owner 行控（creator 权限）隐含归属键（A2）：read/write 含 `creator` ⇒ 归属键
+    // （ownerKey，缺省 createdBy）视为必声明字段，与 timestamps 同款自动补齐。
+    // 收口「写入路径注入归属键」与「DDL 建列」两处约定，避免 schema 未声明时 SQL 层
+    // 才炸 1054。DDL（py-store/nodejs-store）按同一规则补列。
+    let read_roles = str_list(obj.get("read"));
+    let write_roles = str_list(obj.get("write"));
+    if roles_have_creator(&read_roles) || roles_have_creator(&write_roles) {
+        add_owner_field(&mut fields, owner_key.as_deref().unwrap_or(DEFAULT_OWNER_KEY));
     }
     let relations = parse_relations(obj);
     // 计算列的 agg 需要校验「路径首段命中关系或数组字段」→ 必须晚于 relations/fields 解析
@@ -1055,18 +1077,6 @@ fn build_schema(
     // accessKeys（声明式行级权限）：外层键必须在已声明字段中，read/write/bypassRoles
     // 形态非法即注册期 Err（禁静默回落）。归档模型不继承（与 ownerKey 现状一致）。
     let access_keys = super::access_keys::parse_access_keys(obj, &fields)?;
-    // ownerKey（漉金Core 接入扩展 01）：归属键，缺省 = `createdBy`（零破坏）；
-    // 存在时必须为非空字符串，非法注册期显式 Err（禁静默回落）。
-    // 不要求键必须出现在 fields 中（`_id` 等系统键合法）。
-    let owner_key = match obj.get("ownerKey") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
-        Some(other) => {
-            return Err(format!(
-                "schema \"{name}\" 的 ownerKey 必须为非空字符串，实际 {other}"
-            ))
-        }
-    };
     // archive（漉金Core 接入扩展 02）：归档开关，可选 bool，缺省 true（零破坏）；
     // false 时注册期不派生 `<Name>Deleted` 归档模型（plan_remove 按 registry.has
     // 判定，自然跳过归档副作用，删除行为本身不变）。
@@ -1091,8 +1101,8 @@ fn build_schema(
         relations,
         computes,
         triggers,
-        read: str_list(obj.get("read")),
-        write: str_list(obj.get("write")),
+        read: read_roles,
+        write: write_roles,
         indexes: obj
             .get("indexes")
             .and_then(|v| v.as_array())
@@ -1142,6 +1152,37 @@ fn add_timestamp_fields(fields: &mut HashMap<String, FieldDef>) {
             metric: None,
         });
     }
+}
+
+/// 角色清单是否含 `creator` 伪角色（与 command::write::has_creator_permission 同口径）
+fn roles_have_creator(list: &Option<Vec<String>>) -> bool {
+    list.as_ref()
+        .map(|l| l.iter().any(|r| r == "creator"))
+        .unwrap_or(false)
+}
+
+/// 缺省归属键（与 [`Schema::owner_key`] 缺省值同源）
+const DEFAULT_OWNER_KEY: &str = "createdBy";
+
+/// 自动补归属键（owner 行控 / creator 权限场景；已声明则保留声明的类型）。
+///
+/// `name` 取 [`Schema::owner_key`]（缺省 `createdBy`）。`_id` 是系统主键列，
+/// 不补字段声明（DDL 已按主键处理）。
+fn add_owner_field(fields: &mut HashMap<String, FieldDef>, name: &str) {
+    if name == "_id" {
+        return;
+    }
+    fields.entry(name.to_string()).or_insert_with(|| FieldDef {
+        field_type: "string".to_string(),
+        required: false,
+        default: None,
+        read: None,
+        write: None,
+        fields: None,
+        strategy: None,
+        dim: None,
+        metric: None,
+    });
 }
 
 fn parse_relations(obj: &Map<String, Value>) -> HashMap<String, RelationDef> {

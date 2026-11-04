@@ -24,10 +24,10 @@ use crate::Registry;
 fn probe_of(probe_found: Option<bool>, probe_doc: Option<&Value>) -> Probe<'_> {
     match probe_found {
         None => Probe::NotProbed,
-        Some(false) => Probe::NoResult,
+        Some(false) => Probe::NotFound,
         Some(true) => match probe_doc {
             Some(doc) => Probe::Found(doc),
-            None => Probe::NoResult,
+            None => Probe::NotFound,
         },
     }
 }

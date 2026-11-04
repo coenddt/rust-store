@@ -17,7 +17,7 @@
 //! 分类依据只引用 [`crate::command`] 的哨兵常量本体，靠 [`tests`] 模块锁定
 //! 「常量前缀 ↔ 变体 ↔ machine code」关系，文案可自由调整而不破坏分类。
 
-use crate::command::{ERR_NO_CONTEXT, ERR_PERM_PREFIX, ERR_TEXT2QUERY};
+use crate::command::{ERR_NOT_FOUND, ERR_NO_CONTEXT, ERR_PERM_PREFIX, ERR_TEXT2QUERY};
 
 /// 策略视图只读守卫的稳定错误前缀：非 base 视图禁止注册 / 清空 schema（目录唯一真源在 base）。
 /// 归入 [`CoreError::Other`]（非权限族），Host 按前缀识别即可（对齐 `no-error-masking`）。
@@ -32,6 +32,7 @@ pub const ERR_POLICY_VIEW_READONLY: &str = "ERR_POLICY_VIEW_READONLY:";
 /// | [`Permission`](CoreError::Permission) | `permission_denied` | `ERR_PERMISSION:` | 403 / `PERMISSION_DENIED` |
 /// | [`NoContext`](CoreError::NoContext) | `no_context` | `ERR_NO_CONTEXT:` | 403 / `PERMISSION_DENIED` |
 /// | [`ProfileBlocked`](CoreError::ProfileBlocked) | `profile_blocked` | `ERR_TEXT2QUERY:` | 档位拦截（emit 反馈） |
+/// | [`NotFound`](CoreError::NotFound) | `not_found` | `ERR_NOT_FOUND:` | 目标记录不存在（写条件未命中，404 语义由适配层决定） |
 /// | [`Other`](CoreError::Other) | `other` | —（兜底） | 500 透传原文 |
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CoreError {
@@ -56,6 +57,12 @@ pub enum CoreError {
     /// 不对中文文案做脆弱匹配——与 `ERR_PERMISSION:` 同构。
     #[error("{0}")]
     ProfileBlocked(String),
+    /// 目标记录不存在：内层消息携带 `ERR_NOT_FOUND:` 稳定前缀（写探针未命中任何行）。
+    ///
+    /// **不是权限错误**（A1）：对外不得映射 403 / `PERMISSION_DENIED`，否则用户会误判
+    /// 为缺授权。适配层可按本档映射 404，也可原样透传文案——本档只保证与权限族**分离**。
+    #[error("{0}")]
+    NotFound(String),
     /// 其余语义错误（schema 校验 / 翻译层 / 参数校验 / 计算列……）：无专属前缀，落兜底档，
     /// 服务端按 500 透传原文（`no-error-masking`）。
     #[error("{0}")]
@@ -71,6 +78,7 @@ impl CoreError {
             CoreError::Permission(_) => "permission_denied",
             CoreError::NoContext(_) => "no_context",
             CoreError::ProfileBlocked(_) => "profile_blocked",
+            CoreError::NotFound(_) => "not_found",
             CoreError::Other(_) => "other",
         }
     }
@@ -83,6 +91,8 @@ impl CoreError {
             CoreError::NoContext(msg)
         } else if msg.starts_with(ERR_TEXT2QUERY) {
             CoreError::ProfileBlocked(msg)
+        } else if msg.starts_with(ERR_NOT_FOUND) {
+            CoreError::NotFound(msg)
         } else {
             CoreError::Other(msg)
         }
@@ -94,6 +104,7 @@ impl CoreError {
             CoreError::Permission(m)
             | CoreError::NoContext(m)
             | CoreError::ProfileBlocked(m)
+            | CoreError::NotFound(m)
             | CoreError::Other(m) => m,
         }
     }
@@ -118,8 +129,8 @@ pub type CoreResult<T> = Result<T, CoreError>;
 mod tests {
     use super::CoreError;
     use crate::command::{
-        ERR_NO_BATCH_WRITE, ERR_NO_CONTEXT, ERR_NO_DELETE, ERR_NO_WRITE, ERR_PERMISSION,
-        ERR_TEXT2QUERY,
+        ERR_NO_BATCH_WRITE, ERR_NO_CONTEXT, ERR_NO_DELETE, ERR_NO_WRITE, ERR_NOT_FOUND,
+        ERR_PERMISSION, ERR_TEXT2QUERY,
     };
 
     #[test]
@@ -146,6 +157,11 @@ mod tests {
             CoreError::ProfileBlocked(format!("{ERR_TEXT2QUERY}单次取数行数超限"))
         );
         assert_eq!(e.code(), "profile_blocked");
+        // 记录不存在 → NotFound（machine code `not_found`），**不是** Permission
+        // （A1：写探针未命中 ≠ 越权，禁把两者混为一档）
+        let e = CoreError::classify(ERR_NOT_FOUND.to_string());
+        assert_eq!(e, CoreError::NotFound(ERR_NOT_FOUND.to_string()));
+        assert_eq!(e.code(), "not_found");
         // 其余 → Other
         let e = CoreError::classify("translate: 未知命令".to_string());
         assert_eq!(e, CoreError::Other("translate: 未知命令".to_string()));

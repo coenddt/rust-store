@@ -54,7 +54,7 @@ pub(in crate::command) fn build_upsert_conditions(schema: &Schema, data: &Value)
 }
 
 /// 由 fieldData 生成 upsert 的 updateDoc（对应 JS `_buildUpsertUpdate`，
-/// mutation 根文档 upsert 路径使用；含 createdBy 自动填充）
+/// mutation 根文档 upsert 路径使用；含归属键自动填充）
 pub(in crate::command) fn build_upsert_update(
     schema: &Schema,
     field_data: &Value,
@@ -84,16 +84,18 @@ pub(in crate::command) fn build_upsert_update(
     }
     set_data.remove("createdAt");
 
-    // 自动设置 createdBy（upsert 新文档时）
-    // JS：setOnInsert.createdBy = setOnInsert._id（_id 缺席时为 undefined，JSON 序列化会丢弃该键）
+    // 自动设置归属键（upsert 新文档时）
+    // JS：setOnInsert.<ownerKey> = setOnInsert._id（_id 缺席时为 undefined，JSON 序列化会丢弃该键）
+    // 键名取 schema.owner_key()（ownerKey 自定义时不写 createdBy 字面量）。
+    let owner = schema.owner_key();
     if has_creator_permission(schema)
         && !set_on_insert
-            .get("createdBy")
+            .get(owner)
             .map(is_truthy)
             .unwrap_or(false)
     {
         if let Some(v) = set_on_insert.get("_id").cloned() {
-            set_on_insert.insert("createdBy".to_string(), v);
+            set_on_insert.insert(owner.to_string(), v);
         }
     }
 
@@ -207,10 +209,11 @@ pub fn plan_upsert(
     }
     set_data.remove("createdAt");
 
-    // 自动设置 createdBy（JS：setOnInsert._id || condition._id；undefined 键被 JSON 丢弃）
+    // 自动设置归属键（JS：setOnInsert._id || condition._id；undefined 键被 JSON 丢弃）
+    let owner = schema.owner_key();
     if has_creator_permission(schema)
         && !set_on_insert
-            .get("createdBy")
+            .get(owner)
             .map(is_truthy)
             .unwrap_or(false)
     {
@@ -219,7 +222,7 @@ pub fn plan_upsert(
             _ => condition.get("_id").cloned(),
         };
         if let Some(v) = idv {
-            set_on_insert.insert("createdBy".to_string(), v);
+            set_on_insert.insert(owner.to_string(), v);
         }
     }
 

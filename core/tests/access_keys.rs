@@ -707,3 +707,64 @@ fn update_without_condition_denied_when_restricted() {
     assert!(err.starts_with(ACCESS_PREFIX), "{err}");
     assert!(err.contains("条件为空"), "{err}");
 }
+
+// ─── A1：写探针三态（未命中 ≠ 越权） ───────────────────────
+
+const NOT_FOUND_PREFIX: &str = "ERR_NOT_FOUND:";
+
+#[test]
+fn a1_probe_three_states_update() {
+    let reg = registry_with(&[sat_schema()]);
+    let c = ctx_of(json!({ "userId": "u1", "satsWrite": ["C1"] }));
+    let cond = json!({ "_id": "s1" });
+    let data = json!({ "title": "y" });
+    let call = |probe: Probe<'_>| {
+        plan_update("Sat", &reg, Some(&c), &cond, &data, &json!({}), 0, probe)
+    };
+
+    // ① NotProbed：仅返回探针，不判定（不得凭空报错）
+    let first = call(Probe::NotProbed).expect("首入应返回探针");
+    assert!(first.get("needsProbe").is_some(), "应含 needsProbe: {first}");
+
+    // ② NotFound：行不存在 → ERR_NOT_FOUND，**不得**映射成权限拒绝
+    let err = call(Probe::NotFound).expect_err("探针未命中应显式报不存在");
+    assert!(err.starts_with(NOT_FOUND_PREFIX), "{err}");
+    assert!(
+        !err.starts_with(ACCESS_PREFIX) && !err.starts_with("ERR_PERMISSION:"),
+        "行不存在被错误地映射成权限错误: {err}"
+    );
+
+    // ③ Found 但当前值越权：仍是原权限文案（accessKeys 前缀），不是 not_found
+    let denied =
+        call(Probe::Found(&json!({ "_id": "s1", "satCode": "C2" }))).expect_err("越权应拒绝");
+    assert!(denied.starts_with(ACCESS_PREFIX), "{denied}");
+    assert!(!denied.starts_with(NOT_FOUND_PREFIX), "{denied}");
+
+    // ④ Found 且有权：成功
+    call(Probe::Found(&json!({ "_id": "s1", "satCode": "C1" }))).expect("有权应放行");
+}
+
+#[test]
+fn a1_probe_three_states_remove() {
+    let reg = registry_with(&[sat_schema()]);
+    let c = ctx_of(json!({ "userId": "u1", "satsWrite": ["C1"] }));
+    let cond = json!({ "_id": "s1" });
+    let call = |probe: Probe<'_>| plan_remove("Sat", &reg, Some(&c), &cond, probe);
+
+    let first = call(Probe::NotProbed).expect("首入应返回探针");
+    assert!(first.get("needsProbe").is_some(), "应含 needsProbe: {first}");
+
+    let err = call(Probe::NotFound).expect_err("探针未命中应显式报不存在");
+    assert!(err.starts_with(NOT_FOUND_PREFIX), "{err}");
+    assert!(
+        !err.starts_with(ACCESS_PREFIX) && !err.starts_with("ERR_PERMISSION:"),
+        "行不存在被错误地映射成权限错误: {err}"
+    );
+
+    let denied =
+        call(Probe::Found(&json!({ "_id": "s1", "satCode": "C2" }))).expect_err("越权应拒绝");
+    assert!(denied.starts_with(ACCESS_PREFIX), "{denied}");
+    assert!(!denied.starts_with(NOT_FOUND_PREFIX), "{denied}");
+
+    call(Probe::Found(&json!({ "_id": "s1", "satCode": "C1" }))).expect("有权应放行");
+}

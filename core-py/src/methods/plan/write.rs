@@ -17,15 +17,15 @@ use crate::convert::{ctx_from, err, py_to_json, to_py, value_list};
 use crate::fns::PyFnBridge;
 use crate::Registry;
 
-/// 探针状态换算：`probe_found` 缺省 = 未探查；`False` = 探针无结果（拒绝）；
+/// 探针状态换算：`probe_found` 缺省 = 未探查；`False` = 探针未命中（行不存在 → `ERR_NOT_FOUND`）；
 /// `True` = 探针命中（取 `probe_doc`）
 fn probe_of<'a>(probe_found: Option<bool>, probe_doc: Option<&'a Value>) -> Probe<'a> {
     match probe_found {
         None => Probe::NotProbed,
-        Some(false) => Probe::NoResult,
+        Some(false) => Probe::NotFound,
         Some(true) => match probe_doc {
             Some(doc) => Probe::Found(doc),
-            None => Probe::NoResult,
+            None => Probe::NotFound,
         },
     }
 }
