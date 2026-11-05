@@ -1428,3 +1428,52 @@ fn dialect_postgres_float_literal_gets_explicit_double_cast() {
         "参数值本身不变: {pg_in}"
     );
 }
+
+// ─── UPDATE 的 `__present` 哨兵维护：幂等追加（防无界膨胀） ─────────────
+
+/// 回归：`__present` 的令牌维护必须**幂等** —— 先移除本轮涉及的全部字段令牌
+/// （`$unset` 与 `$set` 一并），再对 `$set`/`$inc` 字段各追加一次。
+///
+/// 修复前只追加不移除：同一字段反复 UPDATE 会把 `,k,` 无限 CONCAT 进哨兵值，
+/// MySQL `VARCHAR(255)` 约 20 次即 `1406 Data too long for column '__present'`。
+#[test]
+fn dialect_update_present_sentinel_is_idempotent() {
+    let registry = registry_with(&schemas());
+    let cmd = json!({ "kind": "updateMany", "collection": "posts",
+        "filter": { "_id": "p1" },
+        "update": { "$set": { "status": "live", "views": 7 }, "$unset": { "title": "" } } });
+
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let out = translate(backend, &cmd, &registry).expect("update translate");
+        let text = out["stmts"][0]["text"].as_str().unwrap_or("");
+        // 只取 `__present = …` 的右值部分：LHS 与 RHS 都会出现列名，
+        // 故按最后一次出现切分（最后一次之后即 RHS 的表达式主体）。
+        let expr = text.split("__present").last().unwrap_or("");
+
+        // NULL / 历史空串归一到 ','，保证首尾逗号不变式
+        // （NULLIF 位于 RHS 最内层，切分点到不了，故在整条语句上断言）
+        assert!(
+            text.contains("NULLIF("),
+            "[{backend:?}] 哨兵值应以 NULLIF 归一空值: {text}"
+        );
+        // 本轮涉及的**全部**字段都先移除一次令牌（含 $unset 的 title）
+        for k in ["status", "views", "title"] {
+            assert!(
+                expr.contains(&format!("',{k},'")),
+                "[{backend:?}] {k} 应参与令牌移除（幂等）: {text}"
+            );
+        }
+        // 只有 $set 字段追加，且各恰好一次 → 反复 UPDATE 长度恒定
+        for k in ["status", "views"] {
+            assert_eq!(
+                expr.matches(&format!("'{k},'")).count(),
+                1,
+                "[{backend:?}] {k} 的追加令牌应恰好一次: {text}"
+            );
+        }
+        assert!(
+            !expr.contains("'title,'"),
+            "[{backend:?}] $unset 字段不得追加令牌: {text}"
+        );
+    }
+}
