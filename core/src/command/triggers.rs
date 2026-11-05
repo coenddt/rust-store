@@ -215,10 +215,8 @@ fn build_trigger_step(
                     ctx,
                     Some(base_condition.clone()),
                 );
-                Ok(
-                    merge_row_condition(registry, target, ctx, action, owner_merged)?
-                        .unwrap_or_else(|| json!({})),
-                )
+                Ok(merge_row_condition(registry, target, ctx, action, owner_merged)?
+                    .unwrap_or_else(|| json!({})))
             };
             let command = match op.as_str() {
                 "insert" => cmd_insert_one(target, data),

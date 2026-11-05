@@ -63,14 +63,20 @@ pub fn context_from_value(v: &Value) -> Option<Context> {
             continue;
         }
         match val {
-            Value::Array(items) if items.iter().all(|x| x.is_string() || x.is_number()) => {
+            Value::Array(items)
+                if items.iter().all(|x| x.is_string() || x.is_number()) =>
+            {
                 access_lists.insert(k.clone(), val.clone());
             }
             Value::Array(_) => {
-                access_list_errors.insert(k.clone(), "清单数组元素必须为字符串或数字".to_string());
+                access_list_errors.insert(
+                    k.clone(),
+                    "清单数组元素必须为字符串或数字".to_string(),
+                );
             }
             _ => {
-                access_list_errors.insert(k.clone(), "清单必须为数组".to_string());
+                access_list_errors
+                    .insert(k.clone(), "清单必须为数组".to_string());
             }
         }
     }

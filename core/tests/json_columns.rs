@@ -366,7 +366,10 @@ fn access_in_empty_list_is_always_false() {
     });
     let sq = translate(Backend::Sqlite, &cmd, &reg()).unwrap();
     let text = sq["stmts"][0]["text"].as_str().unwrap();
-    assert!(text.contains("WHERE 0"), "空清单应翻译为恒假: {text}");
+    assert!(
+        text.contains("WHERE 0"),
+        "空清单应翻译为恒假: {text}"
+    );
     let params = sq["stmts"][0]["params"].as_array().unwrap();
     assert!(params.is_empty(), "空清单不应消耗占位符: {params:?}");
 }
