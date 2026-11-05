@@ -66,8 +66,9 @@ pub(super) fn build_assignments(
     Ok(assigns)
 }
 
-/// 构建 `__present` 哨兵维护表达式：先按 `,k,` 令牌移除（$unset）已不存在的字段，
-/// 再用后端各自拼接追加（$set/$inc）显式存在的字段。无任何标量增删 → None（不生成）。
+/// 构建 `__present` 哨兵维护表达式：先按 `,k,` 令牌移除本轮涉及的**全部**字段
+/// （$unset 与 $set 一并，保证幂等），再用后端各自拼接追加（$set/$inc）显式存在的字段。
+/// 无任何标量增删 → None（不生成）。
 ///
 /// 注意：UPDATE 的 SET 目标**不可以**带表别名限定（SQLite 直接 `near "."` 语法错，
 /// MySQL/PG 亦不通用）——LHS 一律裸列名。`present_qualifier` 仅用于限定 RHS 的
@@ -87,12 +88,19 @@ fn present_expr(
         Some(tbl) => format!("{}.{}", tbl, col),
         None => col.clone(),
     };
-    let mut expr = format!("COALESCE({}, ',')", col_ref);
-    for k in unset_fields {
-        expr = format!("REPLACE({}, ',{},,', ',')", expr, k);
+    // 哨兵值的不变式：非空、且首尾均为 ','（插入侧恒写 `,f1,f2,` / 无标量时 `,`）。
+    // NULLIF 把历史空串也归一到 ','，否则下面的「追加 k,」会缺少前置逗号。
+    let mut expr = format!("COALESCE(NULLIF({}, ''), ',')", col_ref);
+    // 幂等：先移除本轮涉及的**全部**字段令牌（$unset 与 $set 一并），再统一追加。
+    // 缺了「先移除」这一步，同一字段反复 UPDATE 会把 `,k,` 无限 CONCAT 进哨兵值，
+    // MySQL VARCHAR(255) 约 20 次即 `1406 Data too long for column '__present'`。
+    for k in unset_fields.iter().chain(set_fields.iter()) {
+        expr = format!("REPLACE({}, ',{},', ',')", expr, k);
     }
+    // 追加只写 `k,`：移除步骤保证了值仍以 ',' 结尾，无需再加前置逗号，
+    // 从而「同一字段反复更新」长度恒定（每字段至多一次令牌）。
     for k in set_fields {
-        let token = format!(",{},", k);
+        let token = format!("{},", k);
         expr = match backend {
             Backend::Mysql => format!("CONCAT({}, '{}')", expr, token),
             _ => format!("{} || '{}'", expr, token),
