@@ -491,10 +491,13 @@ pub fn get_writable_fields(
     let c = ctx?;
     let schema_writable = can_write_schema(rules, schema, ctx);
     let owner_key = schema.owner_key();
+    // internal = 宿主可信系统调用（metadef 落库 / 迁移 / 种子数据）：允许显式写归属键。
+    // 非 internal（受行控约束的调用方）：归属键由系统写入（insert 注入 / upsert
+    // $setOnInsert），一律剔除——含点号路径（root 即归属键）与 `$set` 夹带（P10）。
+    let trusted = c.internal;
     let mut allowed = HashSet::new();
     for (key, field) in &schema.fields {
-        // 归属键由系统写入（insert 注入 / upsert $setOnInsert），不接受用户侧写入（P10）
-        if key == owner_key {
+        if key == owner_key && !trusted {
             continue;
         }
         match &field.write {

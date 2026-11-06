@@ -13,6 +13,9 @@
 - **归属键只由系统维护**：`insert` 忽略并覆盖客户端传入的 `createdBy`（取 `ctx.userId`，
   取不到则 `ERR_NO_WRITE`）；`update` / `updateMany` 的 `$set` / `$unset` 若触及归属键
   （含 `createdBy.x` 点号路径与 `$set` 内操作符）直接报 `ERR_PERMISSION`。
+  **例外：`ctx.internal`（宿主可信系统调用：metadef 落库 / 迁移 / 种子数据）允许显式写入
+  归属值**——不剔除、不覆盖，也不再因缺少 `userId` 报错（此前 internal 同样被剔除，
+  导致宿主 `test_metadef` 的 `KeyError: 'createdBy'`）。
 - **creator 受限写入先探针**：`write: ["creator"]` 的 `update` / `remove` 即使 ctx 有 userId，
   也先返回 `{needsProbe}`（宿主回喂命中文档后二次规划），执行条件强制并入归属；
   `updateMany` / `removeMany` 无 userId 报 `ERR_NO_BATCH_WRITE`，单条 `upsert` 无 userId 报 `ERR_NO_WRITE`。
