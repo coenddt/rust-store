@@ -13,7 +13,8 @@ use rust_store_core::command::{
     plan_update_many, Probe,
 };
 use rust_store_core::permission::{
-    can_read_schema, can_write_schema, should_inject_owner_condition, Context, UnconfiguredPolicy,
+    can_read_schema, can_write_schema, get_readable_fields, should_inject_owner_condition, Context,
+    UnconfiguredPolicy,
 };
 use rust_store_core::rbac;
 use rust_store_core::schema::Registry;
@@ -964,4 +965,148 @@ fn deny_write_blocks_all_write_paths() {
     )
     .expect_err("拒写清单命中应拒绝单条 update");
     assert!(err.starts_with(PERM), "{err}");
+}
+
+// ─── 显式空名单语义（read: [] 与 write: [] 对称） ──────────────
+
+fn empty_read_schema() -> Value {
+    json!({
+        "name": "Post",
+        "collection": "posts",
+        "timestamps": false,
+        "read": [],
+        "fields": {
+            "title": { "type": "string" },
+            "secret": { "type": "string" }
+        },
+    })
+}
+
+fn empty_write_schema() -> Value {
+    json!({
+        "name": "Post",
+        "collection": "posts",
+        "timestamps": false,
+        "write": [],
+        "fields": { "title": { "type": "string" } },
+    })
+}
+
+/// `read: []` = 显式不允许任何角色；internal / 豁免 / ctx=None 的直通不受影响。
+#[test]
+fn explicit_empty_read_list_denies_every_role() {
+    let reg = registry_with(&[empty_read_schema()]);
+    let schema = reg.get("Post").unwrap();
+    for roles in [&["guest"][..], &["viewer"][..], &["admin"][..]] {
+        let c = ctx_of("u1", roles);
+        assert!(
+            !can_read_schema(reg.role_rules(), schema, Some(&c)),
+            "read: [] 应拒绝角色 {roles:?}"
+        );
+    }
+    let internal = Context {
+        internal: true,
+        ..Default::default()
+    };
+    assert!(
+        can_read_schema(reg.role_rules(), schema, Some(&internal)),
+        "internal 直通不受空名单影响"
+    );
+    assert!(
+        can_read_schema(reg.role_rules(), schema, None),
+        "ctx=None 直通不受空名单影响（require_context 另管）"
+    );
+}
+
+/// 「未配置」与「显式空名单」必须区分：同一角色在未配置下可读，在 `read: []` 下不可读。
+#[test]
+fn explicit_empty_read_list_differs_from_unconfigured() {
+    let g = ctx_of("u1", &["guest"]);
+
+    // 未配置 + 默认 Open 姿态 ⇒ 放行（既有语义不变）
+    let open = registry_with(&[post_schema()]);
+    assert!(
+        can_read_schema(open.role_rules(), open.get("Post").unwrap(), Some(&g)),
+        "未配置模型在 Open 姿态下仍可读"
+    );
+
+    // 显式空名单 ⇒ 拒绝（本次收口）
+    let explicit = registry_with(&[empty_read_schema()]);
+    assert!(
+        !can_read_schema(
+            explicit.role_rules(),
+            explicit.get("Post").unwrap(),
+            Some(&g)
+        ),
+        "read: [] 不得被当作未配置而回落到 Open"
+    );
+
+    // 未配置 + Closed 姿态 ⇒ 拒绝（既有语义不变）
+    let mut closed = registry_with(&[post_schema()]);
+    closed.set_unconfigured_policy(UnconfiguredPolicy::Closed);
+    assert!(
+        !can_read_schema(closed.role_rules(), closed.get("Post").unwrap(), Some(&g)),
+        "未配置模型在 Closed 姿态下仍拒绝"
+    );
+}
+
+/// `read: []` 走真实查询规划链路时同样被拒（协议皮共用 core 判决，不再各自判断）。
+#[test]
+fn explicit_empty_read_list_rejects_query_plan() {
+    let reg = registry_with(&[empty_read_schema()]);
+    let v = ctx_of("u1", &["viewer"]);
+    let err = plan_query("Post{ title }", &params_of(json!({})), &reg, Some(&v))
+        .expect_err("read: [] 的模型不得规划查询");
+    assert!(err.starts_with("ERR_PERMISSION:"), "{err}");
+}
+
+/// `write: []` 与 read 侧对称：拒绝普通角色，internal / 豁免例外。
+#[test]
+fn explicit_empty_write_list_matches_read_semantics() {
+    let mut reg = registry_with(&[empty_write_schema()]);
+    let schema = reg.get("Post").unwrap();
+    let v = ctx_of("u1", &["viewer"]);
+    assert!(
+        !can_write_schema(reg.role_rules(), schema, Some(&v)),
+        "write: [] 应拒绝普通角色"
+    );
+    let internal = Context {
+        internal: true,
+        ..Default::default()
+    };
+    assert!(
+        can_write_schema(reg.role_rules(), schema, Some(&internal)),
+        "internal 直通不受空名单影响"
+    );
+    reg.set_exempt_roles(vec!["admin".to_string()]);
+    let schema = reg.get("Post").unwrap();
+    let a = ctx_of("u1", &["admin"]);
+    assert!(
+        can_write_schema(reg.role_rules(), schema, Some(&a)),
+        "豁免清单命中者在 write: [] 下仍放行"
+    );
+}
+
+/// 字段级 `read: []` 同步收口：该字段从可读集剔除（此前会被并入未配置而全员可读）。
+#[test]
+fn empty_field_read_list_hides_field() {
+    let def = json!({
+        "name": "Post",
+        "collection": "posts",
+        "timestamps": false,
+        "fields": {
+            "title": { "type": "string" },
+            "secret": { "type": "string", "read": [] }
+        },
+    });
+    let reg = registry_with(&[def]);
+    let schema = reg.get("Post").unwrap();
+    let v = ctx_of("u1", &["viewer"]);
+    let readable =
+        get_readable_fields(reg.role_rules(), schema, Some(&v)).expect("有 ctx 时应返回可读集");
+    assert!(readable.contains("title"), "未声明 read 的字段可读");
+    assert!(
+        !readable.contains("secret"),
+        "字段级 read: [] 必须剔除该字段"
+    );
 }
