@@ -1018,16 +1018,40 @@ fn build_schema(
         "accessKeys",
         "datasource",
         "_isArchive",
+        // `system`：**正式**顶层键，内建 / 系统模型声明（可选布尔，缺省 false），
+        // py-store、nodejs-store 的 metadef/workflow 自 2.7.0 起使用（如 `__workflowRun`）。
+        // 语义：仅作分类标记（宿主 / 工具链据此区分系统内建与业务模型）；
+        // - DDL：由宿主按注册表生成，内建模型同样建表 ⇒ 本键不参与建表 / 迁移判定；
+        // - 权限：仍由 `read` / `write` / `accessKeys` 判定，`system` 不授予 internal、
+        //   不放宽写权限；
+        // - 归档：系统模型派生的 `<Name>Deleted` 继承本标记。
+        // 禁止靠宿主删键迁就 core（core 是 schema 契约的下游，不是上游）。
+        "system",
+        // `description`：文档管道注记（store-graphql / store-grpc），Schema 级说明。
+        "description",
     ];
     for k in obj.keys() {
-        if !ALLOWED_SCHEMA_KEYS.contains(&k.as_str()) {
+        // `x-*`：协议适配注记命名空间（`x-graphql` / `x-grpc` / `x-mcp`），
+        // 属既有生态扩展约定，core 透传不解释。
+        if !ALLOWED_SCHEMA_KEYS.contains(&k.as_str()) && !k.starts_with("x-") {
             return Err(format!(
-                "schema \"{name}\" 含未知顶层键 \"{k}\"（允许：{}）",
+                "schema \"{name}\" 含未知顶层键 \"{k}\"（允许：{}；另允许 x-* 扩展键）",
                 ALLOWED_SCHEMA_KEYS.join("/")
             ));
         }
     }
     let timestamps = parse_timestamps(obj)?;
+    // `system`（正式键）：内建 / 系统模型分类标记。类型非法注册期显式 Err（禁静默回落），
+    // 缺省 false 保持业务模型零变化。
+    let system = match obj.get("system") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(other) => {
+            return Err(format!(
+                "schema \"{name}\" 的 system 必须为布尔值，实际 {other}"
+            ))
+        }
+    };
     // ownerKey（漉金Core 接入扩展 01）：归属键，缺省 = `createdBy`（零破坏）；
     // 存在时必须为非空字符串，非法注册期显式 Err（禁静默回落）。
     // N1：`_id` 是系统主键，归属键不得指向它（会把「按主键自属」与「按归属人」两种
@@ -1182,6 +1206,7 @@ fn build_schema(
         schema: loc.schema.clone().filter(|s| !s.is_empty()),
         owner_key,
         access_keys,
+        system,
     })
 }
 
@@ -1500,6 +1525,8 @@ fn archive_defn(obj: &Map<String, Value>, name: &str, collection: &str, main: &S
         "collection": format!("{}_deleted", collection),
         "idPrefix": "",
         "_isArchive": true,
+        // 系统模型派生的归档模型同样是系统模型（分类标记随派生继承）
+        "system": main.system,
         "fields": Value::Object(arch_fields),
         "indexes": obj.get("indexes").cloned().unwrap_or_else(|| json!([])),
         // 归档表继承主表 timestamps 语义（true/false/'ms'/'s'；缺省 = true 同 parse_timestamps）。

@@ -218,6 +218,16 @@ pub struct Schema {
     /// 声明式行级权限绑定键（`accessKeys`；注册期已校验字段存在性）。
     /// 判决逻辑见 [`crate::access`]；空表 = 未声明（零行为变化）。
     pub access_keys: Vec<super::access_keys::AccessKeyDef>,
+    /// 内建 / 系统模型声明（顶层 `system`，可选布尔，缺省 `false`）。
+    ///
+    /// 语义（正式键，非透传占位）：
+    /// - 仅用于**分类**：宿主与工具链据此把该模型标识为「宿主内建」（如 py-store /
+    ///   nodejs-store 的 `__workflowRun` / `__schemaDef`），与业务模型区分；
+    /// - **不影响 DDL**：建表由宿主按注册表生成，内建模型同样建表；
+    /// - **不影响权限**：读写仍由 `read` / `write` / `accessKeys` 判定，`system`
+    ///   不授予 internal、不放宽任何角色白名单；
+    /// - 归档派生继承本标记（系统模型的 `<Name>Deleted` 同样是系统模型）。
+    pub system: bool,
 }
 
 impl Schema {
@@ -283,15 +293,26 @@ impl Schema {
 /// 字段定义允许的键（N4）：未列出的键会被静默丢弃（如 `of`/`comment`），
 /// 注册期必须显式拒绝，避免「写了但没生效」。
 const ALLOWED_FIELD_KEYS: &[&str] = &[
-    "type", "required", "default", "read", "write", "fields", "strategy", "dim", "metric",
+    "type",
+    "required",
+    "default",
+    "read",
+    "write",
+    "fields",
+    "strategy",
+    "dim",
+    "metric",
+    // `description`：字段级文档注记（store-graphql / store-grpc 文档管道，含嵌套字段）。
+    "description",
 ];
 
 /// N4：递归校验字段定义（含嵌套 `fields`）不含未知键。
 fn validate_field_def_keys(prefix: &str, def: &Map<String, Value>) -> Result<(), String> {
     for k in def.keys() {
-        if !ALLOWED_FIELD_KEYS.contains(&k.as_str()) {
+        // `x-*`：字段级协议注记（与 schema 顶层同一扩展命名空间），core 透传不解释。
+        if !ALLOWED_FIELD_KEYS.contains(&k.as_str()) && !k.starts_with("x-") {
             return Err(format!(
-                "字段 {prefix} 含未知属性 \"{k}\"（允许：{}）",
+                "字段 {prefix} 含未知属性 \"{k}\"（允许：{}；另允许 x-* 扩展键）",
                 ALLOWED_FIELD_KEYS.join("/")
             ));
         }

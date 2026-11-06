@@ -19,6 +19,16 @@
 - **RBAC `ownerOnly` 的 remove/update**：探针命中后执行条件改为「原条件 ∧ 归属」，
   不再以原始条件下发 `deleteMany` / `updateMany`。
 
+### Breaking（空名单语义对称：`read: []` 由「默认可读」变为「不可读」）
+
+- **`read: []` / 字段级 `read: []` = 显式不允许任何角色**：此前 `evaluate` 把 `None` 与
+  `Some([])` 一并当作「未配置」走 `unconfigured` 姿态（默认 Open），写了空数组反而全员可读；
+  现与 `write: []` 对齐——显式空名单拒绝，只有键缺失才走 `unconfigured` 策略。
+- **不变**：`None`（未配置）仍按 `unconfigured` 策略（默认 Open）；`internal`、
+  豁免角色清单、`ctx=None` 的直通语义不变。
+- **跨皮影响**：REST / GraphQL / gRPC / MCP 四个协议皮均复用 core 判决，自动继承；
+  声明 `read: []` 的模型从「默认可读」变为「不可读」（破坏性变更）。
+
 ### Fixed（语义一致性）
 
 - **insert 返回 == 落库文档**：`returns` 只补 computes，不再补字段类型零值（此前返回 `views: 0` /
@@ -32,7 +42,10 @@
   `Schema.field_order`）发射，不再随 `HashMap` 迭代随机。
 - **归档模型继承归属字段**：自动补出的 `ownerKey` 字段随归档 schema 一起下发。
 - **注册规范化**：顶层未知键、字段定义未知键（递归）、`indexes` 非法结构 / 引用不存在的键
-  均注册报错，不再静默丢弃。
+  均注册报错，不再静默丢弃。允许键清单以宿主真实形状为准：顶层含 `system`（正式可选布尔键，
+  缺省 `false`，非布尔报错；落到 `Schema.system`，仅作「宿主内建模型」分类标记，归档派生继承，
+  **不影响 DDL 与权限判定**）、`description`，字段级含 `description`，并允许 `x-*`
+  前缀扩展键（`x-graphql` / `x-grpc` / `x-mcp` 等协议适配注记）。
 - **FFI ctx 往返**：`accessKeys` 清单键完整往返；`internal` 与 py/node/host 共用
   `context_from_value`（`is_truthy` 语义），不再各自解析。
 

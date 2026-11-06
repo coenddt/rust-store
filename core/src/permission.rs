@@ -167,9 +167,12 @@ pub fn can_register(policy: &MetaPolicy, ctx: Option<&Context>) -> bool {
 /// - 豁免：有效角色 ∩ `rules.exempt_roles` ≠ ∅ → true（默认空 = 无豁免）。豁免检查
 ///   **先于**未配置姿态——设计 §11.3「一切判决环节直通」：`set_exempt_roles` 与
 ///   `Closed` 并存时豁免仍生效（豁免是显式信任声明，姿态管不住它）；
-/// - 未配置（role_list 缺失/空）：`Open` 放行（guest 读拒已随清单化移除——迁移差异，
+/// - **未配置（`role_list` 缺失）**：`Open` 放行（guest 读拒已随清单化移除——迁移差异，
 ///   设计 §11.4）；`Closed` 对非内部用户全拒（fail-secure）；ctx=None 与 internal
 ///   的直通不受姿态影响（无 ctx 维度归 `require_context` 管，设计 §11.6）。
+/// - **显式空名单（`Some([])`）**：显式声明「不允许任何角色」→ 拒绝（internal 与豁免
+///   已在前面直通）。与 `write` 侧空白名单语义对称；此前 `Some([])` 被并入「未配置」
+///   走 Open 姿态，导致写了空数组反而全员可读（跨皮行为变更，见 CHANGELOG）。
 pub fn evaluate(
     rules: &RoleRules,
     ctx: Option<&Context>,
@@ -185,16 +188,17 @@ pub fn evaluate(
     if has_any(c, &rules.exempt_roles) {
         return true;
     }
-    let empty = role_list.map(|r| r.is_empty()).unwrap_or(true);
-    if empty {
-        // 未配置姿态显式化（原 empty 分支的 guest 读拒随清单化移除）
+    let Some(list) = role_list else {
+        // 未配置（键缺失）：未配置姿态显式化（原 empty 分支的 guest 读拒随清单化移除）
         return rules.unconfigured == UnconfiguredPolicy::Open;
+    };
+    if list.is_empty() {
+        // 显式空名单 = 显式不允许任何角色（与「未配置」区分，read/write 对称）
+        return false;
     }
 
     // ① 角色匹配
     let effective = effective(c);
-    // `empty` 已早退，此处 role_list 必为 Some 且非空
-    let Some(list) = role_list else { return true };
     if list.iter().any(|r| effective.iter().any(|x| x == r)) {
         return true;
     }
@@ -339,17 +343,11 @@ pub fn can_read_schema(rules: &RoleRules, schema: &Schema, ctx: Option<&Context>
 }
 
 /// 拒写清单命中者一切写路径拒绝（读不受影响，默认空——无拒写）；
-/// R2 语义保留：write 显式配置为空白名单（`[]`）= 未声明任何可写角色 → 拒绝一切写，
-/// 豁免清单命中者与 internal 例外。
+/// 空白名单（`[]`）语义由 [`evaluate`] 统一收口：显式不允许任何角色 → 拒绝一切写，
+/// 豁免清单命中者与 internal 例外（此前这里另写一份空名单判断，与 read 侧不对称）。
 pub fn can_write_schema(rules: &RoleRules, schema: &Schema, ctx: Option<&Context>) -> bool {
     if let Some(c) = ctx {
         if has_any(c, &rules.deny_write_roles) {
-            return false;
-        }
-        if !c.internal
-            && matches!(schema.write, Some(ref w) if w.is_empty())
-            && !has_any(c, &rules.exempt_roles)
-        {
             return false;
         }
     }
