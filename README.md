@@ -7,7 +7,9 @@
 ![PyPI](https://img.shields.io/pypi/v/rust-store-py)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
-Current release **5.3.1** — `rust-store-core` on crates.io, `rust-store-node` on npm, `rust-store-py` on PyPI.
+Current release **5.3.2** — `rust-store-core` on crates.io, `rust-store-node` on npm, `rust-store-py` on PyPI.
+
+> Chinese docs: [README.zh-CN.md](./README.zh-CN.md)
 
 - One query language planned once, executed on MongoDB, MySQL, PostgreSQL or SQLite.
 - Two bindings that only convert JSON, so Node.js and Python cannot drift apart.
