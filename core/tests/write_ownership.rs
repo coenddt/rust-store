@@ -398,3 +398,148 @@ fn p10_update_raw_operator_rejects_owner_field() {
     .expect_err("$unset 改写归属键应显式报错");
     assert!(err.contains("归属键"), "{err}");
 }
+
+// ─── P10 修正：internal 可信调用方允许显式写归属键 ─────────────
+
+fn internal_ctx(uid: Option<&str>) -> Context {
+    Context {
+        internal: true,
+        user_id: uid.map(|s| s.to_string()),
+        ..Default::default()
+    }
+}
+
+/// 回归：宿主（metadef / 迁移 / 种子）以 internal 上下文显式写 `createdBy` 必须落库。
+/// 此前 `get_writable_fields` 无条件剔除归属键，internal 显式值被静默丢弃（KeyError: createdBy）。
+#[test]
+fn p10_internal_insert_keeps_explicit_owner() {
+    let reg = registry_with(&[creator_schema()]);
+
+    // internal 且无 userId：显式值原样保留（不得被字段过滤剔除，也不得因无身份报错）
+    let plan = plan_insert(
+        "Post",
+        &reg,
+        Some(&internal_ctx(None)),
+        &json!({ "_id": "p1", "title": "x", "createdBy": "u1" }),
+        0,
+        "p1",
+        None,
+    )
+    .expect("internal insert 应规划成功");
+    assert_eq!(
+        plan["command"]["doc"]["createdBy"], "u1",
+        "internal 显式归属键不得被过滤: {}",
+        plan["command"]["doc"]
+    );
+
+    // internal 且带 userId：可信调用方的显式值优先（不被 ctx.userId 覆盖）
+    let plan = plan_insert(
+        "Post",
+        &reg,
+        Some(&internal_ctx(Some("operator"))),
+        &json!({ "_id": "p2", "title": "x", "createdBy": "u1" }),
+        0,
+        "p2",
+        None,
+    )
+    .expect("internal insert 应规划成功");
+    assert_eq!(
+        plan["command"]["doc"]["createdBy"], "u1",
+        "可信调用方显式指定归属键应保留: {}",
+        plan["command"]["doc"]
+    );
+}
+
+/// internal 走 update 同样可改写归属键（`reject_owner_write` 与字段过滤均须放行）。
+#[test]
+fn p10_internal_update_can_change_owner() {
+    // 归属键显式声明（宿主 metadef 模型即如此：`createdBy: { type: 'string' }`）
+    let reg = registry_with(&[json!({
+        "name": "Doc",
+        "collection": "docs",
+        "timestamps": false,
+        "fields": {
+            "title": { "type": "string" },
+            "createdBy": { "type": "string" }
+        },
+    })]);
+    let plan = plan_update(
+        "Doc",
+        &reg,
+        Some(&internal_ctx(None)),
+        &json!({ "_id": "d1" }),
+        &json!({ "createdBy": "u2" }),
+        &json!({}),
+        0,
+        rust_store_core::command::Probe::NotProbed,
+    )
+    .expect("internal update 改写归属键应放行");
+    assert_eq!(
+        plan["command"]["update"]["$set"]["createdBy"], "u2",
+        "internal update 的归属键写入不得被过滤: {}",
+        plan["command"]["update"]
+    );
+}
+
+/// 非 internal 的过滤/拒绝不受影响：冒充、点号穿透、`$set` 夹带仍全部拒。
+#[test]
+fn p10_untrusted_still_cannot_touch_owner() {
+    // insert 冒充：creator 权限模型（无 creator 时 insert 不做归属注入）
+    let creator = registry_with(&[creator_schema()]);
+    let u1 = ctx_of("u1", &[]);
+
+    let plan = plan_insert(
+        "Post",
+        &creator,
+        Some(&u1),
+        &json!({ "_id": "p1", "title": "x", "createdBy": "u2" }),
+        0,
+        "p1",
+        None,
+    )
+    .expect("非 internal insert 应规划成功");
+    assert_eq!(plan["command"]["doc"]["createdBy"], "u1");
+
+    // 点号穿透 / `$set` 夹带 / updateMany 夹带：普通模型（无需探针）
+    let reg = registry_with(&[post_schema()]);
+
+    // 点号穿透
+    let err = plan_update(
+        "Post",
+        &reg,
+        Some(&u1),
+        &json!({ "_id": "p1" }),
+        &json!({ "createdBy.x": "u2" }),
+        &json!({}),
+        0,
+        rust_store_core::command::Probe::NotProbed,
+    )
+    .expect_err("点号路径穿透归属键应显式报错");
+    assert!(err.contains("归属键"), "{err}");
+
+    // `$set` 里夹带（与合法字段同批）仍被拒
+    let err = plan_update(
+        "Post",
+        &reg,
+        Some(&u1),
+        &json!({ "_id": "p1" }),
+        &json!({ "$set": { "title": "y", "createdBy": "u2" } }),
+        &json!({}),
+        0,
+        rust_store_core::command::Probe::NotProbed,
+    )
+    .expect_err("$set 夹带归属键应显式报错");
+    assert!(err.contains("归属键"), "{err}");
+
+    // updateMany 同样不放过（批量更新与合法字段同批夹带）
+    let err = plan_update_many(
+        "Post",
+        &reg,
+        Some(&u1),
+        &json!({ "status": "open" }),
+        &json!({ "title": "y", "createdBy": "u2" }),
+        0,
+    )
+    .expect_err("updateMany 夹带归属键应显式报错");
+    assert!(err.contains("归属键"), "{err}");
+}

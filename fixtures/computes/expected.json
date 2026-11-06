@@ -331,6 +331,7 @@
     ],
     "readableRelations": [],
     "writableFields": [
+      "createdBy",
       "title"
     ],
     "filteredData": {
