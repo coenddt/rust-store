@@ -138,7 +138,8 @@ function replayWriteCase(reg, fx) {
 
     case 'update': {
       const out = reg.planUpdate(fx.model || '', fx.condition ?? null, fx.data ?? null, fx.options ?? null, now, ctx);
-      if (out.needsProbe) throw new Error('unexpected needsProbe');
+      // creator 受限写入 ⇒ core 先返回探针（宿主回喂后二次规划），黄金基准即 needsProbe 信封
+      if (out.needsProbe) return out;
       return { commands: [out.command], returns: returnsOf() };
     }
 
@@ -149,6 +150,8 @@ function replayWriteCase(reg, fx) {
 
     case 'remove': {
       const plan = reg.planRemove(fx.model || '', fx.condition ?? null, ctx);
+      // creator 受限删除 ⇒ 先返回探针（同上）
+      if (plan.needsProbe) return plan;
       const docs = fx.docs || [];
       const commands = [];
       let archivedCount = 0;

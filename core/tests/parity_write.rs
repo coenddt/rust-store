@@ -154,6 +154,11 @@ fn run_update(fx: &Value) -> Result<Value, String> {
         now_of(fx),
         Probe::NotProbed,
     )?;
+    // creator 独占写（P1）首入返回探针：核心出参即 needsProbe，宿主两段式执行，
+    // 对拍直接比较探针命令（黄金基准同步为 needsProbe 形态）。
+    if out.get("command").is_none() && out.get("needsProbe").is_some() {
+        return Ok(out);
+    }
     let command = out
         .get("command")
         .cloned()
@@ -209,6 +214,10 @@ fn run_remove(fx: &Value) -> Result<Value, String> {
         &condition,
         Probe::NotProbed,
     )?;
+    // creator 独占写（P1）首入返回探针：直接比较 needsProbe 出参
+    if out.get("deleteCommand").is_none() && out.get("needsProbe").is_some() {
+        return Ok(out);
+    }
     let find_command = out.get("findCommand").cloned().unwrap_or(Value::Null);
     let delete_command = out
         .get("deleteCommand")
