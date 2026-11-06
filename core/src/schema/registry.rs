@@ -551,7 +551,7 @@ impl Registry {
                 // 不建集合、不占名称冲突检查名额）
                 let archive_on = obj.get("archive").map(is_truthy).unwrap_or(true);
                 if !is_archive && !name.ends_with("Deleted") && archive_on {
-                    let aobj = archive_defn(obj, name, &schema.collection)
+                    let aobj = archive_defn(obj, name, &schema.collection, &schema)
                         .as_object()
                         .cloned()
                         .unwrap();
@@ -998,14 +998,51 @@ fn build_schema(
     collection: String,
     loc: &Location,
 ) -> Result<Schema, String> {
+    // N5：未知顶层键此前静默丢弃（如拼错的 `ownerkey`/`index`），注册期显式拒绝。
+    // 落点（source/database/schema）由 loc 注入，定义文件禁止出现。
+    const ALLOWED_SCHEMA_KEYS: &[&str] = &[
+        "name",
+        "collection",
+        "replica",
+        "read",
+        "write",
+        "ownerKey",
+        "fields",
+        "relations",
+        "computes",
+        "triggers",
+        "indexes",
+        "archive",
+        "idPrefix",
+        "timestamps",
+        "accessKeys",
+        "datasource",
+        "_isArchive",
+    ];
+    for k in obj.keys() {
+        if !ALLOWED_SCHEMA_KEYS.contains(&k.as_str()) {
+            return Err(format!(
+                "schema \"{name}\" 含未知顶层键 \"{k}\"（允许：{}）",
+                ALLOWED_SCHEMA_KEYS.join("/")
+            ));
+        }
+    }
     let timestamps = parse_timestamps(obj)?;
     // ownerKey（漉金Core 接入扩展 01）：归属键，缺省 = `createdBy`（零破坏）；
     // 存在时必须为非空字符串，非法注册期显式 Err（禁静默回落）。
-    // 不要求键必须出现在 fields 中（`_id` 等系统键合法）。
-    // 提前到 fields 补齐之前：creator 权限补字段要用解析后的键名。
+    // N1：`_id` 是系统主键，归属键不得指向它（会把「按主键自属」与「按归属人」两种
+    // 语义静默混同）；类型在 fields 归一后校验，必须为 string。
     let owner_key = match obj.get("ownerKey") {
         None | Some(Value::Null) => None,
-        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(Value::String(s)) if !s.is_empty() => {
+            if s == "_id" {
+                return Err(format!(
+                    "schema \"{name}\" 的 ownerKey 不得为 \"_id\"（主键由系统管理），\
+                     请使用独立的归属字段（缺省 createdBy）"
+                ));
+            }
+            Some(s.clone())
+        }
         Some(other) => {
             return Err(format!(
                 "schema \"{name}\" 的 ownerKey 必须为非空字符串，实际 {other}"
@@ -1029,6 +1066,19 @@ fn build_schema(
             &mut fields,
             owner_key.as_deref().unwrap_or(DEFAULT_OWNER_KEY),
         );
+    }
+    // N1：归属字段若已声明，类型必须为 string（null/数字会把归属判定静默变成永不命中）
+    if owner_key.is_some() || roles_have_creator(&read_roles) || roles_have_creator(&write_roles) {
+        let effective_owner = owner_key.as_deref().unwrap_or(DEFAULT_OWNER_KEY);
+        if let Some(def) = fields.get(effective_owner) {
+            if def.field_type != "string" {
+                return Err(format!(
+                    "schema \"{name}\" 的归属字段 \"{effective_owner}\" 必须为 string 类型，\
+                     实际 \"{}\"",
+                    def.field_type
+                ));
+            }
+        }
     }
     let relations = parse_relations(obj);
     // 计算列的 agg 需要校验「路径首段命中关系或数组字段」→ 必须晚于 relations/fields 解析
@@ -1091,6 +1141,21 @@ fn build_schema(
             ))
         }
     }
+    // N5：indexes 结构校验（此前非数组 / keys 非对象 / 未知键引用均静默丢弃）。
+    // 归档表索引沿用主表定义，不校验键引用（归档模型不复制 relations）。
+    let is_archive = obj.get("_isArchive").map(is_truthy).unwrap_or(false);
+    let indexes = parse_indexes(&name, obj.get("indexes"), &fields, &relations, is_archive)?;
+    // X1：字段顺序快照（声明序 + 补出的归属/时间戳字段挂尾），SQL 列清单据此生成
+    let mut field_order: Vec<String> = obj
+        .get("fields")
+        .and_then(|v| v.as_object())
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    for k in fields.keys() {
+        if !field_order.contains(k) {
+            field_order.push(k.clone());
+        }
+    }
     Ok(Schema {
         name,
         collection,
@@ -1101,16 +1166,13 @@ fn build_schema(
             .to_string(),
         timestamps,
         fields,
+        field_order,
         relations,
         computes,
         triggers,
         read: read_roles,
         write: write_roles,
-        indexes: obj
-            .get("indexes")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default(),
+        indexes,
         source: if loc.source == crate::datasource::DEFAULT_SOURCE {
             None
         } else {
@@ -1121,6 +1183,53 @@ fn build_schema(
         owner_key,
         access_keys,
     })
+}
+
+/// N5：索引定义结构校验——数组、每项对象、`keys` 为对象且键引用已声明字段/关系/`_id`。
+fn parse_indexes(
+    schema_name: &str,
+    v: Option<&Value>,
+    fields: &std::collections::HashMap<String, super::definition::FieldDef>,
+    relations: &std::collections::HashMap<String, super::definition::RelationDef>,
+    is_archive: bool,
+) -> Result<Vec<Value>, String> {
+    let Some(v) = v else { return Ok(Vec::new()) };
+    if v.is_null() {
+        return Ok(Vec::new());
+    }
+    let Some(arr) = v.as_array() else {
+        return Err(format!(
+            "schema \"{schema_name}\" 的 indexes 必须为数组，实际 {v}"
+        ));
+    };
+    for (i, item) in arr.iter().enumerate() {
+        let Some(o) = item.as_object() else {
+            return Err(format!(
+                "schema \"{schema_name}\" 的 indexes[{i}] 必须为对象，实际 {item}"
+            ));
+        };
+        let keys = match o.get("keys") {
+            None | Some(Value::Null) => continue,
+            Some(Value::Object(keys)) => keys,
+            Some(other) => {
+                return Err(format!(
+                    "schema \"{schema_name}\" 的 indexes[{i}].keys 必须为对象，实际 {other}"
+                ))
+            }
+        };
+        if is_archive {
+            continue;
+        }
+        for k in keys.keys() {
+            let root = k.split('.').next().unwrap_or(k.as_str());
+            if root != "_id" && !fields.contains_key(root) && !relations.contains_key(root) {
+                return Err(format!(
+                    "schema \"{schema_name}\" 的 indexes[{i}] 键 \"{k}\" 未在字段/关系中声明"
+                ));
+            }
+        }
+    }
+    Ok(arr.clone())
 }
 
 /// `timestamps` 仅接受 true/false/'ms'/'s'；单位换算在 Host（core 无时钟，now 由 Host 传入）
@@ -1366,12 +1475,18 @@ fn parse_agg(
 
 /// 构造 `<Name>Deleted` 归档表 schema 定义（字段 = 原字段 + `deletedAt`）。
 /// 归档表与原表同落点 —— 落点不由定义文件携带，改由批次继承主链路（见 `register_batch`）。
-fn archive_defn(obj: &Map<String, Value>, name: &str, collection: &str) -> Value {
+fn archive_defn(obj: &Map<String, Value>, name: &str, collection: &str, main: &Schema) -> Value {
     let mut arch_fields = obj
         .get("fields")
         .and_then(|v| v.as_object())
         .cloned()
         .unwrap_or_default();
+    // N2：主表因 creator 权限**补出**的归属字段不在原始 fields 里，归档表必须继承，
+    // 否则归档 DDL 缺列、归档写入丢归属人（归档模型不再声明 read/write，无法自动补）。
+    let owner = main.owner_key();
+    if main.fields.contains_key(owner) && !arch_fields.contains_key(owner) {
+        arch_fields.insert(owner.to_string(), json!({ "type": "string" }));
+    }
     arch_fields.insert("deletedAt".to_string(), json!({ "type": "number" }));
     // 剔除 `_id` 的自增策略：归档表显式拷贝源行 `_id` 值（upsert-by-_id 幂等），
     // 不走数据库自增；DDL 侧也据此保持归档表 `_id` 为普通主键列

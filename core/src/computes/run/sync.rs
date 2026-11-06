@@ -53,7 +53,8 @@ fn fill_defaults(
 ) {
     let Some(o) = doc.as_object_mut() else { return };
     let mut fill = |key: &str| {
-        let absent = o.get(key).map(|v| v.is_null()).unwrap_or(true);
+        // D2：只有「键确实缺失」才回填默认值；显式 null 是用户写入的清空值，必须可读回
+        let absent = !o.contains_key(key);
         if absent {
             if let Some(d) = cache.field_defaults.get(key) {
                 o.insert(key.to_string(), d.clone());
@@ -91,7 +92,8 @@ fn fill_dot_nested(doc: &mut Value, schema: &Schema, root: &str, sub_path: &str)
     let Some(ro) = root_obj.as_object_mut() else {
         return;
     };
-    let absent = ro.get(sub_path).map(|v| v.is_null()).unwrap_or(true);
+    // D2：显式 null 不视为缺失（三态可区分），仅缺键时补点号子字段默认值
+    let absent = !ro.contains_key(sub_path);
     if absent {
         if let Some(d) = raw_field_default(&sub_def) {
             ro.insert(sub_path.to_string(), d);
@@ -399,6 +401,17 @@ pub fn process_node(
 
     // ① 展平 object 子字段花括号语法 → dot-notation
     flatten_object_fields_impl(fields, relations, schema);
+
+    // D4：展平后仍留下的花括号节点必须是真关系；否则与 planQuery 一致显式报错。
+    // 此前 `arr{ z }`（数组标量字段）被静默丢弃，调用方误以为「该文档没有 arr」。
+    for (rel_name, _) in relations.iter() {
+        if !schema.relations.contains_key(rel_name) {
+            return Err(format!(
+                "关系 \"{}\" 未在 schema \"{}\" 中定义",
+                rel_name, schema.name
+            ));
+        }
+    }
 
     // ② 收集 needed 字段（请求字段 + fn 依赖）与点号字段信息
     let needed = collect_needed(fields, &cache);

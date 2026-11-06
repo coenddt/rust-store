@@ -165,6 +165,44 @@ fn find_one_and_update_options(options: &Value) -> Value {
     Value::Object(m)
 }
 
+/// P10：归属键禁止经 update/updateMany 改写（含点号路径与任何原生操作符）。
+///
+/// 过滤会静默丢弃该键（等于吞掉越权意图），这里改为显式报错：归属键属系统维护，
+/// 用户不能改自己的也不能改他人的。`ctx = None` / `internal` 为系统内部路径，放行。
+pub(in crate::command) fn reject_owner_write(
+    schema: &Schema,
+    ctx: Option<&Context>,
+    data: &Value,
+) -> Result<(), String> {
+    let Some(c) = ctx else { return Ok(()) };
+    if c.internal {
+        return Ok(());
+    }
+    let owner = schema.owner_key();
+    let is_owner_key = |k: &str| k == owner || k.split('.').next() == Some(owner);
+    if let Some(obj) = data.as_object() {
+        // $set 模式：直接字段键
+        let plain = obj.keys().filter(|k| !k.starts_with('$'));
+        if plain.into_iter().any(|k| is_owner_key(k)) {
+            return Err(format!(
+                "ERR_PERMISSION:归属键 {owner} 由系统维护，不允许通过写操作修改"
+            ));
+        }
+        // 原生操作符模式：任一操作符的目标键
+        for (op, payload) in obj.iter().filter(|(k, _)| k.starts_with('$')) {
+            let Some(m) = payload.as_object() else {
+                continue;
+            };
+            if m.keys().any(|k| is_owner_key(k)) {
+                return Err(format!(
+                    "ERR_PERMISSION:归属键 {owner} 由系统维护，不允许通过 {op} 修改"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// update/updateMany 共用：原生操作符模式（`$` 开头的 key 透传 $inc/$unset/$addToSet 等）
 pub(in crate::command) fn build_raw_update(
     registry: &Registry,
@@ -213,6 +251,8 @@ pub(in crate::command) fn build_set_data(
     if let Some(obj) = src.as_object() {
         crate::access::validate_write_values(schema, ctx, obj)?;
     }
+    // D3：object 字段收到非对象值 → 显式报错（否则默认值静默不生效）
+    crate::computes::validate_object_fields(&src, schema)?;
     let mut set_data = object_of(&remove_undefined(&src));
     set_data.remove("_id");
     Ok(set_data)

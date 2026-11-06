@@ -151,12 +151,18 @@ fn bridge(handle: u64) -> Option<BridgeFnRegistry> {
 fn ctx_to_value(ctx: Option<&Context>) -> Value {
     match ctx {
         None => Value::Null,
-        Some(c) => json!({
-            "userId": c.user_id,
-            "roles": c.roles,
-            "role": c.role,
-            "internal": c.internal,
-        }),
+        Some(c) => {
+            let mut m = serde_json::Map::new();
+            m.insert("userId".to_string(), json!(c.user_id));
+            m.insert("roles".to_string(), json!(c.roles));
+            m.insert("role".to_string(), json!(c.role));
+            m.insert("internal".to_string(), json!(c.internal));
+            // X2：accessKeys 清单键必须随 ctx 往返，否则计算列回调拿不到清单
+            for (k, v) in &c.access_lists {
+                m.insert(k.clone(), v.clone());
+            }
+            Value::Object(m)
+        }
     }
 }
 
@@ -164,35 +170,12 @@ fn value_to_ctx(v: &Value) -> Result<Option<Context>, String> {
     if v.is_null() {
         return Ok(None);
     }
-    let obj = v
-        .as_object()
-        .ok_or_else(|| "ctx 必须是对象或 null".to_string())?;
-    let user_id = obj.get("userId").and_then(|x| x.as_str().map(String::from));
-    let roles = match obj.get("roles") {
-        None | Some(Value::Null) => None,
-        Some(Value::Array(a)) => Some(
-            a.iter()
-                .map(|x| {
-                    x.as_str()
-                        .map(String::from)
-                        .ok_or_else(|| "ctx.roles 元素必须是字符串".to_string())
-                })
-                .collect::<Result<Vec<String>, String>>()?,
-        ),
-        Some(_) => return Err("ctx.roles 必须是数组或 null".to_string()),
-    };
-    let role = obj.get("role").and_then(|x| x.as_str().map(String::from));
-    let internal = obj
-        .get("internal")
-        .and_then(|x| x.as_bool())
-        .unwrap_or(false);
-    Ok(Some(Context {
-        user_id,
-        roles,
-        role,
-        internal,
-        ..Default::default()
-    }))
+    if !v.is_object() {
+        return Err("ctx 必须是对象或 null".to_string());
+    }
+    // X5：与 py/node/host 共用同一套解析（accessKeys 清单 + `is_truthy` 的 internal
+    // 语义），此前 FFI 手写解析：internal 只认布尔、其余键一律丢弃。
+    Ok(rust_store_core::permission::context_from_value(v))
 }
 
 /// probe 编码：`"not_probed"` | `"not_found"`（兼容旧串 `"no_result"`）| `{"found": {...}}`
@@ -1030,4 +1013,36 @@ pub unsafe extern "C" fn rcore_finalize_query(
         })?;
         Ok(json!(items))
     })
+}
+#[cfg(test)]
+mod tests {
+    use super::{ctx_to_value, value_to_ctx};
+    use serde_json::json;
+
+    /// X2 / X5：FFI 的 ctx 解析/回填必须与 py/node/host 同语义。
+    #[test]
+    fn ffi_ctx_roundtrip_keeps_access_lists_and_internal_semantics() {
+        // `internal: 1` —— py/node 用 is_truthy 视为 true；旧 FFI 只认 bool → false
+        let v = json!({ "userId": "u1", "roles": ["editor"], "internal": 1, "deptIds": ["d1", 7] });
+        let ctx = value_to_ctx(&v).expect("解析应成功").expect("ctx 非空");
+        assert!(ctx.internal, "internal 必须按 is_truthy 语义");
+        assert_eq!(ctx.access_lists.get("deptIds"), Some(&json!(["d1", 7])));
+
+        // 回填：accessKeys 清单键必须保留（X2 此前丢失）
+        let back = ctx_to_value(Some(&ctx));
+        assert_eq!(
+            back["deptIds"],
+            json!(["d1", 7]),
+            "ctx 回填丢清单键: {back}"
+        );
+        assert_eq!(back["internal"], true);
+
+        // 非法清单形态记入错误表（与 core 一致，不静默）
+        let bad = value_to_ctx(&json!({ "deptIds": "d1" })).unwrap().unwrap();
+        assert!(bad.access_list_errors.contains_key("deptIds"));
+
+        // 非对象仍显式报错
+        assert!(value_to_ctx(&json!("x")).is_err());
+        assert!(value_to_ctx(&serde_json::Value::Null).unwrap().is_none());
+    }
 }

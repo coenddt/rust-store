@@ -2,7 +2,9 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::computes::{apply_defaults_and_computes, apply_field_defaults, DefaultFill, FnRegistry};
+use crate::computes::{
+    apply_computes, apply_field_defaults, validate_object_fields, DefaultFill, FnRegistry,
+};
 use crate::permission::{can_write_schema, evaluate, merge_owner_condition, Context, Doc};
 use crate::rbac::{
     ensure_write, ensure_write_on_doc, filter_writable_data_overlay, merge_row_condition,
@@ -44,7 +46,7 @@ pub fn plan_insert(
     let triggers = super::triggers::expand_triggers(registry, ctx, schema_name, "insert")?;
     let mut plan = json!({
         "command": cmd_insert_one(schema, &doc),
-        "returns": apply_defaults_and_computes(&doc, schema, fn_registry)?,
+        "returns": apply_computes(&doc, schema, fn_registry)?,
     });
     // 未配置触发器时不出现 triggers 键（A2 零回归）
     if !triggers.is_empty() {
@@ -114,12 +116,23 @@ pub(super) fn build_insert_doc(
                 schema.name
             ));
         }
-        if !doc.get(owner).map(is_truthy).unwrap_or(false) {
+        // P10：归属键由系统写入，insert 不得冒充他人。
+        // 有用户身份时**覆盖**显式传入值；无身份时拒绝写入（不静默保留伪造值）。
+        if let Some(c) = ctx.filter(|c| !c.internal) {
+            let uid = c.user_id.clone().filter(|u| !u.is_empty()).ok_or_else(|| {
+                format!("{ERR_NO_WRITE}：creator 权限写入 {owner} 需要 ctx.userId")
+            })?;
+            doc.insert(owner.to_string(), json!(uid));
+        } else if !doc.get(owner).map(is_truthy).unwrap_or(false) {
+            // 内部调用 / 无 ctx：保留显式值；缺省时按原逻辑注入（无身份则不写）
             if let Some(uid) = ctx.and_then(|c| c.user_id.clone()) {
                 doc.insert(owner.to_string(), json!(uid));
             }
         }
     }
+
+    // D3：object 字段收到非对象值 → 显式报错（否则默认值静默不生效）
+    validate_object_fields(&Value::Object(doc.clone()), schema)?;
 
     // 自动时间戳
     if schema.timestamps {
@@ -339,7 +352,9 @@ pub fn check_write_perm(
         }
     }
 
-    if can_write_schema(registry.role_rules(), schema, Some(c)) {
+    if can_write_schema(registry.role_rules(), schema, Some(c))
+        && !crate::permission::write_restricted_to_creator(registry.role_rules(), schema, Some(c))
+    {
         // 静态放行：RBAC 行级 / accessKeys 受控时仍需探针（否则静默放行越权行更新/删除）
         if row_restricted && is_truthy(condition) {
             return match probe {
@@ -414,6 +429,31 @@ pub fn check_write_perm(
         };
     }
     Err(deny_msg.to_string())
+}
+
+/// 写执行条件收口：静态 owner（creator 独占写）+ RBAC 行条件 + accessKeys 行条件
+/// 全部并入最终 filter（P1/P2）。
+///
+/// 探针仍用原始条件做权限判定（越权命中 → 既有 403 错误码与文案不变），
+/// 但**真正执行**的 findOneAndUpdate / deleteMany / updateMany / upsert 必须用
+/// 本函数合入归属与行级条件——否则探针放行后仍可命中他人文档。
+pub(super) fn effective_write_condition(
+    registry: &Registry,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    condition: &Value,
+    action: WriteAction,
+) -> Result<Value, String> {
+    let owner_merged = crate::permission::merge_write_owner_condition(
+        registry.role_rules(),
+        schema,
+        ctx,
+        Some(condition.clone()),
+    );
+    Ok(
+        merge_row_condition(registry, schema, ctx, action.as_str(), owner_merged)?
+            .unwrap_or_else(|| condition.clone()),
+    )
 }
 
 #[cfg(test)]

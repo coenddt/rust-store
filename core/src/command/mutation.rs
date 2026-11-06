@@ -155,7 +155,7 @@ fn plan_mutation_node(
         } else {
             ""
         };
-        let update_doc = build_upsert_update(schema, &filtered_field, new_id, now);
+        let update_doc = build_upsert_update(schema, &filtered_field, new_id, now, ctx);
         let fu_options = json!({ "upsert": true, "returnDocument": "after" });
         cmd_find_one_and_update(
             schema,

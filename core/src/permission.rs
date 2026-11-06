@@ -429,6 +429,60 @@ pub fn merge_owner_condition(
     }
 }
 
+/// 写路径是否被 `creator` 独占：`write` 白名单含 `creator`，且当前有效角色
+/// 未命中任何非 `creator` 写角色（内建 / 豁免 / 无 ctx 除外）。
+///
+/// 该判定是 P1 的根因收口：`can_write_schema` 对 `Doc::Missing` 恒放行 creator，
+/// 因此单条 update/remove 会走「静态放行」分支而不发探针。写路径必须先用本函数
+/// 判定是否需要归属限制（探针 + 行条件注入）。
+pub fn write_restricted_to_creator(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+) -> bool {
+    let Some(c) = ctx else { return false };
+    if c.internal || has_any(c, &rules.exempt_roles) {
+        return false;
+    }
+    let Some(write) = schema.write.as_ref() else {
+        return false;
+    };
+    if !write.iter().any(|r| r == "creator") {
+        return false;
+    }
+    let effective = effective(c);
+    !write
+        .iter()
+        .any(|r| r != "creator" && effective.iter().any(|x| x == r))
+}
+
+/// 写路径归属条件：`creator` 独占写时注入 `owner_key = ctx.userId`。
+///
+/// 与读路径的 [`merge_owner_condition`] 同构，但按 `write` 判定（P1）：此前
+/// update/updateMany/remove/upsert 只做探针、执行时仍用原始条件，导致可改他人数据。
+pub fn merge_write_owner_condition(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    condition: Option<Value>,
+) -> Option<Value> {
+    if !write_restricted_to_creator(rules, schema, ctx) {
+        return condition;
+    }
+    let c = ctx?;
+    let uid = c.user_id.as_deref()?;
+    if uid.is_empty() {
+        return condition;
+    }
+    let mut owner = Map::new();
+    owner.insert(schema.owner_key().to_string(), json!(uid));
+    let owner = Value::Object(owner);
+    match condition.filter(is_truthy) {
+        None => Some(owner),
+        Some(c) => Some(json!({ "$and": [c, owner] })),
+    }
+}
+
 // ─── 字段级过滤（写） ─────────────────────────────────────────
 
 pub fn get_writable_fields(
@@ -438,8 +492,13 @@ pub fn get_writable_fields(
 ) -> Option<HashSet<String>> {
     let c = ctx?;
     let schema_writable = can_write_schema(rules, schema, ctx);
+    let owner_key = schema.owner_key();
     let mut allowed = HashSet::new();
     for (key, field) in &schema.fields {
+        // 归属键由系统写入（insert 注入 / upsert $setOnInsert），不接受用户侧写入（P10）
+        if key == owner_key {
+            continue;
+        }
         match &field.write {
             Some(wl) => {
                 if evaluate(rules, Some(c), Some(wl), Doc::Missing, schema.owner_key()) {

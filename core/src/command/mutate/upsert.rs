@@ -3,15 +3,39 @@
 use serde_json::{json, Map, Value};
 
 use crate::command::cmd::cmd_find_one_and_update;
-use crate::command::write::has_creator_permission;
+use crate::command::write::{effective_write_condition, has_creator_permission};
 use crate::command::write_links::attach_write_links;
 use crate::command::{ensure_context, ERR_NO_WRITE};
+use crate::computes::{apply_field_defaults, DefaultFill};
 use crate::permission::{can_write_schema, Context};
 use crate::rbac::{ensure_write, filter_writable_data_overlay, WriteAction};
 use crate::schema::{Registry, Schema};
 use crate::types::{is_truthy, validate_condition, validate_condition_shape};
 
 use super::{has_trim_str, object_of, remove_undefined};
+
+/// F1：把 schema 显式声明的字段 default 合并进 `$setOnInsert`（只在插入分支生效）。
+///
+/// `$set` 命中的键不补 default（更新已有文档时不得用 default 覆盖现值）；
+/// `$setOnInsert` 已有键（`_id` / 时间戳 / 归属键）保持最高优先级。
+fn merge_insert_defaults(
+    schema: &Schema,
+    set_data: &Map<String, Value>,
+    set_on_insert: &mut Map<String, Value>,
+) {
+    let mut probe = Map::new();
+    for k in set_data.keys().chain(set_on_insert.keys()) {
+        probe.insert(k.clone(), Value::Null);
+    }
+    let filled = apply_field_defaults(&Value::Object(probe), schema, DefaultFill::Insert);
+    if let Some(o) = filled.as_object() {
+        for (k, v) in o {
+            if !set_data.contains_key(k) && !set_on_insert.contains_key(k) {
+                set_on_insert.insert(k.clone(), v.clone());
+            }
+        }
+    }
+}
 
 /// 构建 upsert 条件组（对应 JS `_buildUpsertConditions`，`$or` 数组）：
 /// 1. `data._id` 非空 → `{_id}`；2. unique 索引 keys 在 data 中均非空 → 整组加入
@@ -60,6 +84,7 @@ pub(in crate::command) fn build_upsert_update(
     field_data: &Value,
     new_id: &str,
     now: i64,
+    ctx: Option<&Context>,
 ) -> Value {
     let mut set_data = object_of(&remove_undefined(field_data));
     let mut set_on_insert = Map::new();
@@ -84,15 +109,23 @@ pub(in crate::command) fn build_upsert_update(
     }
     set_data.remove("createdAt");
 
-    // 自动设置归属键（upsert 新文档时）
-    // JS：setOnInsert.<ownerKey> = setOnInsert._id（_id 缺席时为 undefined，JSON 序列化会丢弃该键）
-    // 键名取 schema.owner_key()（ownerKey 自定义时不写 createdBy 字面量）。
+    // 自动设置归属键（upsert 新文档时）：
+    // P4：优先取 ctx.userId（与 insert 一致），无 ctx 时才回落 `_id`
+    // （mutation 的内部调用无用户身份，保留历史语义）。
     let owner = schema.owner_key();
     if has_creator_permission(schema) && !set_on_insert.get(owner).map(is_truthy).unwrap_or(false) {
-        if let Some(v) = set_on_insert.get("_id").cloned() {
+        let owner_value = ctx
+            .and_then(|c| c.user_id.clone())
+            .filter(|u| !u.is_empty())
+            .map(|u| json!(u))
+            .or_else(|| set_on_insert.get("_id").cloned());
+        if let Some(v) = owner_value {
             set_on_insert.insert(owner.to_string(), v);
         }
     }
+
+    // F1：字段 default 只进 $setOnInsert（不覆盖更新分支的现值）
+    merge_insert_defaults(schema, &set_data, &mut set_on_insert);
 
     upsert_update_doc(set_data, set_on_insert)
 }
@@ -122,6 +155,9 @@ pub(in crate::command) fn upsert_one_update(
         set_on_insert.insert("createdAt".to_string(), created);
     }
     set_data.remove("createdAt");
+
+    // F1：字段 default 只进 $setOnInsert（子文档 upsert 同样适用）
+    merge_insert_defaults(schema, &set_data, &mut set_on_insert);
 
     upsert_update_doc(set_data, set_on_insert)
 }
@@ -162,6 +198,15 @@ pub fn plan_upsert(
     }
     // RBAC 表级写判定（upsert 按 Insert 动作判，deny-wins）
     ensure_write(registry, schema, ctx, WriteAction::Insert)?;
+    // P1：creator 独占写必须带可用 userId，否则无法把已有行收窄到本人（禁越权 upsert）
+    if crate::permission::write_restricted_to_creator(registry.role_rules(), schema, ctx)
+        && !ctx
+            .and_then(|c| c.user_id.as_deref())
+            .map(|u| !u.is_empty())
+            .unwrap_or(false)
+    {
+        return Err(ERR_NO_WRITE.to_string());
+    }
 
     let filtered_data = match ctx {
         // RBAC 感知版：静态 writable ∩ RBAC writeFields（无策略时直通静态过滤）
@@ -204,24 +249,39 @@ pub fn plan_upsert(
     }
     set_data.remove("createdAt");
 
-    // 自动设置归属键（JS：setOnInsert._id || condition._id；undefined 键被 JSON 丢弃）
+    // 自动设置归属键：P4 —— upsert 新文档的归属键必须是 ctx.userId（此前误用 `_id`，
+    // 导致 creator 写权限下新建文档的归属人是文档主键而非用户）。
     let owner = schema.owner_key();
     if has_creator_permission(schema) && !set_on_insert.get(owner).map(is_truthy).unwrap_or(false) {
-        let idv = match set_on_insert.get("_id") {
-            Some(v) if is_truthy(v) => Some(v.clone()),
-            _ => condition.get("_id").cloned(),
-        };
-        if let Some(v) = idv {
+        let owner_value = ctx
+            .and_then(|c| c.user_id.clone())
+            .filter(|u| !u.is_empty())
+            .map(|u| json!(u))
+            .or_else(|| {
+                // 无用户身份（内部调用）才回落 _id；undefined 键被 JSON 丢弃
+                match set_on_insert.get("_id") {
+                    Some(v) if is_truthy(v) => Some(v.clone()),
+                    _ => condition.get("_id").cloned(),
+                }
+            });
+        if let Some(v) = owner_value {
             set_on_insert.insert(owner.to_string(), v);
         }
     }
+
+    // F1：字段 default 只进 $setOnInsert（更新分支不覆盖现值）
+    merge_insert_defaults(schema, &set_data, &mut set_on_insert);
 
     let update_doc = upsert_update_doc(set_data, set_on_insert);
     let fu_options = json!({
         "upsert": true,
         "returnDocument": if return_new { "after" } else { "before" },
     });
-    let command = cmd_find_one_and_update(schema, condition, &update_doc, &fu_options);
+    // P1/P2：执行条件合入归属（creator 独占写）与 RBAC/accessKeys 行条件。
+    // 行级语义按 update 判定（命中已有行即为更新；insert 无行级语义）。
+    let eff_condition =
+        effective_write_condition(registry, schema, ctx, condition, WriteAction::Update)?;
+    let command = cmd_find_one_and_update(schema, &eff_condition, &update_doc, &fu_options);
     attach_write_links(
         json!({ "command": command }),
         registry,

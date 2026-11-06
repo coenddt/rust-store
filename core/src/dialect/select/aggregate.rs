@@ -678,7 +678,7 @@ pub(super) fn translate_aggregate(
     }
 
     // ── 拼装 SELECT ──
-    let selected = project_on.unwrap_or_else(|| schema.fields.keys().cloned().collect());
+    let selected = project_on.unwrap_or_else(|| schema.field_names());
     let mut cols_sql = Vec::new();
     let mut columns: Vec<RowCol> = Vec::new();
 

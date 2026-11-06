@@ -21,8 +21,8 @@ mod run;
 
 pub use cache::{ensure_cache, Cache, ComputeEntry};
 pub use defaults::{
-    apply_defaults_and_computes, apply_field_defaults, field_default, fill_nested_defaults,
-    DefaultFill,
+    apply_computes, apply_defaults_and_computes, apply_field_defaults, field_default,
+    fill_nested_defaults, validate_object_fields, DefaultFill,
 };
 pub use inject::{
     collect_field_deps, collect_rel_deps, inject_into_ast, merge_depends_into_ast,

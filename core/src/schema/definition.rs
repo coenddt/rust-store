@@ -191,6 +191,10 @@ pub struct Schema {
     pub id_prefix: String,
     pub timestamps: bool,
     pub fields: HashMap<String, FieldDef>,
+    /// 字段声明顺序（规范化时按 `fields` 定义键序采集，补出的时间戳/归属字段追加在尾）。
+    /// X1：`HashMap` 迭代序随机会让 SQL 列序随进程变化；所有按 schema 字段生成
+    /// 的 SQL 列清单必须走本顺序，保证跨进程 / 跨宿主可复现。
+    pub field_order: Vec<String>,
     pub relations: HashMap<String, RelationDef>,
     /// 保持注册顺序：`build_agg_stages` 的输出顺序依赖它
     pub computes: Vec<(String, ComputeDef)>,
@@ -217,6 +221,15 @@ pub struct Schema {
 }
 
 impl Schema {
+    /// X1：按声明序返回字段名（替代 `fields.keys()` 的随机迭代序）。
+    pub fn field_names(&self) -> Vec<String> {
+        self.field_order
+            .iter()
+            .filter(|k| self.fields.contains_key(k.as_str()))
+            .cloned()
+            .collect()
+    }
+
     pub fn compute(&self, name: &str) -> Option<&ComputeDef> {
         self.computes
             .iter()
@@ -267,6 +280,40 @@ impl Schema {
     }
 }
 
+/// 字段定义允许的键（N4）：未列出的键会被静默丢弃（如 `of`/`comment`），
+/// 注册期必须显式拒绝，避免「写了但没生效」。
+const ALLOWED_FIELD_KEYS: &[&str] = &[
+    "type", "required", "default", "read", "write", "fields", "strategy", "dim", "metric",
+];
+
+/// N4：递归校验字段定义（含嵌套 `fields`）不含未知键。
+fn validate_field_def_keys(prefix: &str, def: &Map<String, Value>) -> Result<(), String> {
+    for k in def.keys() {
+        if !ALLOWED_FIELD_KEYS.contains(&k.as_str()) {
+            return Err(format!(
+                "字段 {prefix} 含未知属性 \"{k}\"（允许：{}）",
+                ALLOWED_FIELD_KEYS.join("/")
+            ));
+        }
+    }
+    if let Some(Value::Object(nested)) = def.get("fields") {
+        for (k, val) in nested {
+            match val {
+                Value::String(_) => {}
+                Value::Object(o) => {
+                    validate_field_def_keys(&format!("{prefix}.{k}"), o)?;
+                }
+                other => {
+                    return Err(format!(
+                        "字段 {prefix}.{k} 定义类型非法（须为类型字符串或对象），实际 {other}"
+                    ))
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// 规范化 fields 定义（字符串简写 → `{type, required:false}`）
 pub(super) fn normalize_fields(v: Option<&Value>) -> Result<HashMap<String, FieldDef>, String> {
     let mut out = HashMap::new();
@@ -287,6 +334,8 @@ pub(super) fn normalize_fields(v: Option<&Value>) -> Result<HashMap<String, Fiel
                 metric: None,
             }
         } else if let Some(o) = val.as_object() {
+            // N4：未知键静默丢弃 → 显式拒绝
+            validate_field_def_keys(key, o)?;
             // 向量属性必须显式提取：未提取的键会被静默丢弃（VR-01 / 取证 3.5）
             let dim = match o.get("dim") {
                 None | Some(Value::Null) => None,

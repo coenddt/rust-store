@@ -4,6 +4,38 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## Unreleased（5.3.x 自检修复，未发版）
+
+### Breaking（权限收紧：归属键与 creator 归属）
+
+- **`ownerKey` 不得为 `_id`**：注册期显式拒绝（此前静默把 `_id` 当归属字段，探针与注入全部失效）；
+  声明的 `ownerKey` 字段类型必须为 `string`，否则注册报错。
+- **归属键只由系统维护**：`insert` 忽略并覆盖客户端传入的 `createdBy`（取 `ctx.userId`，
+  取不到则 `ERR_NO_WRITE`）；`update` / `updateMany` 的 `$set` / `$unset` 若触及归属键
+  （含 `createdBy.x` 点号路径与 `$set` 内操作符）直接报 `ERR_PERMISSION`。
+- **creator 受限写入先探针**：`write: ["creator"]` 的 `update` / `remove` 即使 ctx 有 userId，
+  也先返回 `{needsProbe}`（宿主回喂命中文档后二次规划），执行条件强制并入归属；
+  `updateMany` / `removeMany` 无 userId 报 `ERR_NO_BATCH_WRITE`，单条 `upsert` 无 userId 报 `ERR_NO_WRITE`。
+- **RBAC `ownerOnly` 的 remove/update**：探针命中后执行条件改为「原条件 ∧ 归属」，
+  不再以原始条件下发 `deleteMany` / `updateMany`。
+
+### Fixed（语义一致性）
+
+- **insert 返回 == 落库文档**：`returns` 只补 computes，不再补字段类型零值（此前返回 `views: 0` /
+  `secret: ""` 而库里无该键）；仅显式 `default` 参与落库。
+- **显式 `null` 可读回**：默认值回填只在键**缺失**时生效，`null` 不再被默认值覆盖。
+- **嵌套 object 与数组的默认值规则统一**：object 字段值必须是对象（否则报
+  `字段 {key} 声明为 object，实际值不是对象`），object 内部默认值按缺失键递归回填。
+- **未声明关系报错**：聚合 `$lookup` 引用未在 schema 声明的关系时报错，不再静默丢弃。
+- **upsert `$setOnInsert` 合并字段 `default`**：与 `insert` 对齐，显式传入值优先。
+- **SQL 列序固定**：`writable_cols` / `writable_cols_union` 按 schema 声明序（新增
+  `Schema.field_order`）发射，不再随 `HashMap` 迭代随机。
+- **归档模型继承归属字段**：自动补出的 `ownerKey` 字段随归档 schema 一起下发。
+- **注册规范化**：顶层未知键、字段定义未知键（递归）、`indexes` 非法结构 / 引用不存在的键
+  均注册报错，不再静默丢弃。
+- **FFI ctx 往返**：`accessKeys` 清单键完整往返；`internal` 与 py/node/host 共用
+  `context_from_value`（`is_truthy` 语义），不再各自解析。
+
 ## 5.2.1 (2026-11-02)
 
 ### Fixed（发版 CI 修复，能力不变）

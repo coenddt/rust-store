@@ -106,7 +106,7 @@ pub(in crate::dialect::select) fn projection_fields(
     projection: Option<&Value>,
 ) -> Vec<String> {
     match projection {
-        None | Some(Value::Null) => schema.fields.keys().cloned().collect(),
+        None | Some(Value::Null) => schema.field_names(),
         Some(p) => p
             .as_object()
             .map(|o| {
@@ -118,12 +118,12 @@ pub(in crate::dialect::select) fn projection_fields(
                     .map(|(k, _)| k.clone())
                     .collect();
                 if on.is_empty() {
-                    schema.fields.keys().cloned().collect()
+                    schema.field_names()
                 } else {
                     on
                 }
             })
-            .unwrap_or_else(|| schema.fields.keys().cloned().collect()),
+            .unwrap_or_else(|| schema.field_names()),
     }
 }
 
