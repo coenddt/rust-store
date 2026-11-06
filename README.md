@@ -1,137 +1,78 @@
 # rust-store
 
-**A pure-logic Rust core for multi-backend data access: GQL in, backend-neutral command JSON out, parameterized SQL for MySQL / PostgreSQL / SQLite on request — no driver, no IO, no clock.**
+**多后端数据访问的纯逻辑 Rust 核心：GQL 进，后端无关的命令 JSON 出，按需翻译成 MySQL / PostgreSQL / SQLite 的参数化 SQL —— 无驱动、无 IO、无时钟。**
 
 ![crates.io](https://img.shields.io/crates/v/rust-store-core)
 ![npm](https://img.shields.io/npm/v/rust-store-node)
 ![PyPI](https://img.shields.io/pypi/v/rust-store-py)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
-Current release **5.3.2** — `rust-store-core` on crates.io, `rust-store-node` on npm, `rust-store-py` on PyPI.
+当前发布 **5.3.2** —— crates.io 上是 `rust-store-core`，npm 上是 `rust-store-node`，PyPI 上是 `rust-store-py`。
 
-> Chinese docs: [README.zh-CN.md](./README.zh-CN.md)
+> English: [README.en.md](./README.en.md)
 
-- One query language planned once, executed on MongoDB, MySQL, PostgreSQL or SQLite.
-- Two bindings that only convert JSON, so Node.js and Python cannot drift apart.
-- 380 test functions across 30 files pin the contracts; the engine never opens a connection.
+- 一门查询语言只规划一次，在 MongoDB、MySQL、PostgreSQL、SQLite 上执行。
+- 两个绑定只做 JSON 转换，所以 Node.js 与 Python 不可能各自漂移。
+- 30 个文件、380 个测试函数钉住契约；引擎从不打开连接。
 
 ---
 
-## Two in the morning, one table, two answers
+## 凌晨两点，同一张表，两个答案
 
-Imagine the on-call engineer at 2 a.m., staring at one table, `orders`, and two numbers. The
-MongoDB deployment shows the three most recent items of every order — the view the
-operations team refreshed all day. The PostgreSQL deployment shows all of them. Order
-8841 has 3 items on one side and 11 on the other. 87 orders disagree. Nothing threw an
-exception: both statements parsed, both returned rows, both looked correct in code review.
+设想凌晨两点值班的工程师。他面对同一张 `orders` 表，看到两个数字。
 
-The statement had been written by hand, and during a refactor the clause that limits
-children per parent — a window function partitioned by the foreign key — was dropped.
-The application had no way to notice, because no layer knew that a clause was missing.
-MongoDB had been right all along; the second answer was simply a different question.
+MongoDB 部署显示每张订单最新的三条明细 —— 运营团队刷了一整天的那个视图。PostgreSQL 部署显示全部明细。订单 8841 一边 3 条，另一边 11 条。**87 张订单对不上**。没有异常抛出：两条语句都解析成功，都返回了行，代码评审时都看着正确。
 
-The fix was not a better SQL string. It was to stop hand-writing the second answer. A
-query is now planned once into one canonical shape — MongoDB command JSON — and every
-relational answer is derived from that shape by a pure function that must state, out
-loud, what it could not translate. The **command planner** is the protagonist here; SQL
-is only its shadow. That is what this repository is.
+那条语句是手写的。一次重构里，限制「每个父记录取前 N 条子记录」的那段子句 —— 按外键分区的窗口函数 —— 被删掉了。应用无从发现，因为没有任何一层知道少了一个子句。**MongoDB 一直是对的；第二个答案只是在回答另一个问题。**
 
-## What it actually does
+修法不是写一条更好的 SQL 字符串，而是不再手写第二个答案。一条查询现在只规划一次，落成一种规范形态 —— MongoDB 命令 JSON；每一个关系型答案都由一个纯函数从这形态推导出来，而这个函数必须**大声说明**自己翻译不了什么。
 
-`rust-store-core` turns three inputs — a schema registry, a GQL query or a write
-payload, and an explicit permission context — into inert JSON commands for a host to
-execute. The same commands are then translated, still without touching a database, into
-parameterized SQL for the relational backends. Nothing is buffered, retried or executed
-on your behalf: every public step is an `input -> output` function you can unit-test
-without a server.
+**命令规划器是主角，SQL 只是它的影子。** 这个仓库就是这件事。
 
-| Concern | `rust-store-core` | Host (`nodejs-store` / `py-store` / your service) |
+## 它实际做什么
+
+`rust-store-core` 接收三样输入 —— 一份 schema 注册表、一条 GQL 查询或一份写入载荷、一个显式的权限上下文 —— 产出交给宿主执行的惰性 JSON 命令。同一批命令随后仍然不碰数据库，被翻译成关系型后端的参数化 SQL。没有缓冲、没有重试、没有替你做执行：每个公开步骤都是一个 `input -> output` 函数，不启服务就能单测。
+
+| 关注点 | `rust-store-core` | 宿主（`nodejs-store` / `py-store` / 你的服务） |
 | --- | --- | --- |
-| GQL parsing and validation | yes | — |
-| Command planning (find / aggregate / writes) | yes | — |
-| MongoDB command JSON → SQL translation | yes | — |
-| Flat JOIN rows → nested documents | yes | — |
-| Permission decision (schema, field, relation, row) | yes | — |
-| `agg` computed columns | evaluated inline | — |
-| `fn` / `asyncFn` computed columns | declares and injects dependencies | executes the callbacks |
-| Connection, pool, transaction, retry | — | yes |
-| DDL, indexes, migrations | — | yes |
-| Clock, id generation, randomness | — | yes |
+| GQL 解析与校验 | 是 | — |
+| 命令规划（find / aggregate / 写） | 是 | — |
+| MongoDB 命令 JSON → SQL 翻译 | 是 | — |
+| 平铺 JOIN 行 → 嵌套文档 | 是 | — |
+| 权限判定（schema / 字段 / 关系 / 行） | 是 | — |
+| `agg` 计算列 | 引擎内联求值 | — |
+| `fn` / `asyncFn` 计算列 | 声明并注入依赖 | 执行回调 |
+| 连接、连接池、事务、重试 | — | 是 |
+| DDL、索引、迁移 | — | 是 |
+| 时钟、ID 生成、随机数 | — | 是 |
 
-The output of the read path is a `QueryPlan` — `{ collection, mode, commands,
-postprocess, sort }` — where `commands` is MongoDB command JSON carrying a location
-quadruple (`source`, `database`, `schema`, `collection`) so the host knows which
-connection to use. Writes return a `command` plus the document as it will land, after
-defaults and computed values.
+读路径的输出是一个 `QueryPlan` —— `{ collection, mode, commands, postprocess, sort }`。其中 `commands` 是 MongoDB 命令 JSON，携带一个位置四元组（`source`、`database`、`schema`、`collection`），宿主据此知道该用哪条连接。写入返回一条 `command`，外加文档落库后的样子（已补齐默认值与计算值）。
 
-## How it works
+## 它如何工作
 
-### MongoDB is the canonical dialect
+### MongoDB 是规范方言
 
-Planning happens once, into statements a MongoDB driver already understands: `find`,
-`aggregate`, `countDocuments`, `insertOne`, `updateMany`, `deleteMany`. Relations are
-compiled into `$lookup` / `$addFields` by the engine; `$pipeline` passthrough was
-removed and is a parse error, not a silent no-op. SQL is then produced from that same
-command by `dialect::translate`, with no second query model to keep in sync.
+规划只发生一次，落成 MongoDB 驱动本来就懂的语句：`find`、`aggregate`、`countDocuments`、`insertOne`、`updateMany`、`deleteMany`。关系由引擎编译成 `$lookup` / `$addFields`；`$pipeline` 直通已被移除，出现即解析错误，而不是静默空操作。SQL 再由同一条命令经 `dialect::translate` 产出，不存在第二套需要同步的查询模型。
 
-The translation is where the dialects diverge, and it is confined to one layer:
-PostgreSQL uses `$n` placeholders and `RETURNING`; MySQL and SQLite use `?`; identifiers
-are back-quoted on MySQL and double-quoted elsewhere. Root `$group` / `$having` becomes
-`GROUP BY` / `HAVING`; a relation aggregate predicate becomes `EXISTS` / `NOT EXISTS`;
-a relation-rolling `agg` column becomes a derived-table `LEFT JOIN`; a per-parent top-N
-becomes `ROW_NUMBER() OVER (PARTITION BY fk ORDER BY ...)` — the exact clause whose
-absence started the night.
+方言分歧只发生在翻译这一层：PostgreSQL 用 `$n` 占位符和 `RETURNING`；MySQL 与 SQLite 用 `?`；标识符在 MySQL 上反引号，其余双引号。根级 `$group` / `$having` 变成 `GROUP BY` / `HAVING`；关系聚合谓词变成 `EXISTS` / `NOT EXISTS`；关系滚动的 `agg` 列变成派生表 `LEFT JOIN`；按父取前 N 变成 `ROW_NUMBER() OVER (PARTITION BY fk ORDER BY ...)` —— 正是那个夜里缺失的子句。
 
-### Untranslatable is a receipt, not a guess
+### 翻译不了就出一张回执，不猜
 
-`translate` returns `{ backend, stmts, warnings, unsupported }`. When a segment cannot
-be pushed down safely, `stmts` deliberately omits it and `unsupported` names the code,
-the alias and the reason. The host must reject or degrade; it must never execute the
-statement as if it were the whole query. Two-phase plans use a `PHASE1_IDS` placeholder
-that the host replaces with the ids from the first command, then calls
-`restore_sort_order` to put the final list back in the order the caller asked for.
+`translate` 返回 `{ backend, stmts, warnings, unsupported }`。当某一段无法安全下推时，`stmts` 会刻意省略它，`unsupported` 点名 code、别名与原因。宿主必须拒绝或降级；**绝不能把它当成完整查询去执行**。两阶段计划使用 `PHASE1_IDS` 占位符，由宿主用第一条命令取回的 id 替换，再调用 `restore_sort_order` 把最终列表恢复成调用方要求的顺序。
 
-The core applies the same rule everywhere else: an unknown GQL clause, an out-of-schema
-field, a `$having` without a `$group`, an empty-condition batch write — all raise. There
-is no branch that quietly produces a weaker query.
+同一规则贯穿 core：未知 GQL 子句、schema 外字段、没有 `$group` 的 `$having`、空条件的批量写 —— 全部报错。没有任何分支会悄悄产出一条更弱的查询。
 
-### Permissions are schema data, with an explicit context
+### 权限是 schema 数据，上下文必须显式
 
-Read and write roles are declared per schema, per field, per relation and per computed
-column, and nothing is hard-coded except `internal`. The effective role set is matched
-against the declared lists, an explicit exempt list can bypass them, an explicit
-deny-write list wins, and an RBAC overlay adds table- and row-level restrictions where
-deny beats allow. `creator` is a pseudo-role resolved dynamically as "the document's
-owner key equals `ctx.userId`". Declarative `accessKeys` add row-level filtering: the
-host passes the matching arrays in `ctx`, and the engine merges them into read conditions
-and write validation, pushing `$in` down as native `$in`, `JSON_OVERLAPS`, `&&` or
-`json_each` depending on backend.
+读、写角色按 schema、字段、关系、计算列分别声明，除 `internal` 外没有硬编码。有效角色集与声明清单比对；显式豁免清单可以绕过；显式拒写清单优先；RBAC 叠加层追加表级与行级限制，拒绝压过允许。`creator` 是伪角色，动态解析为「文档的 owner 键等于 `ctx.userId`」。声明式 `accessKeys` 提供行级过滤：宿主在 `ctx` 传入对应数组，引擎把它并入读条件与写校验，并按后端下推为原生 `$in`、`JSON_OVERLAPS`、`&&` 或 `json_each`。
 
-The context is an explicit parameter on every plan call — no async-local storage, no
-implicit ambient user. Omitting it means "no context". `require_context` defaults to off
-for parity with the original implementation; turn it on at startup and pass
-`Context::system()` for genuine internal calls to get fail-secure behaviour.
+上下文是每个规划调用上的显式参数 —— 没有 async-local storage，没有隐式环境用户。省略即「无上下文」。`require_context` 默认为关闭，以对齐原始实现；在启动时打开，并让真正的内部调用传 `Context::system()`，就能得到 fail-secure 行为。
 
-### Three behaviours this release pins down
+### 本版钉死的三个行为
 
-1. **Errors have three states, not two.** A write that needs an ownership probe first
-   returns `needsProbe`; the host runs it and re-enters. If the probe matches no row, the
-   result is `ERR_NOT_FOUND:` — never a permission error, because "deleted" and "not
-   yours" send users to different people. If the row exists but the caller may not touch
-   it, the original permission wording is preserved (`ERR_PERMISSION:ACCESS:` and
-   friends), not re-wrapped into something new.
-2. **`creator` / `owner` permission declares its own field and column.** A schema whose
-   `read` or `write` contains `creator` gets the owner key added at registration time —
-   `createdBy` by default, renamed by `ownerKey`, never `_id`, and an explicit declaration
-   keeps its declared type. Insert then fills the owner from `ctx.userId` when it is not
-   already set, so an explicit owner is never overwritten. The hosts' DDL generators add
-   the column under the same rule, which is why a valid schema cannot reach SQL as an
-   unknown column.
-3. **Schema `default` applies before the row is stored.** The insert path fills only
-   declared defaults for missing keys: an explicit value wins, an explicit `null` is
-   preserved as `null`, and fields without a declared default are not given type zeros.
-   The same rule feeds the returned document, so "what was written" and "what you get
-   back" cannot disagree.
+1. **错误有三种状态，不是两种。** 需要先做归属探测的写操作返回 `needsProbe`；宿主执行后重入。探测匹配不到行，结果是 `ERR_NOT_FOUND:` —— 绝不是权限错误，因为「已删除」和「不是你的」会把用户指向不同的人。行存在但调用方无权触碰时，保留原始权限措辞（`ERR_PERMISSION:ACCESS:` 等），不重新包装。
+2. **`creator` / `owner` 权限自带字段与列。** schema 的 `read` 或 `write` 含 `creator` 时，注册期就补上 owner 键 —— 默认 `createdBy`，可用 `ownerKey` 改名，永不为 `_id`；显式声明则保留声明类型。插入时若尚未设置，就从 `ctx.userId` 填充，显式 owner 永不被覆盖。宿主的 DDL 生成器按同一规则加列，所以合法 schema 不会以未知列的身份到达 SQL。
+3. **schema 的 `default` 在落库前生效。** 插入路径只为缺失的键填声明过的默认值：显式值优先，显式 `null` 保留为 `null`，没有默认值的字段不会补类型零值。同一规则也喂给返回文档，所以「写了什么」与「拿回什么」不可能互相矛盾。
 
 ```mermaid
 flowchart LR
@@ -144,16 +85,15 @@ flowchart LR
   F -- yes --> H[Write command]
 ```
 
-## Running it
+## 跑起来
 
 ```bash
-cargo add rust-store-core     # Rust library, crates.io
-npm i rust-store-node         # Node binding; platform natives ship as optionalDependencies
-pip install rust-store-py     # Python binding, built with maturin
+cargo add rust-store-core     # Rust 库，crates.io
+npm i rust-store-node         # Node 绑定；平台原生包随 optionalDependencies 分发
+pip install rust-store-py     # Python 绑定，maturin 构建
 ```
 
-Register a schema, plan a read, and translate the resulting command for each relational
-backend. This is the public Rust API used by `core/tests/parity_dialect.rs`:
+注册一份 schema、规划一次读取，再把命令翻译到每个关系型后端。下面这段是公开 Rust API，取自 `core/tests/parity_dialect.rs`：
 
 ```rust
 use serde_json::{json, Map};
@@ -183,12 +123,12 @@ fn main() -> Result<(), String> {
         json!({ "status": "paid", "amount": { "$gte": 10 } }),
     );
 
-    // Pure planning: no connection is opened and no clock is read.
+    // 纯规划：不打开连接，不读时钟。
     let plan = plan_query(
         "Order($condition:@c0){ code, amount }",
         &params,
         &registry,
-        Some(&Context::system()), // internal call: permissions pass, owner is not injected
+        Some(&Context::system()), // 内部调用：权限放行，不注入 owner
     )?;
 
     let cmd = plan.commands.first().ok_or("query planned no command")?;
@@ -196,7 +136,7 @@ fn main() -> Result<(), String> {
     for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
         let out = translate(backend, cmd, &registry)?;
         if !out["unsupported"].as_array().map_or(false, |a| a.is_empty()) {
-            // `stmts` omits the unsupported segment: reject or degrade.
+            // `stmts` 已省略不支持的那一段：拒绝或降级。
             eprintln!("{}: incomplete -> {}", backend.as_str(), out["unsupported"]);
             continue;
         }
@@ -207,41 +147,22 @@ fn main() -> Result<(), String> {
 }
 ```
 
-The Node and Python bindings expose the same calls as `planQuery` / `plan_query` and
-`dialectTranslate` / `dialect_translate`, with camelCase and snake_case names
-respectively; method names correspond one-to-one. Errors are thrown by the Node binding
-and raised as Python exceptions, never mixed into the result object.
+Node 与 Python 绑定暴露同样的调用，分别叫 `planQuery` / `plan_query` 与 `dialectTranslate` / `dialect_translate`，camelCase 与 snake_case 一一对应。Node 绑定抛异常，Python 绑定抛 Python 异常，从不把错误混进结果对象。
 
-## Boundaries: when not to use it
+## 边界：什么时候不要用
 
-- **No connection, pool or transaction.** The engine hands back commands. `plan_claim` and
-  `plan_compare_and_set` produce an `atomic_commands` sequence that must run on one
-  connection inside one transaction — ordering, isolation and retry belong to the host.
-- **No DDL and no migrations.** `CREATE TABLE`, `ALTER`, indexes and backfills live in the
-  hosts. Registering a schema validates it; it does not change your database.
-- **No identity, no policy authorship.** It evaluates what the schema declares. It does not
-  know who a user is, does not store users and does not authenticate. `require_context`
-  defaults to off; a service that forgets to turn it on is fail-open by configuration.
-- **No clock, no ids, no randomness.** `now` and `new_id` are supplied by the caller. The
-  `local` evaluator takes collections as JSON and returns documents; persisting them is
-  someone else's job.
-- **Not an ORM.** There are no entities, lazy relations, unit-of-work or change tracking —
-  only plans and commands.
-- **Not a gateway.** Federation planning splits one GQL across sources and returns join
-  edges; executing those sources and merging results stays in the host. Natural-language
-  access is the restricted `text2query` profile, not a general-purpose NL layer.
+- **没有连接、连接池、事务。** 引擎交回命令。`plan_claim` 与 `plan_compare_and_set` 产出 `atomic_commands` 序列，必须在同一连接、同一事务里顺序执行 —— 顺序、隔离与重试归宿主。
+- **没有 DDL，没有迁移。** `CREATE TABLE`、`ALTER`、索引与回填都在宿主。注册 schema 只做校验，不改你的数据库。
+- **没有身份，不写策略。** 它只评估 schema 声明了什么。它不知道用户是谁，不存用户，不做认证。`require_context` 默认关闭；忘记打开的服务在配置层面就是 fail-open。
+- **没有时钟、ID、随机数。** `now` 与 `new_id` 由调用方提供。`local` 求值器把集合当 JSON 收下、返回文档，持久化是别人的事。
+- **不是 ORM。** 没有实体、延迟关系、工作单元、变更追踪 —— 只有计划和命令。
+- **不是网关。** 联邦规划把一条 GQL 拆到多个源并返回 join 边；执行这些源、合并结果留在宿主。自然语言入口是受限的 `text2query` 档，不是通用 NL 层。
 
-## Where it sits in the family
+## 它在家族里的位置
 
-`rust-store` is the engine; [`nodejs-store`](https://github.com/coenddt/nodejs-store) and
-[`py-store`](https://github.com/coenddt/py-store) are the hosts that own drivers,
-transactions and callbacks, while protocol skins such as
-[`store-api`](https://github.com/coenddt/store-api) sit above them. If you only want to
-use the data layer, install one of those hosts — this repository matters when you are
-building, debugging or extending the engine itself, or writing a host for another
-language.
+`rust-store` 是引擎；[`nodejs-store`](https://github.com/coenddt/nodejs-store) 与 [`py-store`](https://github.com/coenddt/py-store) 是持有驱动、事务与回调的宿主；[`store-api`](https://github.com/coenddt/store-api) 这类协议皮坐在它们之上。如果你只想使用数据层，装一个宿主就够了 —— 本仓库在你构建、调试、扩展引擎本身，或为另一种语言写宿主时才重要。
 
-## At a glance
+## 一图看懂
 
 ```mermaid
 flowchart LR
@@ -257,3 +178,5 @@ flowchart LR
   TRANS --> PG[PostgreSQL parameterized SQL]
   TRANS --> SQLITE[SQLite parameterized SQL]
 ```
+
+三句话：查询只规划一次，落成 MongoDB 命令；SQL 由同一条命令纯函数推导，翻译不了就明说；权限和默认值都在规划期钉死，执行永远留给宿主。
