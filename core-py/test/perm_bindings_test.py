@@ -89,3 +89,41 @@ def test_readable_computes_no_read_config_returns_all():
         }
     )
     assert reg.readable_computes("BareDoc", _CTX_USER) == []
+
+
+def test_plan_exists_with_ctx_obeys_read_permission():
+    """exists 带 ctx 的读判据导出契约：read: [] 拒绝、admin 白名单通过、
+    旧入口（无 ctx）保持内部语义。"""
+    reg = Registry()
+    reg.register(
+        {
+            "name": "DenyDoc",
+            "collection": "deny_docs",
+            "timestamps": False,
+            "read": [],
+            "fields": {"title": "string"},
+            "relations": {},
+        }
+    )
+    try:
+        reg.plan_exists_with_ctx("DenyDoc", {"title": "x"}, _CTX_ADMIN)
+    except Exception as e:  # noqa: BLE001 — 断言 machine code 前缀
+        assert "ERR_PERMISSION" in str(e), str(e)
+    else:
+        raise AssertionError("read: [] 必须拒绝 exists")
+
+    reg.register(
+        {
+            "name": "AdminDoc",
+            "collection": "admin_docs",
+            "timestamps": False,
+            "read": ["admin"],
+            "fields": {"title": "string"},
+            "relations": {},
+        }
+    )
+    plan = reg.plan_exists_with_ctx("AdminDoc", {"title": "x"}, _CTX_ADMIN)
+    assert plan["kind"] == "findOne"
+    assert plan["projection"] == {"_id": 1}
+    # 旧入口（ctx=None）保持 fail-open：内部调用不被新判据掐断
+    assert reg.plan_exists("DenyDoc", {"title": "x"})["kind"] == "findOne"

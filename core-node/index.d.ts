@@ -177,6 +177,11 @@ export declare class Registry {
   /** 两阶段查询后按阶段一 `_id` 顺序重排，返回 `{items}` */
   restoreSortOrder(items: Array<any>, ids: Array<any>, sort?: any | undefined | null): any
   planExists(model: string, condition: any, routeOverride?: any | undefined | null): any
+  /**
+   * 带 ctx 的存在性判据：与 `planCount` 同一套读校验（表级白名单 / `read: []` /
+   * RBAC / 归属与行条件），返回结构与 `planExists` 一致（findOne + `{_id:1}`）。
+   */
+  planExistsWithCtx(model: string, condition: any, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
   planCount(model: string, filter?: any | undefined | null, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
   sortsByRelation(sort?: any | undefined | null): boolean
   /**

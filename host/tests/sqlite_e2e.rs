@@ -142,3 +142,47 @@ async fn insert_query_update_remove_e2e() {
         .expect("归档表查询失败");
     assert_eq!(archived.0, "alice");
 }
+
+/// schema 定义导出（协议皮点路径白名单的数据源）：字段类型 + 嵌套 object 的 `fields`
+/// 原样直出，且未知 schema 显式报错（不吞）。
+#[tokio::test]
+async fn schema_definition_exposes_types_and_nested_fields() {
+    let store = Store::connect_sqlite("sqlite::memory:")
+        .await
+        .expect("连接失败");
+    store
+        .register(&json!({
+            "name": "profile",
+            "collection": "profiles",
+            "idPrefix": "pf",
+            "fields": {
+                "name": { "type": "string" },
+                "avatar": {
+                    "type": "object",
+                    "fields": {
+                        "url": { "type": "string" },
+                        "size": { "type": "number" }
+                    }
+                }
+            }
+        }))
+        .expect("注册失败");
+
+    let defn = store.schema_definition("profile").expect("导出失败");
+    assert_eq!(defn["name"], json!("profile"));
+    assert_eq!(defn["fields"]["name"]["type"], json!("string"));
+    assert_eq!(defn["fields"]["avatar"]["type"], json!("object"));
+    assert_eq!(
+        defn["fields"]["avatar"]["fields"]["url"]["type"],
+        json!("string"),
+        "嵌套 object 的 fields 必须原样可见: {defn}"
+    );
+    assert_eq!(
+        defn["fields"]["avatar"]["fields"]["size"]["type"],
+        json!("number")
+    );
+    assert!(
+        store.schema_definition("nope").is_err(),
+        "未声明 schema 必须报错，不得返回空定义"
+    );
+}

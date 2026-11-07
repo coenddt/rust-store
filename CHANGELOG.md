@@ -32,6 +32,21 @@
 - **跨皮影响**：REST / GraphQL / gRPC / MCP 四个协议皮均复用 core 判决，自动继承；
   声明 `read: []` 的模型从「默认可读」变为「不可读」（破坏性变更）。
 
+### Added
+
+- **`plan_exists_with_ctx`（带 ctx 的存在性判据）**：`exists` 此前只走无 ctx 的 `plan_exists`，
+  宿主公开 `exists()` 因此可绕过 `read: []`、读白名单与 RBAC 探测任意条件是否命中。
+  新入口与 `plan_count` 复用同一套读校验（`ensure_context` → `can_read_schema` →
+  `rbac::ensure_read`），并注入静态 owner 条件与 RBAC 行条件；返回结构与旧入口一致
+  （`findOne` + `{_id:1}`）。旧 `plan_exists` 保留为无 ctx 的内部入口（语义不变）。
+  绑定：`core-py::Registry.plan_exists_with_ctx(model, condition, ctx, route_override)`、
+  `core-node::Registry.planExistsWithCtx(model, condition, ctx, routeOverride)`。
+- **host `schema_definition`（schema 只读定义导出）**：协议皮原先只能拿到 `schema_fields`
+  的字段名列表，无法判断点路径是否声明/类型；新增
+  `Store::schema_definition(schema_name) -> Result<Value, String>`，按 `field_order` 输出
+  core `FieldDef` 直出（`type` / `required` / `default` / `read` / `write` / 嵌套 `fields`
+  原始定义 / `strategy` / `dim` / `metric`）。host 只暴露信息，白名单与类型判定语义留在协议皮。
+
 ### Fixed（语义一致性）
 
 - **insert 返回 == 落库文档**：`returns` 只补 computes，不再补字段类型零值（此前返回 `views: 0` /

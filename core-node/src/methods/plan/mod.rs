@@ -10,7 +10,8 @@ use rust_store_core::command::apply_route_override as core_apply_route_override;
 use rust_store_core::command::ensure_route_override_allowed;
 use rust_store_core::command::{
     plan_claim as core_plan_claim, plan_compare_and_set as core_plan_compare_and_set,
-    plan_count as core_plan_count, plan_exists as core_plan_exists, plan_query as core_plan_query,
+    plan_count as core_plan_count, plan_exists as core_plan_exists,
+    plan_exists_with_ctx as core_plan_exists_with_ctx, plan_query as core_plan_query,
     plan_query_one as core_plan_query_one, plan_query_with_count as core_plan_query_with_count,
     resolve_page as core_resolve_page, restore_sort_order as core_restore_sort_order,
     sorts_by_relation as core_sorts_by_relation,
@@ -160,6 +161,22 @@ impl Registry {
         route_override: Option<Value>,
     ) -> Result<Value> {
         let plan = core_plan_exists(&model, &self.core, &condition).map_err(err)?;
+        with_route_override(plan, &route_override, &self.core)
+    }
+
+    /// 带 ctx 的存在性判据：与 `planCount` 同一套读校验（表级白名单 / `read: []` /
+    /// RBAC / 归属与行条件），返回结构与 `planExists` 一致（findOne + `{_id:1}`）。
+    #[napi]
+    pub fn plan_exists_with_ctx(
+        &self,
+        model: String,
+        condition: Value,
+        ctx: Option<Value>,
+        route_override: Option<Value>,
+    ) -> Result<Value> {
+        let context = ctx.as_ref().and_then(context_from_value);
+        let plan = core_plan_exists_with_ctx(&model, &self.core, &condition, context.as_ref())
+            .map_err(err)?;
         with_route_override(plan, &route_override, &self.core)
     }
 

@@ -5,7 +5,9 @@
 
 use serde_json::{json, Value};
 
-use rust_store_core::command::{plan_count, plan_insert, plan_query, plan_upsert};
+use rust_store_core::command::{
+    plan_count, plan_exists, plan_exists_with_ctx, plan_insert, plan_query, plan_upsert,
+};
 use rust_store_core::dialect::{restore_rows_json, translate, Backend};
 use rust_store_core::permission::{Context, UnconfiguredPolicy};
 use rust_store_core::schema::Registry;
@@ -125,6 +127,80 @@ fn b3_count_obeys_rbac_enforce_default_deny() {
     assert!(
         c.is_err(),
         "RBAC enforce 下未受 grant 的角色不得 count: {c:?}"
+    );
+}
+
+// ─── B4：exists 的带 ctx 判据（宿主 exists() 越权旁路的出口） ──
+
+#[test]
+fn b4_exists_legacy_entry_keeps_internal_semantics() {
+    // 旧入口 = ctx=None 的内部调用语义：即使 read: [] 也保持既有 fail-open，
+    // 避免无 ctx 的内部路径（迁移 / 种子）被新判据误掐断。
+    let reg = registry_with(guarded_schema(json!([])));
+    let plan = plan_exists("Doc", &reg, &json!({ "title": "x" })).expect("无 ctx 旧入口应保持可用");
+    assert_eq!(plan["kind"], json!("findOne"), "{plan}");
+}
+
+#[test]
+fn b4_exists_denies_explicit_empty_read_list() {
+    let reg = registry_with(guarded_schema(json!([])));
+    let err = plan_exists_with_ctx("Doc", &reg, &json!({ "title": "x" }), Some(&admin_ctx()))
+        .expect_err("read: [] 表示显式不允许任何角色，exists 不得放行");
+    assert!(err.contains("ERR_PERMISSION"), "{err}");
+}
+
+#[test]
+fn b4_exists_denies_role_outside_read_whitelist() {
+    let reg = registry_with(guarded_schema(json!(["admin"])));
+    let err = plan_exists_with_ctx("Doc", &reg, &json!({ "title": "x" }), Some(&user_ctx()))
+        .expect_err("未命中 read 白名单的角色不得 exists");
+    assert!(err.contains("ERR_PERMISSION"), "{err}");
+}
+
+#[test]
+fn b4_exists_obeys_rbac_enforce_default_deny() {
+    let mut reg = registry_with(json!({
+        "name": "Post",
+        "collection": "posts",
+        "idPrefix": "p",
+        "timestamps": false,
+        "fields": { "title": { "type": "string" } },
+        "relations": {}
+    }));
+    reg.set_rbac(Some(&json!({
+        "mode": "enforce",
+        "roles": { "user": {} },
+        "grants": []
+    })))
+    .expect("策略应合法");
+    let err = plan_exists_with_ctx("Post", &reg, &json!({}), Some(&user_ctx()))
+        .expect_err("RBAC enforce 下未受 grant 的角色不得 exists");
+    assert!(err.contains("ERR_PERMISSION"), "{err}");
+}
+
+#[test]
+fn b4_exists_allows_authorized_and_keeps_return_shape() {
+    let reg = registry_with(guarded_schema(json!(["admin"])));
+    let plan = plan_exists_with_ctx("Doc", &reg, &json!({ "title": "x" }), Some(&admin_ctx()))
+        .expect("admin 应可 exists");
+    assert_eq!(plan["kind"], json!("findOne"), "{plan}");
+    assert_eq!(plan["projection"], json!({ "_id": 1 }), "{plan}");
+    // 返回结构与旧入口一致（kind / collection / projection 三键对齐）
+    let legacy = plan_exists("Doc", &reg, &json!({ "title": "x" })).expect("旧入口可用");
+    assert_eq!(plan["kind"], legacy["kind"]);
+    assert_eq!(plan["collection"], legacy["collection"]);
+    assert_eq!(plan["projection"], legacy["projection"]);
+}
+
+#[test]
+fn b4_exists_injects_owner_condition_for_creator_read() {
+    let reg = registry_with(owner_schema());
+    let plan = plan_exists_with_ctx("Note", &reg, &json!({ "body": "x" }), Some(&user_ctx()))
+        .expect("creator 读应可 exists");
+    assert_eq!(
+        plan["filter"],
+        json!({ "$and": [{ "body": "x" }, { "createdBy": "u1" }] }),
+        "存在性只能看见自己读得到的行: {plan}"
     );
 }
 
