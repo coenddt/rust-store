@@ -140,9 +140,8 @@ fn op_assignments(
         let qc = binder.backend.pcol(&col);
         match op {
             "$set" => {
-                if v.is_null() {
-                    continue;
-                }
+                // F-07 三态：显式 null = 「键存在、值为 NULL」，必须落列并标记 __present，
+                // 不得跳过（跳过会让 $set:{a:null} 静默变成「不更新 a」，且与 insert 不一致）。
                 let ph = super::bind_col(binder, schema, &col, v)?;
                 assigns.push(format!("{} = {}", qc, ph));
                 if !set_fields.contains(&col) {

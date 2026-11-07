@@ -5,7 +5,9 @@ use serde_json::{json, Map, Value};
 use crate::computes::{
     apply_computes, apply_field_defaults, validate_object_fields, DefaultFill, FnRegistry,
 };
-use crate::permission::{can_write_schema, evaluate, merge_owner_condition, Context, Doc};
+use crate::permission::{
+    can_read_schema, can_write_schema, evaluate, merge_owner_condition, Context, Doc,
+};
 use crate::rbac::{
     ensure_write, ensure_write_on_doc, filter_writable_data_overlay, merge_row_condition,
     probe_condition_fields, WriteAction,
@@ -17,7 +19,7 @@ use crate::types::{
 
 use super::cmd::{cmd_count_documents, cmd_find_one, cmd_insert_one};
 use super::write_links::attach_write_links;
-use super::{ensure_context, ERR_NOT_FOUND, ERR_NO_WRITE};
+use super::{ensure_context, ERR_NOT_FOUND, ERR_NO_WRITE, ERR_PERMISSION};
 
 /// 生成插入命令（对应 JS `insert`）
 ///
@@ -194,7 +196,15 @@ pub fn plan_count(
         // 条件拒绝名单（缺陷 D-02）
         validate_condition(f)?;
     }
+    ensure_context(registry, ctx)?;
     let schema = registry.get(schema_name)?;
+    // 表级读判据必须与 query 单点一致：`read: []`（显式拒绝）与未授权白名单
+    // 都不得改用 countDocuments 绕过（否则可数出全表行数）。
+    if ctx.is_some() && !can_read_schema(registry.role_rules(), schema, ctx) {
+        return Err(ERR_PERMISSION.to_string());
+    }
+    // RBAC 表级读判定（deny-wins，叠加于静态白名单之后）
+    crate::rbac::ensure_read(registry, schema, ctx)?;
     // §11.4（D2）：与 pipeline 读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
     if let Some(f) = filter {
         validate_condition_shape(schema, f, registry.profile())?;

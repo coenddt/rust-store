@@ -120,17 +120,11 @@ pub(in crate::command) fn is_blank_condition(v: &Value) -> bool {
     }
 }
 
-/// JS `_removeUndefined`：剔除对象中的 null 值（JSON 无 undefined），返回新对象
-pub(in crate::command) fn remove_undefined(obj: &Value) -> Value {
-    match obj.as_object() {
-        Some(o) => Value::Object(
-            o.iter()
-                .filter(|(_, v)| !v.is_null())
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        ),
-        None => obj.clone(),
-    }
+/// 写路径数据清洗（F-07 三态）：JSON 边界不存在 JS 的 `undefined`，因此这里**不得**
+/// 把 `null` 当作 undefined 删除——显式 `null` 是「键存在、值为 null」的独立状态，
+/// 删除它会让 `$set: {a: null}` 静默变成「不更新 a」。
+pub(in crate::command) fn keep_explicit_nulls(obj: &Value) -> Value {
+    obj.clone()
 }
 
 /// JS `v && String(v).trim()`：真值且（若为字符串）trim 后非空
@@ -220,7 +214,7 @@ pub(in crate::command) fn build_raw_update(
             if let Some(obj) = filtered.as_object() {
                 crate::access::validate_write_values(schema, ctx, obj)?;
             }
-            data["$set"] = remove_undefined(&filtered);
+            data["$set"] = keep_explicit_nulls(&filtered);
         }
     }
     // accessKeys：其余原生操作符（$unset/$inc/...）不得改写受控字段
@@ -253,7 +247,7 @@ pub(in crate::command) fn build_set_data(
     }
     // D3：object 字段收到非对象值 → 显式报错（否则默认值静默不生效）
     crate::computes::validate_object_fields(&src, schema)?;
-    let mut set_data = object_of(&remove_undefined(&src));
+    let mut set_data = object_of(&keep_explicit_nulls(&src));
     set_data.remove("_id");
     Ok(set_data)
 }

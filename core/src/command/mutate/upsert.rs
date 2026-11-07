@@ -1,4 +1,4 @@
-//! Upsert 路径：显式条件 upsert + mutation 复用的 upsert 更新文档构建。
+﻿//! Upsert 路径：显式条件 upsert + mutation 复用的 upsert 更新文档构建。
 
 use serde_json::{json, Map, Value};
 
@@ -12,7 +12,7 @@ use crate::rbac::{ensure_write, filter_writable_data_overlay, WriteAction};
 use crate::schema::{Registry, Schema};
 use crate::types::{is_truthy, validate_condition, validate_condition_shape};
 
-use super::{has_trim_str, object_of, remove_undefined};
+use super::{has_trim_str, object_of};
 
 /// F1：把 schema 显式声明的字段 default 合并进 `$setOnInsert`（只在插入分支生效）。
 ///
@@ -20,19 +20,29 @@ use super::{has_trim_str, object_of, remove_undefined};
 /// `$setOnInsert` 已有键（`_id` / 时间戳 / 归属键）保持最高优先级。
 fn merge_insert_defaults(
     schema: &Schema,
-    set_data: &Map<String, Value>,
+    set_data: &mut Map<String, Value>,
     set_on_insert: &mut Map<String, Value>,
 ) {
-    let mut probe = Map::new();
-    for k in set_data.keys().chain(set_on_insert.keys()) {
-        probe.insert(k.clone(), Value::Null);
+    // probe 必须携带**真实值**（此前一律填 Null，导致显式传入的嵌套 object 被当成
+    // 非对象、递归默认值失效）：`$set` 里用户显式提供的 object 也应按 insert 语义
+    // 递归补声明默认，否则同一入参在 insert / upsert 两个入口落库形状不同。
+    // `$setOnInsert` 的键只需占位（不得据此递归）。
+    let mut probe = set_data.clone();
+    for k in set_on_insert.keys() {
+        probe.entry(k.clone()).or_insert(Value::Null);
     }
     let filled = apply_field_defaults(&Value::Object(probe), schema, DefaultFill::Insert);
-    if let Some(o) = filled.as_object() {
-        for (k, v) in o {
-            if !set_data.contains_key(k) && !set_on_insert.contains_key(k) {
-                set_on_insert.insert(k.clone(), v.clone());
+    let Some(o) = filled.as_object() else {
+        return;
+    };
+    for (k, v) in o {
+        if let Some(slot) = set_data.get_mut(k) {
+            // 只回写「对象被补了子字段」的情形；标量用户值原样保留
+            if slot.is_object() && *slot != *v {
+                *slot = v.clone();
             }
+        } else if !set_on_insert.contains_key(k) {
+            set_on_insert.insert(k.clone(), v.clone());
         }
     }
 }
@@ -86,7 +96,7 @@ pub(in crate::command) fn build_upsert_update(
     now: i64,
     ctx: Option<&Context>,
 ) -> Value {
-    let mut set_data = object_of(&remove_undefined(field_data));
+    let mut set_data = object_of(field_data);
     let mut set_on_insert = Map::new();
 
     // _id：有则 $setOnInsert（不 $set，避免修改已有文档的 _id）
@@ -125,7 +135,7 @@ pub(in crate::command) fn build_upsert_update(
     }
 
     // F1：字段 default 只进 $setOnInsert（不覆盖更新分支的现值）
-    merge_insert_defaults(schema, &set_data, &mut set_on_insert);
+    merge_insert_defaults(schema, &mut set_data, &mut set_on_insert);
 
     upsert_update_doc(set_data, set_on_insert)
 }
@@ -137,7 +147,7 @@ pub(in crate::command) fn upsert_one_update(
     new_id: &str,
     now: i64,
 ) -> Value {
-    let mut set_data = object_of(&remove_undefined(data));
+    let mut set_data = object_of(data);
     let mut set_on_insert = Map::new();
 
     if let Some(id) = set_data.get("_id").cloned() {
@@ -157,7 +167,7 @@ pub(in crate::command) fn upsert_one_update(
     set_data.remove("createdAt");
 
     // F1：字段 default 只进 $setOnInsert（子文档 upsert 同样适用）
-    merge_insert_defaults(schema, &set_data, &mut set_on_insert);
+    merge_insert_defaults(schema, &mut set_data, &mut set_on_insert);
 
     upsert_update_doc(set_data, set_on_insert)
 }
@@ -225,7 +235,7 @@ pub fn plan_upsert(
         .map(is_truthy)
         .unwrap_or(true);
 
-    let mut set_data = object_of(&remove_undefined(&filtered_data));
+    let mut set_data = object_of(&filtered_data);
     let mut set_on_insert = Map::new();
 
     // _id：从 data 移到 $setOnInsert（不 $set，避免修改已有文档的 _id）
@@ -269,8 +279,8 @@ pub fn plan_upsert(
         }
     }
 
-    // F1：字段 default 只进 $setOnInsert（更新分支不覆盖现值）
-    merge_insert_defaults(schema, &set_data, &mut set_on_insert);
+    // F1：字段 default 只进 $setOnInsert（更新分支不覆盖现值）；显式 object 递归补
+    merge_insert_defaults(schema, &mut set_data, &mut set_on_insert);
 
     let update_doc = upsert_update_doc(set_data, set_on_insert);
     let fu_options = json!({

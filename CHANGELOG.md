@@ -51,6 +51,16 @@
   前缀扩展键（`x-graphql` / `x-grpc` / `x-mcp` 等协议适配注记）。
 - **FFI ctx 往返**：`accessKeys` 清单键完整往返；`internal` 与 py/node/host 共用
   `context_from_value`（`is_truthy` 语义），不再各自解析。
+- **count 与 query 共用读判据**：`plan_count` 此前不做表级读校验，`read: []` 或未命中白名单的角色
+  仍可 `countDocuments` 数出全表行数（RBAC enforce 的 default deny 同样被绕过）；现与 query 一致走
+  `can_read_schema` + `rbac::ensure_read`。
+- **显式 `null` 在 update / upsert 不再被丢弃**：`remove_undefined` 把 JSON `null` 当 JS `undefined`
+  删除、dialect 的 `$set` 又对 null `continue`，导致 `$set: {a: null}` 既不落 NULL 也不进
+  `__present`；现落 `a = ?`（绑 NULL）并标记存在性，与 insert 的三态语义一致。
+- **upsert 显式 object 递归补默认**：`$setOnInsert` 的探测 probe 一律填 null，显式传入的嵌套 object
+  无法补声明默认；现按真实值探测（同一路径仍只落 `$set`，避免 Mongo 同路径冲突）。
+- **FFI 单测恢复执行**：`core-ffi` 的 `test = false` 使 C 边界单测从未运行；已开启并补
+  `rcore_translate_name` 的 ABI 契约（正常往返 / 空指针 / 非法 UTF-8 / 未知 backend）。
 
 ## 5.2.1 (2026-11-02)
 
