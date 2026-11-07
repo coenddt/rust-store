@@ -58,6 +58,13 @@ impl Registry {
         self.core.has(name)
     }
 
+    /// 注销 schema（含注册期自动派生的 `<Name>Deleted` 归档表）。
+    /// 未知 name **幂等成功**（回滚清单可整份重放）；非 base 策略视图调用抛
+    /// `ERR_POLICY_VIEW_READONLY`。
+    fn unregister(&mut self, name: &str) -> PyResult<()> {
+        self.core.unregister(name).map_err(err)
+    }
+
     fn list(&self) -> Vec<String> {
         self.core.list()
     }

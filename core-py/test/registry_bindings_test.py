@@ -52,3 +52,48 @@ def test_clear_schemas_drops_schemas_keeps_switches():
         }
     )
     assert reg.has("C")
+
+
+def test_unregister_drops_schema_and_archive_idempotently():
+    reg = Registry()
+    reg.register(
+        {
+            "name": "C",
+            "collection": "cs",
+            "timestamps": False,
+            "fields": {"a": "string"},
+            "relations": {},
+        }
+    )
+    assert reg.list() == ["C", "CDeleted"]
+
+    reg.unregister("C")
+    assert not reg.has("C")
+    assert not reg.has("CDeleted"), "派生归档表必须随主项清理"
+    assert reg.list() == []
+
+    reg.unregister("C")  # 未知 ⇒ 幂等成功（回滚清单可整份重放）
+    assert reg.list() == []
+
+
+def test_plan_exists_with_ctx_denies_role_outside_whitelist():
+    reg = Registry()
+    reg.register(
+        {
+            "name": "Locked",
+            "collection": "locked",
+            "timestamps": False,
+            "read": ["admin"],
+            "fields": {"a": "string"},
+            "relations": {},
+        }
+    )
+    try:
+        reg.plan_exists_with_ctx("Locked", {"a": "x"}, {"userId": "u1", "roles": ["user"]})
+    except RuntimeError as e:  # PyO3 异常 → RuntimeError
+        assert "ERR_PERMISSION" in str(e), str(e)
+    else:
+        raise AssertionError("未命中 read 白名单必须拒绝 exists")
+    # 命中白名单 ⇒ 放行，且返回结构与旧入口一致
+    plan = reg.plan_exists_with_ctx("Locked", {"a": "x"}, {"userId": "a1", "roles": ["admin"]})
+    assert plan["kind"] == "findOne"

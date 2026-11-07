@@ -148,6 +148,18 @@ impl Store {
         w.register(defn)
     }
 
+    /// 注销一个 schema（含 core 注册期自动派生的 `<Name>Deleted` 归档表）。
+    ///
+    /// 语义与 core [`Registry::unregister`] 一致：未知 name **幂等成功**（回滚清单可整份
+    /// 重放）；版本号随项删除，同名重注册从 1 重新计数；非 base 视图的写操作不经过本方法。
+    pub fn unregister(&self, schema_name: &str) -> Result<(), String> {
+        let mut w = self
+            .registry
+            .write()
+            .map_err(|_| "registry 写锁中毒".to_string())?;
+        w.unregister(schema_name)
+    }
+
     /// 开关「必须带上下文」（core `ensure_context`；默认关闭 = fail-open，与双宿主一致）
     pub fn set_require_context(&self, require: bool) {
         if let Ok(mut w) = self.registry.write() {
@@ -245,6 +257,40 @@ impl Store {
     pub fn schema_fields(&self, schema_name: &str) -> Result<Vec<String>, String> {
         exec::with_registry(&self.registry, |reg| {
             Ok(reg.get(schema_name)?.fields.keys().cloned().collect())
+        })
+    }
+
+    /// schema 定义（只读导出）：字段类型 + 嵌套 object 的 `fields` 原始定义。
+    ///
+    /// 与 core `Schema` / `FieldDef` 同源，直接取自注册表，**不另建 schema 模型**；
+    /// 本方法只做信息暴露，白名单 / 点路径语义由协议皮自行判定。
+    /// 5.x 分支尚未跟踪字段声明序（`field_order` 属主干的大版本改动），故键序为
+    /// 注册表内部序，**不保证跨进程稳定**；调用方须按名取键，不得依赖迭代顺序。
+    pub fn schema_definition(&self, schema_name: &str) -> Result<Value, String> {
+        exec::with_registry(&self.registry, |reg| {
+            let schema = reg.get(schema_name)?;
+            let mut fields = Map::new();
+            for (key, f) in &schema.fields {
+                fields.insert(
+                    key.clone(),
+                    json!({
+                        "type": f.field_type.clone(),
+                        "required": f.required,
+                        "default": f.default.clone(),
+                        "read": f.read.clone(),
+                        "write": f.write.clone(),
+                        "fields": f.fields.clone(),
+                        "strategy": f.strategy.clone(),
+                        "dim": f.dim,
+                        "metric": f.metric.clone(),
+                    }),
+                );
+            }
+            Ok(json!({
+                "name": schema.name.clone(),
+                "collection": schema.collection.clone(),
+                "fields": Value::Object(fields),
+            }))
         })
     }
 

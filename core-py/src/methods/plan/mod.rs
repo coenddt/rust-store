@@ -9,7 +9,8 @@ use rust_store_core::command::apply_route_override as core_apply_route_override;
 use rust_store_core::command::ensure_route_override_allowed;
 use rust_store_core::command::{
     plan_claim as core_plan_claim, plan_compare_and_set as core_plan_compare_and_set,
-    plan_count as core_plan_count, plan_exists as core_plan_exists, plan_query as core_plan_query,
+    plan_count as core_plan_count, plan_exists as core_plan_exists,
+    plan_exists_with_ctx as core_plan_exists_with_ctx, plan_query as core_plan_query,
     plan_query_one as core_plan_query_one, plan_query_with_count as core_plan_query_with_count,
     resolve_page as core_resolve_page, restore_sort_order as core_restore_sort_order,
     sorts_by_relation as core_sorts_by_relation,
@@ -213,6 +214,34 @@ impl Registry {
             _ => None,
         };
         let out = core_plan_exists(&model, &self.core, &condition).map_err(err)?;
+        to_py(
+            py,
+            with_route_override(out, ro.as_ref(), &self.core).map_err(err)?,
+        )
+    }
+
+    /// 带 ctx 的存在性判据：与 `plan_count` 同一套读校验（表级白名单 / `read: []` /
+    /// RBAC / 归属与行条件），返回结构与 `plan_exists` 一致（findOne + `{_id:1}`）。
+    #[pyo3(signature = (model, condition=None, ctx=None, route_override=None))]
+    fn plan_exists_with_ctx(
+        &self,
+        py: Python<'_>,
+        model: String,
+        condition: Option<&Bound<'_, PyAny>>,
+        ctx: Option<&Bound<'_, PyAny>>,
+        route_override: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let condition = match condition {
+            Some(v) if !v.is_none() => py_to_json(v)?,
+            _ => Value::Object(Map::new()),
+        };
+        let context = ctx_from(ctx)?;
+        let ro = match route_override {
+            Some(v) if !v.is_none() => Some(py_to_json(v)?),
+            _ => None,
+        };
+        let out = core_plan_exists_with_ctx(&model, &self.core, &condition, context.as_ref())
+            .map_err(err)?;
         to_py(
             py,
             with_route_override(out, ro.as_ref(), &self.core).map_err(err)?,

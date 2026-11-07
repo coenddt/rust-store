@@ -3,7 +3,9 @@
 use serde_json::{json, Map, Value};
 
 use crate::computes::{apply_defaults_and_computes, apply_field_defaults, DefaultFill, FnRegistry};
-use crate::permission::{can_write_schema, evaluate, merge_owner_condition, Context, Doc};
+use crate::permission::{
+    can_read_schema, can_write_schema, evaluate, merge_owner_condition, Context, Doc,
+};
 use crate::rbac::{
     ensure_write, ensure_write_on_doc, filter_writable_data_overlay, merge_row_condition,
     probe_condition_fields, WriteAction,
@@ -15,7 +17,7 @@ use crate::types::{
 
 use super::cmd::{cmd_count_documents, cmd_find_one, cmd_insert_one};
 use super::write_links::attach_write_links;
-use super::{ensure_context, ERR_NOT_FOUND, ERR_NO_WRITE};
+use super::{ensure_context, ERR_NOT_FOUND, ERR_NO_WRITE, ERR_PERMISSION};
 
 /// 生成插入命令（对应 JS `insert`）
 ///
@@ -145,15 +147,45 @@ pub(super) fn build_insert_doc(
     )
 }
 
-/// 判断存在性（对应 JS `exists`）
+/// 判断存在性（对应 JS `exists`）——**无 ctx 的旧入口**，等价
+/// [`plan_exists_with_ctx`] 传 `ctx = None`（内部调用语义，保持既有行为）。
+///
+/// 宿主面向终端用户的 `exists()` 必须改调 [`plan_exists_with_ctx`]：本入口无法
+/// 表达调用方身份，`read: []` / 读白名单 / RBAC 均不会生效（越权旁路）。
 pub fn plan_exists(
     schema_name: &str,
     registry: &Registry,
     condition: &Value,
 ) -> Result<Value, String> {
+    plan_exists_with_ctx(schema_name, registry, condition, None)
+}
+
+/// 带 ctx 的存在性判据（对应宿主 `exists()` 的合法入口）。
+///
+/// 读校验与 [`plan_count`] 单点一致，逐层判定：
+/// 1. `ensure_context`：注册表要求上下文时无 ctx 直接拒绝；
+/// 2. `can_read_schema`：表级读白名单（`read: []` 为显式拒绝）；
+/// 3. `rbac::ensure_read`：RBAC 表级 deny-wins；
+/// 4. 条件形状 / 关系谓词校验（与旧入口一致）；
+/// 5. 注入静态 owner 条件与 RBAC 行条件 —— 存在性只能看见「自己读得到的行」。
+///
+/// 返回结构与 [`plan_exists`] 完全一致：`findOne` 命令 + `{_id: 1}` 投影。
+pub fn plan_exists_with_ctx(
+    schema_name: &str,
+    registry: &Registry,
+    condition: &Value,
+    ctx: Option<&Context>,
+) -> Result<Value, String> {
     // 条件拒绝名单（缺陷 D-02）
     validate_condition(condition)?;
+    ensure_context(registry, ctx)?;
     let schema = registry.get(schema_name)?;
+    // 表级读判据（与 query / count 同码）：`read: []` 与未命中白名单都不得放行
+    if ctx.is_some() && !can_read_schema(registry.role_rules(), schema, ctx) {
+        return Err(ERR_PERMISSION.to_string());
+    }
+    // RBAC 表级读判定（deny-wins，叠加于静态白名单之后）
+    crate::rbac::ensure_read(registry, schema, ctx)?;
     // §11.4（D2）：与 pipeline 读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
     validate_condition_shape(schema, condition, registry.profile())?;
     // §9.6 关系聚合谓词无法用标量 `findOne` 表达 → 显式 Err（否则 Mongo 静默给错结果）
@@ -164,7 +196,12 @@ pub fn plan_exists(
                 .to_string(),
         );
     }
-    Ok(cmd_find_one(schema, condition, Some(&json!({ "_id": 1 }))))
+    // 静态 owner 条件 + RBAC 行条件（两引擎 $and，deny-wins）
+    let owner_merged =
+        merge_owner_condition(registry.role_rules(), schema, ctx, Some(condition.clone()));
+    let filter = merge_row_condition(registry, schema, ctx, "read", owner_merged)?
+        .unwrap_or_else(|| json!({}));
+    Ok(cmd_find_one(schema, &filter, Some(&json!({ "_id": 1 }))))
 }
 
 /// 统计数量（对应 JS `count`）：filter 为 nullish 时用 `{}`

@@ -142,3 +142,63 @@ async fn insert_query_update_remove_e2e() {
         .expect("归档表查询失败");
     assert_eq!(archived.0, "alice");
 }
+
+#[tokio::test]
+async fn schema_definition_exposes_types_and_nested_fields() {
+    let store = Store::connect_sqlite("sqlite::memory:")
+        .await
+        .expect("连接失败");
+    store
+        .register(&json!({
+            "name": "doc",
+            "collection": "doc",
+            "idPrefix": "d",
+            "timestamps": false,
+            "fields": {
+                "title": { "type": "string" },
+                "meta": {
+                    "type": "object",
+                    "fields": { "tag": { "type": "string" } }
+                }
+            }
+        }))
+        .expect("注册失败");
+
+    let def = store.schema_definition("doc").expect("定义应可导出");
+    assert_eq!(def["name"], "doc");
+    assert_eq!(def["collection"], "doc");
+    assert_eq!(def["fields"]["title"]["type"], "string");
+    assert_eq!(
+        def["fields"]["meta"]["fields"]["tag"]["type"], "string",
+        "嵌套 object 的原始定义必须直出: {def}"
+    );
+    // 未知 schema ⇒ 显式 Err（禁静默空对象）
+    assert!(store.schema_definition("nope").is_err());
+}
+
+#[tokio::test]
+async fn unregister_drops_schema_and_archive_idempotently() {
+    let store = Store::connect_sqlite("sqlite::memory:")
+        .await
+        .expect("连接失败");
+    store
+        .register(&json!({
+            "name": "tmp",
+            "collection": "tmp",
+            "timestamps": false,
+            "fields": { "a": { "type": "string" } }
+        }))
+        .expect("注册失败");
+    assert!(store.schema_fields("tmp").is_ok());
+
+    store.unregister("tmp").expect("注销失败");
+    assert!(store.schema_fields("tmp").is_err(), "主项应不可见");
+    assert!(
+        store.schema_fields("tmpDeleted").is_err(),
+        "派生归档表必须随主项清理"
+    );
+
+    // 未知 name ⇒ 幂等成功（宿主 start() 回滚清单可整份重放）
+    store.unregister("tmp").expect("未知 name 应幂等成功");
+    store.unregister("never").expect("从未注册也应幂等成功");
+}

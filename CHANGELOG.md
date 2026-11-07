@@ -4,6 +4,19 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## Unreleased（5.x 维护分支，仅加法）
+
+### Added（非破坏性：纯新增符号，现有下游无需改代码/配置）
+
+- **`Registry::unregister(name)`**：注销 schema（含注册期自动派生的 `<Name>Deleted` 归档表）。
+  未知 name 幂等成功（宿主 `start()` 失败回滚清单可整份重放）；版本号随项删除，同名重注册从 1
+  计数；策略视图调用返回 `ERR_POLICY_VIEW_READONLY`。经 core-py / core-node / host 同步导出。
+- **`plan_exists_with_ctx(...)`**：带 ctx 的存在性判据，与 `plan_count` 同一套读校验
+  （表级白名单 / RBAC / 归属与行条件），关闭宿主 `exists()` 的越权旁路；旧 `plan_exists` 保留
+  为内部语义（`ctx = None`）。
+- **`Store::schema_definition(name)`**（host）：只读导出字段类型与嵌套 `fields` 原始定义，
+  供协议皮判定点路径声明与类型。5.x 无字段声明序跟踪，键序不保证跨进程稳定。
+
 ## 5.2.1 (2026-11-02)
 
 ### Fixed（发版 CI 修复，能力不变）

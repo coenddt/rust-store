@@ -177,6 +177,11 @@ export declare class Registry {
   /** 两阶段查询后按阶段一 `_id` 顺序重排，返回 `{items}` */
   restoreSortOrder(items: Array<any>, ids: Array<any>, sort?: any | undefined | null): any
   planExists(model: string, condition: any, routeOverride?: any | undefined | null): any
+  /**
+   * 带 ctx 的存在性判据：与 `planCount` 同一套读校验（表级白名单 / `read: []` /
+   * RBAC / 归属与行条件），返回结构与 `planExists` 一致（findOne + `{_id:1}`）。
+   */
+  planExistsWithCtx(model: string, condition: any, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
   planCount(model: string, filter?: any | undefined | null, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
   sortsByRelation(sort?: any | undefined | null): boolean
   /**
@@ -197,6 +202,12 @@ export declare class Registry {
   /** 注册 schema（自动派生 `<Name>Deleted` 归档表；`timestamps !== false` 时补时间戳字段） */
   register(defn: any): void
   has(name: string): boolean
+  /**
+   * 注销 schema（含注册期自动派生的 `<Name>Deleted` 归档表）。
+   * 未知 name **幂等成功**（回滚清单可整份重放）；非 base 策略视图调用抛
+   * `ERR_POLICY_VIEW_READONLY`。
+   */
+  unregister(name: string): void
   list(): Array<string>
   /** 清空 schema 注册表（测试隔离 / 动态重建；不动 requireContext / profile 配置开关） */
   clearSchemas(): void
