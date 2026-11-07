@@ -34,6 +34,17 @@
 
 ### Added
 
+- **`Registry::unregister`（schema 注销 / 原子回滚原语）**：`register_batch` 单批次失败本就零副作用，
+  但宿主 `start()` 若逐条 `register`，中途失败会残留已注册项。新增
+  `Registry::unregister(name) -> Result<(), String>`：
+  - **未知 name 幂等成功**（回滚清单可整份重放；注册期错误仍原样上抛，不吞错）；
+  - 注册期自动派生的 `<Name>Deleted` 归档表一并清理（按 `Entry::archive_of` 精确匹配，
+    不按名字后缀猜，独立注册的同名归档不受影响）；
+  - `indexes` / `field_order` / 链路 / 版本均内嵌于被删 `Entry`，无全局派生缓存；
+  - 版本号不保留（同名重注册从 1 重新计数，其他 schema 不受影响），不引入墓碑表；
+  - 非 base 策略视图调用 ⇒ `ERR_POLICY_VIEW_READONLY`。
+  - 绑定：`core-py::Registry.unregister(name)`、`core-node::Registry.unregister(name)`、
+    `host::Store.unregister(schema_name)`。
 - **`plan_exists_with_ctx`（带 ctx 的存在性判据）**：`exists` 此前只走无 ctx 的 `plan_exists`，
   宿主公开 `exists()` 因此可绕过 `read: []`、读白名单与 RBAC 探测任意条件是否命中。
   新入口与 `plan_count` 复用同一套读校验（`ensure_context` → `can_read_schema` →

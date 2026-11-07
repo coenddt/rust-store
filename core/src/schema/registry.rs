@@ -56,6 +56,10 @@ struct Entry {
     links: Vec<Location>,
     /// 版本：首次注册 = 1；跨批次 reload 同名 ⇒ +1
     version: u64,
+    /// 派生来源：`Some(main)` = 本项是注册期为 `main` 自动派生的归档表
+    /// `<main>Deleted`；`None` = 独立注册项。注销主项时据此一并清理派生对象
+    /// （不按名字后缀猜，避免误删独立注册的同名归档）。
+    archive_of: Option<String>,
 }
 
 /// 批次分组结果（判据单点输出；`register_batch` 与 `schema::load::plan_load` 共用）。
@@ -527,6 +531,8 @@ impl Registry {
             name: String,
             schema: Schema,
             links: Vec<Location>,
+            /// 该拟定项是否为某主项自动派生的归档表
+            archive_of: Option<String>,
         }
         let mut planned: Vec<Planned> = Vec::new();
         for name in &class.order {
@@ -545,6 +551,7 @@ impl Registry {
                     name: name.clone(),
                     schema: schema.clone(),
                     links: links.clone(),
+                    archive_of: None,
                 });
                 // 归档附表紧随主定义派生（`links` 继承主链路，定位同主）；
                 // archive:false（漉金Core 接入扩展 02）完全不派生（不进模型表、
@@ -562,6 +569,7 @@ impl Registry {
                         name: aname,
                         schema: aschema,
                         links,
+                        archive_of: Some(name.clone()),
                     });
                 }
             } else {
@@ -578,6 +586,7 @@ impl Registry {
                     name: name.clone(),
                     schema: existing.schema.clone(),
                     links,
+                    archive_of: existing.archive_of.clone(),
                 });
             }
         }
@@ -612,6 +621,7 @@ impl Registry {
             if let Some(e) = catalog.entries.get_mut(&p.name) {
                 e.schema = p.schema;
                 e.links = p.links;
+                e.archive_of = p.archive_of;
                 e.version += 1;
             } else {
                 catalog.entries.insert(
@@ -620,12 +630,48 @@ impl Registry {
                         schema: p.schema,
                         links: p.links,
                         version: 1,
+                        archive_of: p.archive_of,
                     },
                 );
                 catalog.order.push(p.name);
             }
         }
 
+        Ok(())
+    }
+
+    /// 注销一个 schema（含注册期为它自动派生的 `<Name>Deleted` 归档表）。
+    ///
+    /// 语义（宿主 `start()` 失败回滚 / 动态卸载使用）：
+    /// - **未知 name 幂等成功**（返回 `Ok(())`）：注销的目标状态是「该 schema 不存在」，
+    ///   未注册已满足该状态；回滚清单因此可以整份重放而不必逐项判存在。
+    ///   这不违背「禁静默」——注册失败的错误仍原样上抛，本方法只对「已不存在」这一终态幂等。
+    /// - **派生对象一并清理**：`archive_of == Some(name)` 的归档项同时删除（不按名字后缀猜，
+    ///   独立注册的同名归档不受影响）；`indexes` / `field_order` / 链路 / 版本都在被删的
+    ///   `Entry` 内，无全局派生缓存，随项释放。
+    /// - **版本号不保留**：`version` 是「当前存活注册项的世代」，不是审计计数；同名重注册
+    ///   从 1 重新开始，其他 schema 的版本与 `order` 位置不受影响。不引入墓碑表——
+    ///   否则 `has` / `get` / 四元组冲突判定都要多一套「已删除」分支，破坏判据单点。
+    /// - 非 base 策略视图调用 ⇒ `Err(ERR_POLICY_VIEW_READONLY …)`（视图只读）。
+    pub fn unregister(&mut self, name: &str) -> Result<(), String> {
+        self.ensure_base_catalog()?; // 目录唯一真源在 base（视图只读）
+        let catalog = Arc::make_mut(&mut self.catalog);
+        // 未注册 ⇒ 幂等成功（回滚清单可整份重放）
+        if catalog.entries.remove(name).is_none() {
+            return Ok(());
+        }
+        catalog.order.retain(|n| n != name);
+        // 派生对象：仅清理「明确记为本次派生」的归档项
+        let derived: Vec<String> = catalog
+            .entries
+            .iter()
+            .filter(|(_, e)| e.archive_of.as_deref() == Some(name))
+            .map(|(n, _)| n.clone())
+            .collect();
+        for n in derived {
+            catalog.entries.remove(&n);
+            catalog.order.retain(|x| x != &n);
+        }
         Ok(())
     }
 

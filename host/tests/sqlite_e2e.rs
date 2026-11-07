@@ -186,3 +186,35 @@ async fn schema_definition_exposes_types_and_nested_fields() {
         "未声明 schema 必须报错，不得返回空定义"
     );
 }
+
+/// 注销能力（bootstrap `start()` 失败回滚 / 动态卸载）：主项 + 派生归档一并清理，
+/// 未知 schema 幂等成功。
+#[tokio::test]
+async fn unregister_drops_schema_and_archive_idempotently() {
+    let store = Store::connect_sqlite("sqlite::memory:")
+        .await
+        .expect("连接失败");
+    store
+        .register(&json!({
+            "name": "profile",
+            "collection": "profiles",
+            "idPrefix": "pf",
+            "timestamps": false,
+            "fields": { "name": { "type": "string" } }
+        }))
+        .expect("注册失败");
+    assert!(store.list_schemas().iter().any(|n| n == "profile"));
+    assert!(store.list_schemas().iter().any(|n| n == "profileDeleted"));
+
+    store.unregister("profile").expect("注销失败");
+    assert!(
+        !store
+            .list_schemas()
+            .iter()
+            .any(|n| n == "profile" || n == "profileDeleted"),
+        "派生归档表必须随主项清理"
+    );
+    store
+        .unregister("profile")
+        .expect("未知 schema 注销应幂等成功");
+}

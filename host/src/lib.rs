@@ -148,6 +148,18 @@ impl Store {
         w.register(defn)
     }
 
+    /// 注销一个 schema（含 core 注册期自动派生的 `<Name>Deleted` 归档表）。
+    ///
+    /// 语义与 core [`Registry::unregister`] 一致：未知 name **幂等成功**（回滚清单可整份
+    /// 重放）；版本号随项删除，同名重注册从 1 重新计数；非 base 视图的写操作不经过本方法。
+    pub fn unregister(&self, schema_name: &str) -> Result<(), String> {
+        let mut w = self
+            .registry
+            .write()
+            .map_err(|_| "registry 写锁中毒".to_string())?;
+        w.unregister(schema_name)
+    }
+
     /// 开关「必须带上下文」（core `ensure_context`；默认关闭 = fail-open，与双宿主一致）
     pub fn set_require_context(&self, require: bool) {
         if let Ok(mut w) = self.registry.write() {

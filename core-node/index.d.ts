@@ -202,6 +202,12 @@ export declare class Registry {
   /** 注册 schema（自动派生 `<Name>Deleted` 归档表；`timestamps !== false` 时补时间戳字段） */
   register(defn: any): void
   has(name: string): boolean
+  /**
+   * 注销 schema（含注册期自动派生的 `<Name>Deleted` 归档表）。
+   * 未知 name **幂等成功**（回滚清单可整份重放）；非 base 策略视图调用抛
+   * `ERR_POLICY_VIEW_READONLY`。
+   */
+  unregister(name: string): void
   list(): Array<string>
   /** 清空 schema 注册表（测试隔离 / 动态重建；不动 requireContext / profile 配置开关） */
   clearSchemas(): void

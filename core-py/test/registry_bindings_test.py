@@ -17,6 +17,28 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "dist"))
 from rust_store_py import Registry  # noqa: E402
 
 
+def test_unregister_drops_schema_and_archive_idempotently():
+    reg = Registry()
+    reg.register(
+        {
+            "name": "C",
+            "collection": "cs",
+            "timestamps": False,
+            "fields": {"a": "string"},
+            "relations": {},
+        }
+    )
+    assert reg.list() == ["C", "CDeleted"]
+
+    reg.unregister("C")
+    assert not reg.has("C")
+    assert not reg.has("CDeleted"), "派生归档表必须随主项清理"
+    assert reg.list() == []
+
+    reg.unregister("C")  # 未知 ⇒ 幂等成功（回滚清单可整份重放）
+    assert reg.list() == []
+
+
 def test_clear_schemas_drops_schemas_keeps_switches():
     reg = Registry()
     reg.register(
