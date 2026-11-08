@@ -151,7 +151,7 @@ pub(super) fn build_insert_doc(
 /// [`plan_exists_with_ctx`] 传 `ctx = None`（内部调用语义，保持既有行为）。
 ///
 /// 宿主面向终端用户的 `exists()` 必须改调 [`plan_exists_with_ctx`]：本入口无法
-/// 表达调用方身份，`read: []` / 读白名单 / RBAC 均不会生效（越权旁路）。
+/// 表达调用方身份，`denyRead` / 读白名单 / RBAC 均不会生效（越权旁路）。
 pub fn plan_exists(
     schema_name: &str,
     registry: &Registry,
@@ -164,7 +164,7 @@ pub fn plan_exists(
 ///
 /// 读校验与 [`plan_count`] 单点一致，逐层判定：
 /// 1. `ensure_context`：注册表要求上下文时无 ctx 直接拒绝；
-/// 2. `can_read_schema`：表级读白名单（`read: []` 为显式拒绝）；
+/// 2. `can_read_schema`：表级读白名单 / `denyRead`（显式拒绝）；
 /// 3. `rbac::ensure_read`：RBAC 表级 deny-wins；
 /// 4. 条件形状 / 关系谓词校验（与旧入口一致）；
 /// 5. 注入静态 owner 条件与 RBAC 行条件 —— 存在性只能看见「自己读得到的行」。
@@ -180,7 +180,7 @@ pub fn plan_exists_with_ctx(
     validate_condition(condition)?;
     ensure_context(registry, ctx)?;
     let schema = registry.get(schema_name)?;
-    // 表级读判据（与 query / count 同码）：`read: []` 与未命中白名单都不得放行
+    // 表级读判据（与 query / count 同码）：`denyRead` 与未命中白名单都不得放行
     if ctx.is_some() && !can_read_schema(registry.role_rules(), schema, ctx) {
         return Err(ERR_PERMISSION.to_string());
     }
@@ -208,6 +208,9 @@ pub fn plan_exists_with_ctx(
 ///
 /// R1：owner(read=creator) 场景下，count 必须注入 `createdBy = ctx.userId`，
 /// 否则非 admin 用户 count 会越权统计全表（E-08）。
+///
+/// 读判据与 [`plan_query`] / [`plan_exists_with_ctx`] 单点一致（`can_read_schema`
+/// 含 `denyRead` + `rbac::ensure_read`）：`denyRead` 的模型不得靠 count 数出行数。
 pub fn plan_count(
     schema_name: &str,
     registry: &Registry,
@@ -218,7 +221,13 @@ pub fn plan_count(
         // 条件拒绝名单（缺陷 D-02）
         validate_condition(f)?;
     }
+    ensure_context(registry, ctx)?;
     let schema = registry.get(schema_name)?;
+    // 表级读判据（与 query / exists 同码）：读白名单 / `denyRead` / RBAC 一律不得绕过
+    if ctx.is_some() && !can_read_schema(registry.role_rules(), schema, ctx) {
+        return Err(ERR_PERMISSION.to_string());
+    }
+    crate::rbac::ensure_read(registry, schema, ctx)?;
     // §11.4（D2）：与 pipeline 读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
     if let Some(f) = filter {
         validate_condition_shape(schema, f, registry.profile())?;

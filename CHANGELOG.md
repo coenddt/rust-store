@@ -4,7 +4,7 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
-## Unreleased（5.x 维护分支，仅加法）
+## Unreleased（5.x 维护分支：加法 + 安全修复）
 
 ### Added（非破坏性：纯新增符号，现有下游无需改代码/配置）
 
@@ -16,6 +16,18 @@
   为内部语义（`ctx = None`）。
 - **`Store::schema_definition(name)`**（host）：只读导出字段类型与嵌套 `fields` 原始定义，
   供协议皮判定点路径声明与类型。5.x 无字段声明序跟踪，键序不保证跨进程稳定。
+- **顶层 `denyRead`（可选布尔，缺省 `false`）**：`denyRead: true` 表达「谁都不许读」，
+  与 `read: []` 解耦（`read: []` 维持 5.x 旧义 = 未配置 = 不限制）。判据单点在
+  `permission::can_read_schema`，优先于一切角色（含 `internal` 与豁免清单）；`ctx = None`
+  保持 fail-open（需连内部调用一并拒绝时配合 `require_context(true)`）。非布尔在注册期
+  显式报错。与主干 `6.0.0` 同键名、同判据、同优先级。
+
+### Fixed（安全收紧：count 读判据）
+
+- **`plan_count` 补表级读判据**：与 `query` / `plan_exists_with_ctx` 同码
+  （`can_read_schema` + `rbac::ensure_read`）。此前 5.x 的 count 不受读白名单 / `denyRead` /
+  RBAC 约束，越权者可数出全表行数。**行为变化**：对无权调用者由「返回行数」变为
+  `ERR_PERMISSION`（安全修复，升级说明需告知）。
 
 ## 5.2.1 (2026-11-02)
 

@@ -1070,6 +1070,18 @@ fn build_schema(
     // 才炸 1054。DDL（py-store/nodejs-store）按同一规则补列。
     let read_roles = str_list(obj.get("read"));
     let write_roles = str_list(obj.get("write"));
+    // `denyRead`（显式拒绝读）：**只接受布尔**，缺省 false。`null` / 字符串 / 数字等
+    // 一律注册期显式 Err（不把 null 静默当 false，禁掩盖配置错误）。
+    // 5.x 无顶层键白名单，未知键仍按既有行为忽略；本键是新增能力，不影响既有定义。
+    let deny_read = match obj.get("denyRead") {
+        None => false,
+        Some(Value::Bool(b)) => *b,
+        Some(other) => {
+            return Err(format!(
+                "schema \"{name}\" 的 denyRead 必须为布尔值，实际 {other}"
+            ))
+        }
+    };
     if roles_have_creator(&read_roles) || roles_have_creator(&write_roles) {
         add_owner_field(
             &mut fields,
@@ -1152,6 +1164,7 @@ fn build_schema(
         triggers,
         read: read_roles,
         write: write_roles,
+        deny_read,
         indexes: obj
             .get("indexes")
             .and_then(|v| v.as_array())

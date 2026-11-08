@@ -185,6 +185,10 @@ pub fn evaluate(
     if has_any(c, &rules.exempt_roles) {
         return true;
     }
+    // 未配置（键缺失）与显式空名单（`Some([])`）在**读**路径同义：均走
+    // `unconfigured` 姿态（5.x 旧义：`read: []` = 不限制）。「谁都不许读」由
+    // `denyRead` 在 `can_read_schema` 单点表达，不在本函数内另判一遍。
+    // 注意：写路径的 `write: []` 另有 `can_write_schema` 的显式拒绝判据（5.x 既有语义）。
     let empty = role_list.map(|r| r.is_empty()).unwrap_or(true);
     if empty {
         // 未配置姿态显式化（原 empty 分支的 guest 读拒随清单化移除）
@@ -328,7 +332,20 @@ pub fn is_relation_readable(
 
 // ─── Schema 级检查 ────────────────────────────────────────────
 
+/// 表级读判定（全部读路径的唯一闸门：query / count / exists / lookup / federation）。
+///
+/// 判定顺序：
+/// 1. `ctx = Some` 且 `denyRead: true` ⇒ 拒绝（显式意图，优先于一切角色，含
+///    `internal` 与豁免清单）；
+/// 2. 其余交给 [`evaluate`]：`read: []` 与键缺失同义（5.x 旧义 = 不限制），
+///    由 `unconfigured` 姿态决定。
+///
+/// `ctx = None`（系统内部调用，fail-open 契约）不受 `denyRead` 影响；需要连内部
+/// 调用一并拒绝时，配合 `require_context(true)` 使用显式系统上下文。
 pub fn can_read_schema(rules: &RoleRules, schema: &Schema, ctx: Option<&Context>) -> bool {
+    if ctx.is_some() && schema.deny_read {
+        return false;
+    }
     evaluate(
         rules,
         ctx,

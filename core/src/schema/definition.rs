@@ -198,6 +198,11 @@ pub struct Schema {
     pub triggers: super::triggers::Triggers,
     pub read: Option<Vec<String>>,
     pub write: Option<Vec<String>>,
+    /// 显式拒绝读（顶层 `denyRead`，可选布尔，缺省 `false`）。
+    ///
+    /// 与「空名单」解耦：`read: []` 是 5.x 旧义（未配置 = 不限制），要表达
+    /// 「谁都不许读」必须显式置本开关。判据单点在 `permission::can_read_schema`。
+    pub deny_read: bool,
     /// 原始索引定义（`[{keys: {...}, options: {...}}]`），upsert 条件构建依赖 unique 索引
     pub indexes: Vec<Value>,
     /// 数据源名（由 `register_batch` 的 [`Location`] 注入；`None` = 缺省 `default`）。
