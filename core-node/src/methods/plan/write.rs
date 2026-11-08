@@ -12,6 +12,7 @@ use rust_store_core::command::{
     plan_remove as core_plan_remove, plan_update as core_plan_update,
     plan_update_many as core_plan_update_many, plan_upsert as core_plan_upsert, Probe,
 };
+use rust_store_core::computes::apply_computes as core_apply_computes;
 use rust_store_core::computes::apply_defaults_and_computes as core_apply_defaults;
 use rust_store_core::permission::context_from_value;
 
@@ -249,5 +250,19 @@ impl Registry {
         let schema = self.core.get(&model).map_err(err)?;
         let bridge = self.bridge(&env);
         core_apply_defaults(&doc, schema, Some(&bridge)).map_err(err)
+    }
+
+    /// 写路径结果回喂（**仅同步计算列**）：对 `findOneAndUpdate` 返回的落库文档
+    /// 叠加 `computes` 中同步 `fn` 计算列，**不做任何默认值填充**（D1：默认值只在
+    /// insert 物化一次，重复填充会让「落库 / returns / 读回」出现不同取值）。
+    ///
+    /// 入参必须是**落库后的完整文档**（`returnDocument: AFTER` 的结果）：
+    /// - 无同步 `fn` 声明：原样返回；
+    /// - 声明 `fn: true` 却未 `setFn` 注册实现：显式报错，不静默跳过。
+    #[napi]
+    pub fn apply_write_computes(&self, env: Env, model: String, doc: Value) -> Result<Value> {
+        let schema = self.core.get(&model).map_err(err)?;
+        let bridge = self.bridge(&env);
+        core_apply_computes(&doc, schema, Some(&bridge)).map_err(err)
     }
 }

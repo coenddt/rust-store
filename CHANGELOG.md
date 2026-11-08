@@ -79,6 +79,14 @@
   `Store::schema_definition(schema_name) -> Result<Value, String>`，按 `field_order` 输出
   core `FieldDef` 直出（`type` / `required` / `default` / `read` / `write` / 嵌套 `fields`
   原始定义 / `strategy` / `dim` / `metric`）。host 只暴露信息，白名单与类型判定语义留在协议皮。
+- **`apply_write_computes`（写后仅叠同步计算列）**：`update` 的 `returns` 此前没有 core 出口，
+  宿主只能按「defaults 键序 + 落库 doc 基」自行兜底拼装，计算列缺失。新增
+  `computes::apply_computes` 的绑定导出：`core-node::Registry.applyWriteComputes(model, doc)`、
+  `core-py::Registry.apply_write_computes(model, doc)`、`host::Store.apply_write_computes(schema_name, doc)`。
+  - 入参必须是 `returnDocument: AFTER` 的**落库文档**；只叠 `computes` 中的同步 `fn`
+    计算列，**不补任何默认值**（D1：默认值只在 insert 物化一次，重复填充会让
+    「落库 / returns / 读回」出现三种取值）；
+  - 无 `fn` 声明原样返回；声明 `fn: true` 却未注册实现时显式报错，不静默跳过。
 
 ### Fixed（语义一致性）
 
@@ -138,6 +146,10 @@
   `permission::can_read_schema`，优先于一切角色（含 `internal` 与豁免清单）；`ctx = None`
   保持 fail-open（需连内部调用一并拒绝时配合 `require_context(true)`）。非布尔在注册期
   显式报错。与主干 `6.0.0` 同键名、同判据、同优先级。
+- **`apply_write_computes`（写后仅叠同步计算列）**：收口 `update` 返回值缺计算列的兜底。
+  只叠 `computes` 中的同步 `fn` 计算列、**不补默认值**（D1：默认值只在 insert 物化一次）；
+  无 `fn` 声明原样返回，声明 `fn: true` 未注册实现时显式报错。经 core-py / core-node 导出
+  （host 同名转发）。
 
 ### Fixed（安全收紧：count 读判据）
 
