@@ -7,7 +7,7 @@
 ![PyPI](https://img.shields.io/pypi/v/rust-store-py)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
-当前发布 **5.3.2** —— crates.io 上是 `rust-store-core`，npm 上是 `rust-store-node`，PyPI 上是 `rust-store-py`。
+当前发布 **5.3.2** —— crates.io 上是 `rust-store-core`，npm 上是 `rust-store-node`，PyPI 上是 `rust-store-py`。主干 `6.0.0` 与维护分支 `5.3.3` 已就位、**未发布**（变更见 [CHANGELOG](./CHANGELOG.md)）。
 
 > English: [README.en.md](./README.en.md)
 
@@ -67,6 +67,28 @@ MongoDB 部署显示每张订单最新的三条明细 —— 运营团队刷了�
 读、写角色按 schema、字段、关系、计算列分别声明，除 `internal` 外没有硬编码。有效角色集与声明清单比对；显式豁免清单可以绕过；显式拒写清单优先；RBAC 叠加层追加表级与行级限制，拒绝压过允许。`creator` 是伪角色，动态解析为「文档的 owner 键等于 `ctx.userId`」。声明式 `accessKeys` 提供行级过滤：宿主在 `ctx` 传入对应数组，引擎把它并入读条件与写校验，并按后端下推为原生 `$in`、`JSON_OVERLAPS`、`&&` 或 `json_each`。
 
 上下文是每个规划调用上的显式参数 —— 没有 async-local storage，没有隐式环境用户。省略即「无上下文」。`require_context` 默认为关闭，以对齐原始实现；在启动时打开，并让真正的内部调用传 `Context::system()`，就能得到 fail-secure 行为。
+
+**空名单不等于拒绝。** `read: []` / `write: []` 表示「未配置」，按注册表的 `unconfigured` 姿态判定（默认不限制）。要表达「谁都不许读」，用显式开关 `denyRead: true`：
+
+```json
+{
+  "name": "AuditLog",
+  "collection": "audit_logs",
+  "denyRead": true,
+  "read": [],
+  "fields": {
+    "actor": { "type": "string" },
+    "action": { "type": "string" }
+  }
+}
+```
+
+`denyRead` 只接受布尔值，缺省 `false`；字符串、数字、`null` 等一律在注册期显式报错。判据单点在 `permission::can_read_schema`，query / count / exists / lookup / federation 全部读路径共用，并优先于一切角色（含 `internal` 与显式豁免清单）。`ctx = None` 的系统内部调用保持 fail-open；要连内部调用一并拒绝时，配合 `require_context(true)` 并传显式系统上下文。
+
+### 写入时 `null` 的两种含义
+
+- **insert**：只有键缺失才填声明默认值；显式 `null` 原样落库，不会被默认值覆盖。
+- **update 的 `$set`**：显式 `null` 表示「不写该字段」（与 5.x 旧义一致），不会把列置空；清空字段请用 `$unset: ["field"]` —— 物理列置 `NULL`，同时从 `__present` 移除存在标记。
 
 ### 本版钉死的三个行为
 

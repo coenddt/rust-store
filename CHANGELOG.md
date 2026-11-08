@@ -4,7 +4,22 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
-## Unreleased（5.3.x 自检修复，未发版）
+## 6.0.0（主干，未发布）
+
+> 相对已发布的 `v5.3.2`。破坏性项集中在权限与默认值语义。先看迁移清单，再看逐条明细。
+
+### 迁移清单
+
+| 若你在…… | 升级后的行为 | 迁移动作 |
+|---|---|---|
+| schema 里写了 `ownerKey: "_id"` | 注册期显式报错（此前静默把 `_id` 当归属字段） | 改用独立字符串字段（如 `createdBy`）；`ownerKey` 字段类型必须是 `string` |
+| 客户端 insert 时传 `createdBy` | 被忽略并由 `ctx.userId` 覆盖；取不到 userId 报 `ERR_NO_WRITE` | 归属键交系统维护；仅 `ctx.internal` 的系统调用可显式写入 |
+| 客户端 update 的 `$set` / `$unset` 触及归属键 | 报 `ERR_PERMISSION`（含 `createdBy.x` 点号路径与 `$set` 内操作符） | 从写载荷中移除归属键 |
+| `write` 含 `creator` 的 update / remove | 先返回 `{needsProbe}`，宿主回喂命中文档后二次规划 | 宿主实现 probe 重入；`updateMany` / `removeMany` 无 userId 报 `ERR_NO_BATCH_WRITE` |
+| 依赖 `count` 在无读权限时仍返回行数 | 改为 `ERR_PERMISSION`（与 query / exists 同码） | 给调用方补读权限 |
+| 用 `read: []` 表达「谁都不许读」 | 恢复 5.x 旧义：空名单 = 未配置 = 不限制 | 改为 `denyRead: true` |
+| 依赖 update 的 `$set: { a: null }` 把字段写成 null | 该字段不更新（与 5.x 旧义一致） | 清空字段改用 `$unset: ["a"]` |
+| Node 宿主读取超出 IEEE-754 安全整数范围的值 | 出参由 `number` 改为驱动原始字符串（宿主 6.0.0 同版本线，`toNumber` 超界） | 按字符串处理，不做数值运算或比较 |
 
 ### Breaking（权限收紧：归属键与 creator 归属）
 
@@ -95,6 +110,52 @@
   无法补声明默认；现按真实值探测（同一路径仍只落 `$set`，避免 Mongo 同路径冲突）。
 - **FFI 单测恢复执行**：`core-ffi` 的 `test = false` 使 C 边界单测从未运行；已开启并补
   `rcore_translate_name` 的 ABI 契约（正常往返 / 空指针 / 非法 UTF-8 / 未知 backend）。
+
+### 宿主侧同版本线（node 6.0.0，不在本仓 core）
+
+- **`toNumber` 超界出参**：`nodejs-store` 的 `fd597f9` 把超出 IEEE-754 安全整数范围的整数
+  从 `number` 改为保留驱动原始字符串（`9223372036854775807` 不再变成 `9223372036854776000`）。
+  读该列并做算术/数值比较的 Node 下游会失效。**本仓 core 无代码改动**，core 内
+  `to_number`（分页 `page` / `pageSize` / `$skip` / `$limit` 归一）语义不变；此项随
+  `rust-store-node` 6.0.0 同版本线一并告知。
+
+## 5.3.3（维护分支，未发布）
+
+> 维护分支只收**非破坏性**改动：纯新增符号 + 安全修复。现有 5.x 下游不改代码/配置即可升级。
+
+### Added（纯新增，现有下游无需改动）
+
+- **`Registry::unregister(name)`**：注销 schema（含注册期自动派生的 `<Name>Deleted` 归档表）。
+  未知 name 幂等成功（宿主 `start()` 失败回滚清单可整份重放）；版本号随项删除，同名重注册从 1
+  计数；策略视图调用返回 `ERR_POLICY_VIEW_READONLY`。经 core-py / core-node / host 同步导出。
+- **`plan_exists_with_ctx(...)`**：带 ctx 的存在性判据，与 `plan_count` 同一套读校验
+  （表级白名单 / RBAC / 归属与行条件），关闭宿主 `exists()` 的越权旁路；旧 `plan_exists` 保留
+  为内部语义（`ctx = None`）。
+- **`Store::schema_definition(name)`**（host）：只读导出字段类型与嵌套 `fields` 原始定义，
+  供协议皮判定点路径声明与类型。5.x 无字段声明序跟踪，键序不保证跨进程稳定。
+- **顶层 `denyRead`（可选布尔，缺省 `false`）**：`denyRead: true` 表达「谁都不许读」，
+  与 `read: []` 解耦（`read: []` 维持 5.x 旧义 = 未配置 = 不限制）。判据单点在
+  `permission::can_read_schema`，优先于一切角色（含 `internal` 与豁免清单）；`ctx = None`
+  保持 fail-open（需连内部调用一并拒绝时配合 `require_context(true)`）。非布尔在注册期
+  显式报错。与主干 `6.0.0` 同键名、同判据、同优先级。
+
+### Fixed（安全收紧：count 读判据）
+
+- **`plan_count` 补表级读判据**：与 `query` / `plan_exists_with_ctx` 同码
+  （`can_read_schema` + `rbac::ensure_read`）。此前 5.x 的 count 不受读白名单 / `denyRead` /
+  RBAC 约束，越权者可数出全表行数。**行为变化**：对无权调用者由「返回行数」变为
+  `ERR_PERMISSION`（安全修复，升级说明需告知）。
+
+### 已知语义差异（与主干 `6.0.0`，5.x 不改变）
+
+- **写路径空名单口径不同**：5.x 的 `write: []` 表示**拒绝一切写**（非 `internal` 且不在
+  `exemptRoles` 的调用者一律 `ERR_PERMISSION`，即使 `unconfigured.allow` 为真）；主干 `6.0.0`
+  的 `write: []` 与键缺失同义，按 `unconfigured` 姿态判定（默认**不限制**）。
+  - 5.x 用户若要「只允许特定角色写」，必须**显式列出写名单**（如 `write: ["admin"]`）；
+    写 `write: []` 是「谁都不许写」的显式封锁，不要当成「未配置」。
+  - 本差异**保留**：把 5.x 改成主干的空名单语义属破坏性变更（原本被拒绝的写会重新放行），
+    违反维护分支只收加法与安全修复的原则。
+  - 读路径两线已一致：`read: []` 均为「未配置 = 不限制」，要禁止读一律用 `denyRead: true`。
 
 ## 5.2.1 (2026-11-02)
 

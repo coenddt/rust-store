@@ -7,7 +7,7 @@
 ![PyPI](https://img.shields.io/pypi/v/rust-store-py)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
-Current release **5.3.2** — `rust-store-core` on crates.io, `rust-store-node` on npm, `rust-store-py` on PyPI.
+Current release **5.3.2** — `rust-store-core` on crates.io, `rust-store-node` on npm, `rust-store-py` on PyPI. Mainline `6.0.0` and maintenance branch `5.3.3` are staged but **unreleased** (see [CHANGELOG](./CHANGELOG.md)).
 
 > 中文: [README.md](./README.md)
 
@@ -111,6 +111,38 @@ The context is an explicit parameter on every plan call — no async-local stora
 implicit ambient user. Omitting it means "no context". `require_context` defaults to off
 for parity with the original implementation; turn it on at startup and pass
 `Context::system()` for genuine internal calls to get fail-secure behaviour.
+
+**An empty list is not a denial.** `read: []` / `write: []` mean "unconfigured" and follow
+the registry's `unconfigured` posture (permissive by default). To say "nobody may read",
+use the explicit switch `denyRead: true`:
+
+```json
+{
+  "name": "AuditLog",
+  "collection": "audit_logs",
+  "denyRead": true,
+  "read": [],
+  "fields": {
+    "actor": { "type": "string" },
+    "action": { "type": "string" }
+  }
+}
+```
+
+`denyRead` accepts booleans only (default `false`); strings, numbers and `null` are
+rejected at registration. The single decision point is `permission::can_read_schema`,
+shared by query, count, exists, lookup and federation, and it wins over every role
+including `internal` and the explicit exempt list. System-internal calls with `ctx = None`
+stay fail-open; combine with `require_context(true)` and an explicit system context to deny
+those too.
+
+### Two meanings of `null` on write
+
+- **insert**: declared defaults fill missing keys only; an explicit `null` is stored as
+  `null` and is never overwritten by a default.
+- **update `$set`**: an explicit `null` means "do not write this field" (same as 5.x) and
+  does not clear the column. Use `$unset: ["field"]` to clear — it sets the physical
+  column to `NULL` and removes the presence token from `__present`.
 
 ### Three behaviours this release pins down
 
