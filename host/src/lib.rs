@@ -20,6 +20,7 @@ use rust_store_core::command::{
     finalize_query, plan_archive_docs, plan_insert, plan_query, plan_query_one, plan_remove,
     plan_update, restore_sort_order, Probe, PHASE1_IDS,
 };
+use rust_store_core::computes::apply_computes;
 use rust_store_core::dialect::Backend;
 use rust_store_core::permission::Context;
 use rust_store_core::schema::Registry;
@@ -415,6 +416,18 @@ impl Store {
         let outcome = exec::exec_translated(conn.conn(), &translated).await?;
         drop(conn);
         Ok(outcome.docs.into_iter().next())
+    }
+
+    /// 写路径结果回喂（**仅同步计算列**）：对更新后的落库文档叠加 `fn: true`
+    /// 计算列，**不补任何默认值**（D1：默认值只在 insert 物化一次）。
+    ///
+    /// 入参必须是 `returnDocument: AFTER` 取回的完整文档。Host 未内置同步 `fn`
+    /// 回调桥（`plan_insert` 亦传 `None`），故 schema 声明 `fn: true` 时显式报错、
+    /// 不静默跳过；无 `fn` 声明的 schema 原样返回。
+    pub fn apply_write_computes(&self, schema_name: &str, doc: &Value) -> Result<Value, String> {
+        let reg = self.read_reg()?;
+        let schema = reg.get(schema_name)?;
+        apply_computes(doc, schema, None)
     }
 
     /// 删除（归档编排：find 源文档 → plan_archive_docs 写归档表 → deleteMany；

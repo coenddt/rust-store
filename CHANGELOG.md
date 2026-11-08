@@ -21,6 +21,12 @@
   `permission::can_read_schema`，优先于一切角色（含 `internal` 与豁免清单）；`ctx = None`
   保持 fail-open（需连内部调用一并拒绝时配合 `require_context(true)`）。非布尔在注册期
   显式报错。与主干 `6.0.0` 同键名、同判据、同优先级。
+- **`apply_write_computes(模型, 落库文档)`**：写路径（`find_one_and_update` +
+  `return_document: AFTER`）返回文档叠加同步 `fn` 计算列，**不补任何默认值**（D1：默认值
+  只在 insert 物化一次，重复填充会让「落库 / returns / 读回」出现三种取值）。无 `fn` 声明
+  原样返回；声明 `fn: true` 却未注册实现时显式报错，不静默跳过。core 侧把 `apply_computes`
+  从 `apply_defaults_and_computes` 中等价抽出（行为不变），经 core-py / core-node 导出
+  （host 同名转发）。
 
 ### Fixed（安全收紧：count 读判据）
 

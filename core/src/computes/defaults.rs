@@ -169,7 +169,20 @@ pub fn apply_defaults_and_computes(
     schema: &Schema,
     fn_registry: Option<&dyn FnRegistry>,
 ) -> Result<Value, String> {
-    let mut result = apply_field_defaults(doc, schema, DefaultFill::Return);
+    let result = apply_field_defaults(doc, schema, DefaultFill::Return);
+    apply_computes(&result, schema, fn_registry)
+}
+
+/// 仅叠加同步 fn 计算列，**不做任何默认值填充**。
+///
+/// D1：`insert` 的 `returns` 必须以**落库 doc**（[`DefaultFill::Insert`] 结果）为基，
+/// 否则同一行会出现「落库 / returns / 读回」三种取值。默认值只应在写入时物化一次。
+pub fn apply_computes(
+    doc: &Value,
+    schema: &Schema,
+    fn_registry: Option<&dyn FnRegistry>,
+) -> Result<Value, String> {
+    let mut result = doc.clone();
 
     // 同步 fn 计算列（对应 JS `if (comp.fn) result[key] = comp.fn(result)`）
     let cache = ensure_cache(schema);
@@ -179,7 +192,7 @@ pub fn apply_defaults_and_computes(
             None => return Err(format!("计算列 {} 未注册同步实现", entry.key)),
         };
         let Some(o) = result.as_object_mut() else {
-            return Err("apply_defaults_and_computes：结果不是对象".to_string());
+            return Err("apply_computes：结果不是对象".to_string());
         };
         o.insert(entry.key.clone(), v);
     }

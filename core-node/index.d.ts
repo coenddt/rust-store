@@ -166,6 +166,16 @@ export declare class Registry {
    * （对齐 JS `applyDefaultsAndComputes(result, s)`）
    */
   applyWriteDefaults(model: string, doc: any): any
+  /**
+   * 写路径结果回喂（**仅同步计算列**）：对 `findOneAndUpdate` 返回的落库文档
+   * 叠加 `computes` 中同步 `fn` 计算列，**不做任何默认值填充**（D1：默认值只在
+   * insert 物化一次，重复填充会让「落库 / returns / 读回」出现不同取值）。
+   *
+   * 入参必须是**落库后的完整文档**（`returnDocument: AFTER` 的结果）：
+   * - 无同步 `fn` 声明：原样返回；
+   * - 声明 `fn: true` 却未 `setFn` 注册实现：显式报错，不静默跳过。
+   */
+  applyWriteComputes(model: string, doc: any): any
   /** 解析 GQL 并构建 pipeline / projection，返回 `{tokens, ast, pipeline, projection}` */
   buildPipeline(gql: string, params: any, ctx?: any | undefined | null): any
   planQuery(gql: string, params: any, ctx?: any | undefined | null, routeOverride?: any | undefined | null): any
