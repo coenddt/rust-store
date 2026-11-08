@@ -72,14 +72,15 @@ fn b1_count_denies_unlisted_role_like_query() {
     );
 }
 
+/// `read: []` 恢复 5.x 旧义：空名单 = 未配置，count 与 query 同样放行。
 #[test]
-fn b1_count_denies_explicit_empty_read_list() {
+fn b1_count_allows_empty_read_list_like_query() {
     let reg = registry_with(guarded_schema(json!([])));
     let ctx = admin_ctx();
     let c = plan_count("Doc", &reg, None, Some(&ctx));
     assert!(
-        c.is_err(),
-        "read: [] 表示显式不允许任何角色，count 不得放行: {c:?}"
+        c.is_ok(),
+        "read: [] 是「未配置」不是「拒绝」，count 应放行: {c:?}"
     );
 }
 
@@ -94,14 +95,20 @@ fn b1_count_still_allows_admin_and_internal() {
     assert!(anon.is_ok(), "无 ctx 为内部调用，保持 fail-open: {anon:?}");
 }
 
-// ─── B2：显式空名单（read/write 对称）不能被 count 绕过 ───────
+// ─── B2：空名单遵循 unconfigured 姿态（read/write 对称） ───────
 
+/// `read: []` 与未配置同义：Open 姿态放行，Closed 姿态拒绝。
 #[test]
-fn b2_explicit_empty_read_is_not_bypassed_by_unconfigured_policy() {
+fn b2_empty_read_list_follows_unconfigured_policy() {
     let mut reg = registry_with(guarded_schema(json!([])));
     reg.set_unconfigured_policy(UnconfiguredPolicy::Open);
+    let open = plan_count("Doc", &reg, None, Some(&user_ctx()));
+    assert!(open.is_ok(), "Open 姿态下空名单应放行: {open:?}");
+
+    let mut reg = registry_with(guarded_schema(json!([])));
+    reg.set_unconfigured_policy(UnconfiguredPolicy::Closed);
     let err = plan_count("Doc", &reg, None, Some(&user_ctx()))
-        .expect_err("read: [] 是显式拒绝，与 unconfigured 姿态无关");
+        .expect_err("Closed 姿态下空名单与未配置同义，应拒绝");
     assert!(err.contains("ERR_PERMISSION"), "{err}");
 }
 
@@ -141,11 +148,22 @@ fn b4_exists_legacy_entry_keeps_internal_semantics() {
     assert_eq!(plan["kind"], json!("findOne"), "{plan}");
 }
 
+/// `read: []` 恢复 5.x 旧义：exists 带 ctx 时同样放行。
 #[test]
-fn b4_exists_denies_explicit_empty_read_list() {
+fn b4_exists_allows_empty_read_list() {
     let reg = registry_with(guarded_schema(json!([])));
+    plan_exists_with_ctx("Doc", &reg, &json!({ "title": "x" }), Some(&admin_ctx()))
+        .expect("read: [] 是「未配置」不是「拒绝」，exists 应放行");
+}
+
+/// `denyRead: true` 才表示「谁都不许读」，exists 带 ctx 时必须拒绝。
+#[test]
+fn b4_exists_denies_when_deny_read() {
+    let mut def = guarded_schema(json!(["admin"]));
+    def["denyRead"] = json!(true);
+    let reg = registry_with(def);
     let err = plan_exists_with_ctx("Doc", &reg, &json!({ "title": "x" }), Some(&admin_ctx()))
-        .expect_err("read: [] 表示显式不允许任何角色，exists 不得放行");
+        .expect_err("denyRead: true 时 exists 不得放行");
     assert!(err.contains("ERR_PERMISSION"), "{err}");
 }
 
@@ -374,8 +392,10 @@ fn d1_insert_present_marks_explicit_null_but_not_missing_on_all_backends() {
     assert_eq!(seen.len(), 3);
 }
 
+/// 显式 null（`$set: {a: null}`）恢复 5.x 旧义：**不写该字段**（不落列、不进哨兵）；
+/// `$unset` 仍负责清空（移除哨兵令牌）。
 #[test]
-fn d2_update_unset_and_set_null_both_maintain_present_sentinel() {
+fn d2_update_set_null_is_skipped_and_unset_maintains_present_sentinel() {
     let reg = registry_with(present_schema());
     let cmd = json!({
         "kind": "updateMany",
@@ -388,20 +408,21 @@ fn d2_update_unset_and_set_null_both_maintain_present_sentinel() {
         let text = out["stmts"][0]["text"].as_str().unwrap_or("");
         assert!(
             text.contains("__present"),
-            "{backend:?} 的 update 必须维护 __present 哨兵（否则 null/缺失不可还原）: {text}"
+            "{backend:?} 的 update 必须维护 __present 哨兵（$unset 清空）: {text}"
         );
-        // 显式 null 落 `a = ?` 并作为参数绑定；unset 的 b 以常量令牌内联进哨兵
+        // 显式 null 被跳过：不得出现 a 的赋值
+        let qa = match backend {
+            Backend::Mysql => "`a`",
+            _ => "\"a\"",
+        };
+        assert!(
+            !text.contains(qa),
+            "{backend:?} 的 $set:null 应被跳过（不写该字段）: {text}"
+        );
         let params = out["stmts"][0]["params"].to_string();
         assert!(
-            text.contains(&format!(
-                "= {}",
-                if matches!(backend, Backend::Mysql) {
-                    "?"
-                } else {
-                    "$1"
-                }
-            )) || params.contains("null"),
-            "{backend:?} 的 $set:null 必须真正落列并绑定 NULL: text={text} params={params}"
+            !params.contains("null"),
+            "{backend:?} 的 $set:null 不得绑定 NULL 参数: {params}"
         );
         assert!(
             text.contains(",b,"),
@@ -411,9 +432,10 @@ fn d2_update_unset_and_set_null_both_maintain_present_sentinel() {
 }
 
 #[test]
-fn d4_plan_update_keeps_explicit_null_in_set() {
+fn d4_plan_update_drops_explicit_null_from_set() {
     let reg = registry_with(present_schema());
-    let plan = rust_store_core::command::plan_update(
+    // 仅有 null 字段：视作「没有要更新的字段」（与 5.x 一致）
+    let err = rust_store_core::command::plan_update(
         "P",
         &reg,
         None,
@@ -423,12 +445,26 @@ fn d4_plan_update_keeps_explicit_null_in_set() {
         0,
         rust_store_core::command::Probe::NotProbed,
     )
-    .expect("显式 null 是合法更新数据，不得报「没有提供要更新的字段」");
-    assert_eq!(
-        plan["command"]["update"]["$set"]["a"],
-        Value::Null,
-        "规划层不得静默丢弃显式 null: {plan}"
+    .expect_err("显式 null 不写该字段；只有 null 时应视为无更新字段");
+    assert!(err.contains("没有提供要更新的字段"), "{err}");
+
+    // 混合场景：null 字段被剔除，非 null 字段保留
+    let plan = rust_store_core::command::plan_update(
+        "P",
+        &reg,
+        None,
+        &json!({ "_id": "p1" }),
+        &json!({ "a": null, "b": "v" }),
+        &json!({}),
+        0,
+        rust_store_core::command::Probe::NotProbed,
+    )
+    .expect("含非 null 字段时应可规划");
+    assert!(
+        plan["command"]["update"]["$set"].get("a").is_none(),
+        "规划层必须剔除显式 null: {plan}"
     );
+    assert_eq!(plan["command"]["update"]["$set"]["b"], json!("v"), "{plan}");
 }
 
 #[test]
@@ -454,4 +490,61 @@ fn d3_restore_distinguishes_explicit_null_from_missing() {
     )
     .expect("还原应成功");
     assert_eq!(missing, json!([{ "b": "v" }]), "缺失字段不得还原成 null");
+}
+
+// ─── 多键 `$sort` 键序：键序即排序优先级，不得被重排 ─────────────
+
+/// 回归 `PYSTORE-SORT-MULTIKEY-LAST-ONLY`：serde_json 默认 BTreeMap 会把
+/// `{"popularityScore":-1,"createdAt":-1}` 按字典序重排为 createdAt 优先，
+/// 导致「热度优先」失效。开 `preserve_order` 后键序须原样保留。
+#[test]
+fn sort_multikey_preserves_declaration_order() {
+    let reg = registry_with(json!({
+        "name": "Item",
+        "collection": "items",
+        "idPrefix": "i",
+        "timestamps": false,
+        "fields": {
+            "popularityScore": { "type": "float" },
+            "createdAt": { "type": "long" }
+        },
+        "relations": {}
+    }));
+    let mut params = serde_json::Map::new();
+    params.insert(
+        "s0".to_string(),
+        json!({ "popularityScore": -1, "createdAt": -1 }),
+    );
+    let plan = plan_query(
+        "Item($sort:@s0){ _id, popularityScore, createdAt }",
+        &params,
+        &reg,
+        None,
+    )
+    .expect("多键排序查询应规划成功");
+
+    fn find_sort(v: &Value) -> Option<Value> {
+        if let Some(s) = v.get("$sort") {
+            return Some(s.clone());
+        }
+        match v {
+            Value::Array(a) => a.iter().find_map(find_sort),
+            Value::Object(o) => o.values().find_map(find_sort),
+            _ => None,
+        }
+    }
+    let sort_obj = plan
+        .commands
+        .iter()
+        .find_map(find_sort)
+        .expect("应有 $sort 阶段")
+        .as_object()
+        .cloned()
+        .expect("$sort 应为对象");
+    let keys: Vec<&str> = sort_obj.keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        vec!["popularityScore", "createdAt"],
+        "键序即排序优先级，首键必须仍是 popularityScore: {sort_obj:?}"
+    );
 }

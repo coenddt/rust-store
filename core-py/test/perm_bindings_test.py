@@ -92,8 +92,8 @@ def test_readable_computes_no_read_config_returns_all():
 
 
 def test_plan_exists_with_ctx_obeys_read_permission():
-    """exists 带 ctx 的读判据导出契约：read: [] 拒绝、admin 白名单通过、
-    旧入口（无 ctx）保持内部语义。"""
+    """exists 带 ctx 的读判据导出契约：read: [] 放行（5.x 旧义）、denyRead 拒绝、
+    admin 白名单通过、旧入口（无 ctx）保持内部语义。"""
     reg = Registry()
     reg.register(
         {
@@ -105,12 +105,25 @@ def test_plan_exists_with_ctx_obeys_read_permission():
             "relations": {},
         }
     )
+    # read: [] 恢复 5.x 旧义：空名单 = 未配置，不限制（放行）
+    assert reg.plan_exists_with_ctx("DenyDoc", {"title": "x"}, _CTX_ADMIN)["kind"] == "findOne"
+
+    reg.register(
+        {
+            "name": "BlockedDoc",
+            "collection": "blocked_docs",
+            "timestamps": False,
+            "denyRead": True,
+            "fields": {"title": "string"},
+            "relations": {},
+        }
+    )
     try:
-        reg.plan_exists_with_ctx("DenyDoc", {"title": "x"}, _CTX_ADMIN)
+        reg.plan_exists_with_ctx("BlockedDoc", {"title": "x"}, _CTX_ADMIN)
     except Exception as e:  # noqa: BLE001 — 断言 machine code 前缀
         assert "ERR_PERMISSION" in str(e), str(e)
     else:
-        raise AssertionError("read: [] 必须拒绝 exists")
+        raise AssertionError("denyRead: true 必须拒绝 exists")
 
     reg.register(
         {

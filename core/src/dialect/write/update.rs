@@ -53,8 +53,9 @@ pub(super) fn build_assignments(
             }
         }
     }
-    // 缺失 vs null 三态（F-07）：$set/$inc 置字段「显式存在」、$unset 置「缺失」，
+    // 缺失 vs null 三态（F-07）：$set（非 null）/$inc 置字段「显式存在」、$unset 置「缺失」，
     // 一并维护 `__present` 哨兵，保证后续 `$eq:null`/`$exists` 过滤仍正确。
+    // 显式 null 的 `$set` 按 5.x 旧义跳过（不写该字段），不登记进 `set_fields`。
     if let Some(present) = present_expr(
         binder.backend,
         &set_fields,
@@ -140,8 +141,11 @@ fn op_assignments(
         let qc = binder.backend.pcol(&col);
         match op {
             "$set" => {
-                // F-07 三态：显式 null = 「键存在、值为 NULL」，必须落列并标记 __present，
-                // 不得跳过（跳过会让 $set:{a:null} 静默变成「不更新 a」，且与 insert 不一致）。
+                // 显式 null = 不写该字段（5.x 旧义；清空请用 $unset）。
+                // 跳过同时意味着本字段不进入 `set_fields`，`__present` 哨兵不受影响。
+                if v.is_null() {
+                    continue;
+                }
                 let ph = super::bind_col(binder, schema, &col, v)?;
                 assigns.push(format!("{} = {}", qc, ph));
                 if !set_fields.contains(&col) {

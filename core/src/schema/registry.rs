@@ -1068,13 +1068,18 @@ fn build_schema(
         // py-store、nodejs-store 的 metadef/workflow 自 2.7.0 起使用（如 `__workflowRun`）。
         // 语义：仅作分类标记（宿主 / 工具链据此区分系统内建与业务模型）；
         // - DDL：由宿主按注册表生成，内建模型同样建表 ⇒ 本键不参与建表 / 迁移判定；
-        // - 权限：仍由 `read` / `write` / `accessKeys` 判定，`system` 不授予 internal、
+        // - 权限：仍由 `read` / `write` / `denyRead` / `accessKeys` 判定，`system` 不授予 internal、
         //   不放宽写权限；
         // - 归档：系统模型派生的 `<Name>Deleted` 继承本标记。
         // 禁止靠宿主删键迁就 core（core 是 schema 契约的下游，不是上游）。
         "system",
         // `description`：文档管道注记（store-graphql / store-grpc），Schema 级说明。
         "description",
+        // `denyRead`：**显式拒绝读**开关（可选布尔，缺省 false）。
+        // 与「空名单」彻底解耦：`read: []` 恢复 5.x 旧义（= 未配置，不限制）；
+        // 要表达「谁都不许读」必须显式写 `denyRead: true`。判据单点见
+        // `permission::can_read_schema`。
+        "denyRead",
     ];
     for k in obj.keys() {
         // `x-*`：协议适配注记命名空间（`x-graphql` / `x-grpc` / `x-mcp`），
@@ -1129,6 +1134,17 @@ fn build_schema(
     // （ownerKey，缺省 createdBy）视为必声明字段，与 timestamps 同款自动补齐。
     // 收口「写入路径注入归属键」与「DDL 建列」两处约定，避免 schema 未声明时 SQL 层
     // 才炸 1054。DDL（py-store/nodejs-store）按同一规则补列。
+    // `denyRead`（显式拒绝读）：**只接受布尔**，缺省 false。`null` / 字符串 / 数字等
+    // 一律注册期显式 Err（不把 null 静默当 false，禁掩盖配置错误）。
+    let deny_read = match obj.get("denyRead") {
+        None => false,
+        Some(Value::Bool(b)) => *b,
+        Some(other) => {
+            return Err(format!(
+                "schema \"{name}\" 的 denyRead 必须为布尔值，实际 {other}"
+            ))
+        }
+    };
     let read_roles = str_list(obj.get("read"));
     let write_roles = str_list(obj.get("write"));
     if roles_have_creator(&read_roles) || roles_have_creator(&write_roles) {
@@ -1253,6 +1269,7 @@ fn build_schema(
         owner_key,
         access_keys,
         system,
+        deny_read,
     })
 }
 

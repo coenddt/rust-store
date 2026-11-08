@@ -202,6 +202,11 @@ pub struct Schema {
     pub triggers: super::triggers::Triggers,
     pub read: Option<Vec<String>>,
     pub write: Option<Vec<String>>,
+    /// 显式拒绝读（顶层 `denyRead`，可选布尔，缺省 `false`）。
+    ///
+    /// 与「空名单」解耦：`read: []` 是 5.x 旧义（未配置 = 不限制），要表达
+    /// 「谁都不许读」必须显式置本开关。判据单点在 `permission::can_read_schema`。
+    pub deny_read: bool,
     /// 原始索引定义（`[{keys: {...}, options: {...}}]`），upsert 条件构建依赖 unique 索引
     pub indexes: Vec<Value>,
     /// 数据源名（由 `register_batch` 的 [`Location`] 注入；`None` = 缺省 `default`）。
@@ -386,7 +391,9 @@ pub(super) fn normalize_fields(v: Option<&Value>) -> Result<HashMap<String, Fiel
                     .unwrap_or("")
                     .to_string(),
                 required: o.get("required").and_then(|v| v.as_bool()).unwrap_or(false),
-                default: o.get("default").filter(|v| !v.is_null()).cloned(),
+                // 保留显式 `default: null`（Option 的三态：未声明 / null / 具体值）。
+                // 丢弃 null 会让 Return 路径回落到类型零值，把「明确补 null」变成 0。
+                default: o.get("default").cloned(),
                 read: str_list(o.get("read")),
                 write: str_list(o.get("write")),
                 fields: o.get("fields").filter(|v| is_truthy(v)).cloned(),

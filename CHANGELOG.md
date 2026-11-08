@@ -22,15 +22,22 @@
 - **RBAC `ownerOnly` 的 remove/update**：探针命中后执行条件改为「原条件 ∧ 归属」，
   不再以原始条件下发 `deleteMany` / `updateMany`。
 
-### Breaking（空名单语义对称：`read: []` 由「默认可读」变为「不可读」）
+### Changed（空名单保持 5.x 旧义 + 新增显式拒绝开关）
 
-- **`read: []` / 字段级 `read: []` = 显式不允许任何角色**：此前 `evaluate` 把 `None` 与
-  `Some([])` 一并当作「未配置」走 `unconfigured` 姿态（默认 Open），写了空数组反而全员可读；
-  现与 `write: []` 对齐——显式空名单拒绝，只有键缺失才走 `unconfigured` 策略。
-- **不变**：`None`（未配置）仍按 `unconfigured` 策略（默认 Open）；`internal`、
-  豁免角色清单、`ctx=None` 的直通语义不变。
-- **跨皮影响**：REST / GraphQL / gRPC / MCP 四个协议皮均复用 core 判决，自动继承；
-  声明 `read: []` 的模型从「默认可读」变为「不可读」（破坏性变更）。
+- **`read: []` / `write: []` / 字段级 `read: []` 维持 5.x 旧义：空名单 = 未配置（不限制）**。
+  本轮曾拟改为「显式空名单 = 拒绝」，因会破坏现有下游（不改代码/配置即失效）而回退；
+  语义收口回 `permission::evaluate`，空名单与键缺失同走 `unconfigured` 姿态（默认 `Open`）。
+- **新增顶层 `denyRead`（可选布尔，缺省 `false`）**：`denyRead: true` 才表达「谁都不许读」。
+  - 判据**单点**在 `permission::can_read_schema`（query / count / exists / lookup / federation
+    全部读路径共用），优先于一切角色（含 `internal` 与豁免清单）；
+  - `ctx = None`（系统内部调用，fail-open 契约）不受影响，需要连内部调用一并拒绝时配合
+    `require_context(true)` 使用显式系统上下文；
+  - `read: []` 与 `denyRead: true` 并存 ⇒ **`denyRead` 生效**（显式拒绝意图优先）；
+  - 注册期做类型校验：非布尔报错（`denyRead 必须为布尔值`）；未知顶层键仍照旧报错。
+  - 与宿主 workflow 白名单同一口径：**空名单不构成拒绝，拒绝必须显式表达**（宿主对齐结论
+    见 `common-store/doc/topic/自检-store核心与绑定-第二轮/版本归类与分支策略.md` §九）。
+- **不变**：`None`（未配置）按 `unconfigured` 策略；`internal`、豁免角色清单、`ctx=None`
+  的直通语义不变。
 
 ### Added
 
@@ -73,16 +80,17 @@
 - **注册规范化**：顶层未知键、字段定义未知键（递归）、`indexes` 非法结构 / 引用不存在的键
   均注册报错，不再静默丢弃。允许键清单以宿主真实形状为准：顶层含 `system`（正式可选布尔键，
   缺省 `false`，非布尔报错；落到 `Schema.system`，仅作「宿主内建模型」分类标记，归档派生继承，
-  **不影响 DDL 与权限判定**）、`description`，字段级含 `description`，并允许 `x-*`
+  **不影响 DDL 与权限判定**）、`denyRead`（可选布尔，缺省 `false`，非布尔报错；显式拒绝读，
+  判据单点在 `can_read_schema`）、`description`，字段级含 `description`，并允许 `x-*`
   前缀扩展键（`x-graphql` / `x-grpc` / `x-mcp` 等协议适配注记）。
 - **FFI ctx 往返**：`accessKeys` 清单键完整往返；`internal` 与 py/node/host 共用
   `context_from_value`（`is_truthy` 语义），不再各自解析。
-- **count 与 query 共用读判据**：`plan_count` 此前不做表级读校验，`read: []` 或未命中白名单的角色
-  仍可 `countDocuments` 数出全表行数（RBAC enforce 的 default deny 同样被绕过）；现与 query 一致走
-  `can_read_schema` + `rbac::ensure_read`。
-- **显式 `null` 在 update / upsert 不再被丢弃**：`remove_undefined` 把 JSON `null` 当 JS `undefined`
-  删除、dialect 的 `$set` 又对 null `continue`，导致 `$set: {a: null}` 既不落 NULL 也不进
-  `__present`；现落 `a = ?`（绑 NULL）并标记存在性，与 insert 的三态语义一致。
+- **count 与 query 共用读判据**：`plan_count` 此前不做表级读校验，未命中读白名单的角色
+  （含 `denyRead: true` 的模型）仍可 `countDocuments` 数出全表行数（RBAC enforce 的 default deny
+  同样被绕过）；现与 query 一致走 `can_read_schema` + `rbac::ensure_read`。
+- **显式 `null` 维持 5.x 旧义：不写该字段**：`remove_undefined` 与 dialect 的 `$set` 继续跳过
+  `null`（`$set: {a: null}` = 不更新 a）；清空字段请用 `$unset`（物理列置 NULL 并从 `__present`
+  移除令牌）。此前曾拟把 `null` 当「显式存在」落库，因会改变现有下游读回结果而回退。
 - **upsert 显式 object 递归补默认**：`$setOnInsert` 的探测 probe 一律填 null，显式传入的嵌套 object
   无法补声明默认；现按真实值探测（同一路径仍只落 `$set`，避免 Mongo 同路径冲突）。
 - **FFI 单测恢复执行**：`core-ffi` 的 `test = false` 使 C 边界单测从未运行；已开启并补

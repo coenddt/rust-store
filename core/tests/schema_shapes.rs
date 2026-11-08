@@ -150,24 +150,39 @@ fn system_flag_is_typed_and_inherited_by_archive() {
     assert!(err.contains("system 必须为布尔值"), "实际: {err}");
 }
 
-/// `system` 只是「内建模型」声明标记：不授予 internal，也不放宽写权限
-/// （`write: []` 仍然拒绝普通角色写入）。
+/// `system` 只是「内建模型」声明标记：不授予 internal，也不改写读写判定
+/// （与同结构、同 `write: []` 的普通模型同判据；空名单 = 不限制，恢复 5.x 旧义）。
 #[test]
 fn system_flag_does_not_alter_permission_semantics() {
     let reg = register_all(&builtin_shapes());
     let schema = reg.get("__workflowRun").expect("应注册成功");
-    // internal 不因 system 标记自动成立：普通上下文仍不可写
     let normal = Context {
         user_id: Some("u1".to_string()),
         ..Default::default()
     };
-    assert!(
-        !rust_store_core::permission::can_write_schema(
+    // 对照：同定义去掉 `system` 标记
+    let mut plain_def = builtin_shapes()[0].clone();
+    plain_def["name"] = json!("__workflowRunPlain");
+    plain_def.as_object_mut().unwrap().remove("system");
+    let plain = register_all(&[plain_def]);
+    let plain_schema = plain.get("__workflowRunPlain").expect("对照模型应注册成功");
+    assert_eq!(
+        rust_store_core::permission::can_write_schema(&RoleRules::default(), schema, Some(&normal)),
+        rust_store_core::permission::can_write_schema(
             &RoleRules::default(),
-            schema,
+            plain_schema,
             Some(&normal)
         ),
-        "system 标记不得改变权限判定（write: [] 仍拒写）"
+        "system 标记不得改变写判定"
+    );
+    assert_eq!(
+        rust_store_core::permission::can_read_schema(&RoleRules::default(), schema, Some(&normal)),
+        rust_store_core::permission::can_read_schema(
+            &RoleRules::default(),
+            plain_schema,
+            Some(&normal)
+        ),
+        "system 标记不得改变读判定"
     );
 }
 
