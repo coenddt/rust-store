@@ -333,8 +333,8 @@ mod tests {
             "token 占位: {s2}"
         );
         assert_eq!(stmts[1]["isWrite"], json!(true));
-        // SET 列按物理名字典序（locked_at < locked_by）
-        assert_eq!(stmts[1]["params"], json!([123, "w1"]));
+        // SET 列按 `$set` 请求键序（lockedBy 先于 lockedAt），params 与 SET 文本同序
+        assert_eq!(stmts[1]["params"], json!(["w1", 123]));
     }
 
     #[test]
@@ -347,7 +347,7 @@ mod tests {
         assert!(s1.contains("LIMIT $2 FOR UPDATE SKIP LOCKED"), "{s1}");
         let s2 = stmts[1]["text"].as_str().unwrap();
         assert!(s2.contains("IN (___claimed_ids___)"), "{s2}");
-        assert_eq!(stmts[1]["params"], json!([123, "w1"]));
+        assert_eq!(stmts[1]["params"], json!(["w1", 123]));
     }
 
     #[test]
@@ -365,8 +365,8 @@ mod tests {
         );
         assert!(s1.contains("ORDER BY t.\"_id\" ASC LIMIT ?"), "{s1}");
         assert!(s1.contains("RETURNING"), "领取后取行: {s1}");
-        // params = SET 值（物理列字典序：locked_at 在 locked_by 前）+ filter + limit
-        assert_eq!(stmts[0]["params"], json!([123, "w1", "pending", 10]));
+        // params = SET 值（`$set` 请求键序）+ filter + limit
+        assert_eq!(stmts[0]["params"], json!(["w1", 123, "pending", 10]));
         assert_eq!(stmts[0]["isWrite"], json!(true));
         // RETURNING 行走既有行还原形状（含 __present 哨兵）
         assert_eq!(stmts[0]["rowShape"]["present"], json!("__present"));

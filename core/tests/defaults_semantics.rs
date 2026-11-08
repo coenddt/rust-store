@@ -115,6 +115,45 @@ fn d2_read_fills_default_when_key_missing() {
     assert_eq!(out["n"], 5, "缺键应补声明默认: {out}");
 }
 
+/// 嵌套 object 子字段 `default: null` 必须补 null，不得降级为类型零值 0
+/// （回归：`hotScoreMeta.calculatedAt` 缺失时读成 `0`）。
+#[test]
+fn d2_read_fills_explicit_null_default_for_nested_key() {
+    let defn = json!({
+        "name": "T",
+        "collection": "ts",
+        "idPrefix": "t",
+        "timestamps": false,
+        "fields": {
+            "meta": {
+                "type": "object",
+                "default": {},
+                "fields": {
+                    "calculatedAt": { "type": "long", "default": null },
+                    "score": { "type": "long" }
+                }
+            }
+        },
+        "relations": {}
+    });
+    let reg = registry_with(defn);
+    let out = process(
+        &reg,
+        "T{ meta{ calculatedAt, score } }",
+        json!({ "_id": "t6", "meta": {} }),
+    )
+    .expect("processNode 应成功");
+    assert_eq!(
+        out["meta"]["calculatedAt"],
+        Value::Null,
+        "嵌套子字段 default:null 必须补 null（不是 0）: {out}"
+    );
+    assert_eq!(
+        out["meta"]["score"], 0,
+        "无 default 的嵌套子字段才按类型补零: {out}"
+    );
+}
+
 // ─── D3：object 类型校验 / 数组不递归 ───────────────────────
 
 #[test]
