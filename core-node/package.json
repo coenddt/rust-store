@@ -1,6 +1,6 @@
 {
   "name": "rust-store-node",
-  "version": "6.0.0",
+  "version": "6.0.0-fix2",
   "description": "Node.js binding (napi-rs) for the rust-store multi-backend data engine: GQL parsing, permissions, computed columns and SQL dialect translation for MongoDB, MySQL, SQLite and PostgreSQL",
   "main": "index.js",
   "types": "index.d.ts",

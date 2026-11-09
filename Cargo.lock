@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "rust-store-node"
-version = "6.0.0"
+version = "6.0.0+fix2"
 dependencies = [
  "napi",
  "napi-build",
@@ -1090,7 +1090,7 @@ dependencies = [
 
 [[package]]
 name = "rust-store-py"
-version = "6.0.0+fix1"
+version = "6.0.0+fix2"
 dependencies = [
  "pyo3",
  "rust-store-core",

@@ -229,6 +229,11 @@ pub(in crate::command) fn build_raw_update(
     }
     // accessKeys：其余原生操作符（$unset/$inc/...）不得改写受控字段
     crate::access::validate_raw_operators(schema, ctx, &data)?;
+    // D3：`$set` 里的 object 字段收到非对象值 → 显式报错（与 insert / $set 模式同码；
+    // internal 上下文不豁免）。原生操作符路径不得绕过类型强校验。
+    if let Some(set_part) = data.get("$set").filter(|v| !v.is_null()) {
+        crate::computes::validate_object_fields(set_part, schema)?;
+    }
     if schema.timestamps {
         let set_part = data.get("$set").cloned().unwrap_or_else(|| json!({}));
         let mut merged = object_of(&set_part);
