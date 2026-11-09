@@ -4,6 +4,26 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 6.0.1 (2026-11-10)
+
+> 本版本是 `6.0.0` 的补丁批次；内部构建号 `+fix1` / `+fix2` 均对应发布版 **`6.0.1`**：
+> `fix1` = 计算列 `depends` 自引用注入修复（BUGMW6VKGIVE050），`fix2` = 三个 upsert 缺陷修复。
+> 三端（crate / PyPI / npm）统一为 `6.0.1`（`6.0.0` 已被 crates.io 占用，同号不可重发）。
+
+### Fixed
+
+- **计算列 `depends` 含计算列自身键时跳过注入**（BUGMW6VKGIVE050）：`collect_field_deps`
+  遇到 `depends` 引用自身键不再把该键注入，避免计算列依赖自身造成循环。
+- **upsert `$setOnInsert` 覆盖 filter 等值键**（P0）：`merge_insert_defaults` 改为接收执行条件，
+  filter 中直接等值 `{field: v}` 与显式 `{field: {"$eq": v}}` 的顶层键不再补 schema default
+  （`$and` 内等值键同样跳过；`$in` / `$ne` / 范围算子仍按非单值基线处理，default 正常写入）。
+  修复前 `userId` / `auctionItemId` / `moduleType` / `resourceId` 等基线被写成空串，
+  导致 upsert 幂等失效并静默绕过 partial unique 索引。
+- **upsert 与原生操作符 update 未校验 object 字段**：`plan_upsert` 与 `build_raw_update`
+  补调 `validate_object_fields`，与 insert / 普通 update 同码拒绝写入非对象值（internal 上下文不豁免）。
+- **`plan_upsert` 把 `_id.default` 注入 `$setOnInsert`**：构造 `$setOnInsert` 时无条件排除 `_id`，
+  避免 upsert 命中已有文档的更新分支触发 MongoDB `ImmutableField`；显式传入的 `_id` 不受影响。
+
 ## 6.0.0 (2026-11-08)
 
 > 相对已发布的 `v5.3.2`。破坏性项集中在权限与默认值语义。先看迁移清单，再看逐条明细。
