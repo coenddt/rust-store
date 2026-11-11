@@ -20,7 +20,12 @@ name = "rust_store_core"
 path = "src/lib.rs"
 
 [dependencies]
-serde_json = "1"
+# `preserve_order` 必须开启：`$sort` / `$project` / 写命令等以 JSON object 承载
+# **有序**语义（多键排序优先级、字段声明序），默认 Map 为 BTreeMap 会按键名字典序
+# 重排，导致多键 `$sort` 的优先级被改写（2026-11-11 实证：reportSort+reportCreatedAt
+# +reportId 被排成 reportCreatedAt 优先，置顶后列表行序不生效）。
+# 注意：开启后依赖「map 迭代序 = 字典序」的写路径须显式排序（见 dialect/write/update.rs）。
+serde_json = { version = "1", features = ["preserve_order"] }
 # CoreError 结构化错误（FFI 边界可程序化穷举，见 src/error.rs）
 thiserror = "2"
 # 本地磁盘数据源 `$regex` 谓词求值（core/src/local/filter.rs）
