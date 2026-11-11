@@ -30,7 +30,15 @@ pub(super) fn build_assignments(
     let mut assigns: Vec<String> = Vec::new();
     let mut set_fields: Vec<String> = Vec::new();
     let mut unset_fields: Vec<String> = Vec::new();
-    for (op, val) in obj {
+    // 操作符按名字典序处理：`serde_json` 开启 `preserve_order` 后 map 迭代序即插入序，
+    // SQL 参数顺序会随调用方构造顺序漂移；显式排序保持输出确定（claim 等写路径
+    // 的参数序对拍依赖字典序）。
+    let mut ops: Vec<&String> = obj.keys().collect();
+    ops.sort();
+    for op in ops {
+        let Some(val) = obj.get(op.as_str()) else {
+            continue;
+        };
         match op.as_str() {
             "$set" | "$inc" | "$unset" => {
                 op_assignments(
@@ -126,7 +134,14 @@ fn op_assignments(
     let Some(fields) = val.as_object() else {
         return Ok(());
     };
-    for (k, v) in fields {
+    // 字段按名字典序处理（理由同上：开 `preserve_order` 后不能依赖 map 迭代序，
+    // 且 SET 列序与绑定参数序必须同源确定）。
+    let mut keys: Vec<&String> = fields.keys().collect();
+    keys.sort();
+    for k in keys {
+        let Some(v) = fields.get(k.as_str()) else {
+            continue;
+        };
         let Some(col) = super::writable_col(schema, k) else {
             continue;
         };
