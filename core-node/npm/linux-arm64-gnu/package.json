@@ -1,6 +1,6 @@
 {
   "name": "rust-store-node-linux-arm64-gnu",
-  "version": "5.3.3",
+  "version": "5.3.4",
   "os": [
     "linux"
   ],

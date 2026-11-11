@@ -4,6 +4,16 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 5.3.4 (2026-11-11)（5.x 维护分支：排序修复）
+
+### Fixed
+
+- **`serde_json` 启用 `preserve_order`**：JSON 对象保持插入序，修复多键 `$sort` 被按键名字典序
+  重排导致排序优先级失效（玄武实测 `reportSort` + `reportCreatedAt` + `reportId` 被排成
+  `reportCreatedAt` 优先，置顶后列表行序不生效）。
+- **写路径显式排序**：`dialect/write/update.rs` 的操作符与字段按字典序处理，保证开启
+  `preserve_order` 后 SQL 参数序与 SET 列序仍然确定（claim 等写路径对拍依赖）。
+
 ## 5.3.3 (2026-11-08)（5.x 维护分支：加法 + 安全修复）
 
 ### Added（非破坏性：纯新增符号，现有下游无需改代码/配置）
