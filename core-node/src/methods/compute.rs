@@ -9,7 +9,8 @@ use rust_store_core::command::{
     prepare_query as core_prepare_query, strip_query as core_strip_query,
 };
 use rust_store_core::computes::{
-    collect_rel_deps, merge_depends_into_ast, process_node as core_process_node, select_async_fns,
+    all_async_fn_keys, collect_rel_deps, merge_depends_into_ast,
+    process_node as core_process_node, select_async_fns,
     strip_dep_injected as core_strip_dep_injected, InjectInfo,
 };
 use rust_store_core::permission::context_from_value;
@@ -55,8 +56,10 @@ impl Registry {
     pub fn async_fn_refs(&self, model: String, ctx: Option<Value>) -> Result<Vec<String>> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
+        // 「列出全部」语义：requested 传该模型全部 asyncFn 键（与查询投影无关）
+        let requested = all_async_fn_keys(schema);
         Ok(
-            select_async_fns(self.core.role_rules(), schema, context.as_ref())
+            select_async_fns(self.core.role_rules(), schema, context.as_ref(), &requested)
                 .into_iter()
                 .map(|e| e.fn_ref)
                 .collect(),

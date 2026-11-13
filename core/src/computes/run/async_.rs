@@ -8,6 +8,18 @@ use crate::schema::Schema;
 use super::super::cache::{ensure_cache, ComputeEntry};
 use super::super::registry::FnRegistry;
 
+/// 模型全部 asyncFn 计算列键（`select_async_fns` 的 `requested` 全量取值）
+///
+/// 绑定层（core-py / core-node）的 `async_fn_refs` 是「列出全部」语义，与查询投影
+/// 无关——用本函数取全量键传入，保持旧语义不变。
+pub fn all_async_fn_keys(schema: &Schema) -> Vec<String> {
+    ensure_cache(schema)
+        .async_fn_list
+        .iter()
+        .map(|e| e.key.clone())
+        .collect()
+}
+
 /// 计算需执行的 asyncFn 计算列（带权限裁剪），但不执行——供 Host 异步桥接自行调用
 ///
 /// `requested` 是本次查询显式请求的字段列表（查询 AST 的 `fields`）：只有 `requested`

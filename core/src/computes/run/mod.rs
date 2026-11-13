@@ -6,5 +6,5 @@
 mod async_;
 mod sync;
 
-pub use async_::{run_async_fns, select_async_fns};
+pub use async_::{all_async_fn_keys, run_async_fns, select_async_fns};
 pub use sync::{process_node, run_computes};
