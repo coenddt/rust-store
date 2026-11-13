@@ -1062,7 +1062,7 @@ dependencies = [
 
 [[package]]
 name = "rust-store-core"
-version = "6.0.1"
+version = "5.3.1"
 dependencies = [
  "regex",
  "serde_json",

@@ -7,7 +7,6 @@
 //! 修复后：只有显式请求的计算列才执行、才写入；`depends` 注入字段仍由
 //! `strip_query` 剥离（该机制不受本修复影响）。
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
