@@ -4,6 +4,21 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 6.0.2（未发布）
+
+### Fixed
+
+- **asyncFn 计算列按请求字段执行**（与 `release/5.x` 线 `5.3.4` 同源修复）：`select_async_fns` /
+  `run_async_fns` 新增 `requested`（查询显式请求的字段快照）参数，只执行、只写入被显式请求的
+  asyncFn 计算列。修复前任何查询都执行模型全部 asyncFn——IO 型批量计算列（如「逐单统计明细数」
+  ~90ms/次）在**未请求它的查询**（存在性检查、同模型其他投影）上被强加白付开销（实测该类查询
+  单次 ~110ms → 修复后 ~20ms）；且写入发生在 `process_node` 裁剪之后、无人剥离，未请求的
+  计算列值会泄漏进返回结果，破坏 GQL 投影语义。显式请求的计算列照常执行（合法开销不受影响）。
+  `depends` 注入字段的 strip 机制不受影响。
+  对拍（parity）用例中两处 gql 输入显式化以保持旧快照语义（`pp-async-strip` / `pp-sync-and-async`），
+  `run_async_fns` 直连场景由调用方传入 requested；绑定层（core-py / core-node）`async_fn_refs`
+  的「列出全部」语义经 `all_async_fn_keys` 保持不变；新增回归测试 `core/tests/async_fn_projection.rs`。
+
 ## 6.0.1 (2026-11-10)
 
 > 本版本是 `6.0.0` 的补丁批次；内部构建号 `+fix1` / `+fix2` 均对应发布版 **`6.0.1`**：
