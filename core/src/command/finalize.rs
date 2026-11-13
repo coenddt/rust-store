@@ -36,6 +36,10 @@ pub fn prepare_query(
     let mut ast = postprocess_ast(postprocess)?;
     let schema = registry.get(&ast.model)?;
 
+    // 请求字段在 process_node 修改前快照（process_node 会原地展平/注入依赖字段），
+    // 供 asyncFn 按「显式请求」过滤——未请求的计算列不执行、不泄漏进返回。
+    let requested = ast.fields.clone();
+
     // ① 逐条 process_node（同步 fn 计算列内联执行）
     for item in items.iter_mut() {
         process_node(
@@ -50,7 +54,7 @@ pub fn prepare_query(
     }
 
     // 返回 Host 需异步执行的回调标识
-    Ok(select_async_fns(registry.role_rules(), schema, ctx)
+    Ok(select_async_fns(registry.role_rules(), schema, ctx, &requested)
         .into_iter()
         .map(|e| e.fn_ref)
         .collect())
@@ -95,10 +99,17 @@ pub fn finalize_query(
     // ① 逐条 process_node
     prepare_query(postprocess, items, registry, fn_registry, ctx)?;
 
-    // ② 批量 asyncFn（权限过滤）
+    // ② 批量 asyncFn（权限过滤 + 按请求字段过滤）
     let ast = postprocess_ast(postprocess)?;
     let schema = registry.get(&ast.model)?;
-    run_async_fns(items, registry.role_rules(), schema, ctx, fn_registry)?;
+    run_async_fns(
+        items,
+        registry.role_rules(),
+        schema,
+        ctx,
+        fn_registry,
+        &ast.fields,
+    )?;
 
     // ③ 剥离依赖注入的字段
     strip_query(postprocess, items);

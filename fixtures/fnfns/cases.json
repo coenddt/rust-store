@@ -240,7 +240,7 @@
         "relations": {}
       }
     ],
-    "gql": "Post{title}",
+    "gql": "Post{title, skuTag}",
     "docs": [
       {
         "_id": "1",
@@ -274,7 +274,7 @@
         "relations": {}
       }
     ],
-    "gql": "Post{total, items{sku}}",
+    "gql": "Post{total, skuTag, items{sku}}",
     "docs": [
       { "_id": "1", "a": 2, "b": 3, "items": [{ "orderId": "1", "sku": "s1" }] }
     ],

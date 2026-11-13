@@ -85,12 +85,39 @@ fn run_async_fns_case(fx: &Value) -> Result<Value, String> {
         .cloned()
         .unwrap_or_default();
 
+    // 对拍语义是「权限过滤」维度（非查询投影）：requested 取该模型全部 asyncFn key，
+    // 与旧语义（无条件全量执行）等价；查询路径的字段过滤由 finalize_query 承载。
+    let requested: Vec<String> = fx
+        .get("schemas")
+        .and_then(|v| v.as_array())
+        .map(|schemas| {
+            schemas
+                .iter()
+                .filter_map(|s| {
+                    let name = s.get("name").and_then(|v| v.as_str())?;
+                    if name != model {
+                        return None;
+                    }
+                    let computes = s.get("computes")?.as_object()?;
+                    Some(
+                        computes
+                            .iter()
+                            .filter(|(_, c)| c.get("asyncFn").is_some())
+                            .map(|(k, _)| k.clone()),
+                    )
+                })
+                .flatten()
+                .collect()
+        })
+        .unwrap_or_default();
+
     run_async_fns(
         &mut items,
         &rust_store_core::permission::RoleRules::default(),
         schema,
         ctx.as_ref(),
         Some(&TestFnRegistry),
+        &requested,
     )?;
     Ok(json!({ "items": items }))
 }

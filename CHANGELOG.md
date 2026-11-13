@@ -13,6 +13,17 @@
   `reportCreatedAt` 优先，置顶后列表行序不生效）。
 - **写路径显式排序**：`dialect/write/update.rs` 的操作符与字段按字典序处理，保证开启
   `preserve_order` 后 SQL 参数序与 SET 列序仍然确定（claim 等写路径对拍依赖）。
+- **asyncFn 计算列按请求字段执行**：`prepare_query` / `finalize_query` 原先对任何查询都
+  返回并执行模型**全部** asyncFn 计算列——IO 型批量（如整页关系计数）在未请求时也白付
+  开销；且 Host 回调写入发生在 `process_node` 裁剪之后、无人剥离，未请求的计算列值
+  泄漏进返回结果（GQL 投影语义被破坏）。修复后 `select_async_fns` / `run_async_fns`
+  增加 `requested: &[String]` 过滤（取查询 AST `fields`），只有显式请求的计算列才执行、
+  才写入；`depends` 注入与 `strip_query` 剥离机制不变。对拍集 `pp-async-strip` /
+  `pp-sync-and-async` 的 gql 改为显式请求计算列（旧断言依赖泄漏语义，按对拍退役先例
+  修正输入，expected 快照不变）；新增 `core/tests/async_fn_projection.rs` 回归（未请求
+  不执行不泄漏 / 请求照常 / fnRefs 过滤 / strip 保留）。玄武实测：报告缓存列表接口
+  单请求 110ms → 约 20ms（原 `dataUnitCount` 批量计算列 ~90ms/次被强加给每次
+  `CacheReport` 查询，并发下还按请求数线性排队放大）。
 
 ## 5.3.3 (2026-11-08)（5.x 维护分支：加法 + 安全修复）
 
