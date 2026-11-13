@@ -29,4 +29,4 @@ pub use inject::{
     strip_dep_injected, InjectInfo, Injected, RelDep,
 };
 pub use registry::FnRegistry;
-pub use run::{process_node, run_async_fns, run_computes, select_async_fns};
+pub use run::{all_async_fn_keys, process_node, run_async_fns, run_computes, select_async_fns};

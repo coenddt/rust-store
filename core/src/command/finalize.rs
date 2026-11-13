@@ -54,10 +54,12 @@ pub fn prepare_query(
     }
 
     // 返回 Host 需异步执行的回调标识
-    Ok(select_async_fns(registry.role_rules(), schema, ctx, &requested)
-        .into_iter()
-        .map(|e| e.fn_ref)
-        .collect())
+    Ok(
+        select_async_fns(registry.role_rules(), schema, ctx, &requested)
+            .into_iter()
+            .map(|e| e.fn_ref)
+            .collect(),
+    )
 }
 
 /// finalize 第三阶段：剥离 asyncFn 依赖注入的字段

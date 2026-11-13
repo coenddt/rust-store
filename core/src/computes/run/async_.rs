@@ -23,6 +23,29 @@ pub fn select_async_fns(
     ctx: Option<&Context>,
     requested: &[String],
 ) -> Vec<ComputeEntry> {
+    select_impl(rules, schema, ctx, Some(requested))
+}
+
+/// 全部 asyncFn 计算列（不按请求字段过滤，仅 `comp.read` 权限裁剪）
+///
+/// 「列出全部」语义的显式入口：绑定层 `async_fn_refs` 在不传 `fields` 时用它，
+/// 保持 6.0.2 之前「列出全部 asyncFn」的契约不变；按请求字段过滤走
+/// [`select_async_fns`]。
+pub fn all_async_fn_keys(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+) -> Vec<ComputeEntry> {
+    select_impl(rules, schema, ctx, None)
+}
+
+/// `requested` 为 `Some` 时只选被显式请求的计算列；为 `None` 时选全部。
+fn select_impl(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    requested: Option<&[String]>,
+) -> Vec<ComputeEntry> {
     let cache = ensure_cache(schema);
     if cache.async_fn_list.is_empty() {
         return Vec::new();
@@ -30,8 +53,10 @@ pub fn select_async_fns(
 
     let mut selected: Vec<ComputeEntry> = Vec::new();
     for entry in &cache.async_fn_list {
-        if !requested.iter().any(|f| f == &entry.key) {
-            continue;
+        if let Some(req) = requested {
+            if !req.iter().any(|f| f == &entry.key) {
+                continue;
+            }
         }
         match ctx {
             None => selected.push(entry.clone()),

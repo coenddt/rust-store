@@ -16,8 +16,18 @@
   计算列值会泄漏进返回结果，破坏 GQL 投影语义。显式请求的计算列照常执行（合法开销不受影响）。
   `depends` 注入字段的 strip 机制不受影响。
   对拍（parity）用例中两处 gql 输入显式化以保持旧快照语义（`pp-async-strip` / `pp-sync-and-async`），
-  `run_async_fns` 直连场景由调用方传入 requested；绑定层（core-py / core-node）`async_fn_refs`
-  的「列出全部」语义经 `all_async_fn_keys` 保持不变；新增回归测试 `core/tests/async_fn_projection.rs`。
+  `run_async_fns` 直连场景由调用方传入 requested；新增回归测试 `core/tests/async_fn_projection.rs`。
+- **绑定层补齐 asyncFn 选取入口**（`core-py` / `core-node`，随上条同步，无破坏性变更）：
+  - `async_fn_refs(model, ctx?, fields?)` 追加**可选** `fields`（追加在参数表末尾，旧宿主位置传参
+    不受影响）：缺省仍列出全部 `fnRef`（与前版本行为一致），给了则与 `prepare_query` 的 `fnRefs`
+    同口径，只返回被显式请求的计算列。
+  - 新增 `all_async_fn_keys(model, ctx?)`，返回全部 asyncFn 计算列的键（仅按 `comp.read` 裁剪），
+    作为「列出全部」的显式入口。
+  - 新增绑定契约测试 `core-py/test/async_fn_refs_bindings_test.py`、
+    `core-node/test/async_fn_refs.bindings.test.js`。
+- **CI 门禁补齐测试覆盖面**：`core-node` 的 `npm test` 补登 `test/async_fn_refs.bindings.test.js`
+  （此前为新文件但不在硬编码清单里，等于未执行）；`py-binding` job 由只跑 `parity_test.py`
+  改为跑整个 `core-py/test/` 目录，避免新增测试文件静默漏跑。
 
 ## 6.0.1 (2026-11-10)
 

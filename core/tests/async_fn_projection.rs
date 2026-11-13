@@ -89,7 +89,11 @@ fn not_requested_async_fn_is_not_executed_and_not_leaked() {
     let mut items = vec![json!({ "_id": "l1", "title": "t" })];
     finalize_query(&post, &mut items, &reg, Some(&fns), None).expect("后处理应成功");
 
-    assert_eq!(fns.calls.load(Ordering::SeqCst), 0, "未请求不应执行 asyncFn");
+    assert_eq!(
+        fns.calls.load(Ordering::SeqCst),
+        0,
+        "未请求不应执行 asyncFn"
+    );
     assert!(
         items[0].get("favoriteCount").is_none(),
         "未请求的计算列不应泄漏进返回: {}",
@@ -121,15 +125,15 @@ fn prepare_query_fn_refs_filter_by_requested_fields() {
     // 未请求 → fnRefs 为空
     let post = plan_post("Listing { _id, title }", &reg);
     let mut items = vec![json!({ "_id": "l1", "title": "t" })];
-    let refs = prepare_query(&post, &mut items, &reg, Some(&fns), None)
-        .expect("prepare_query 应成功");
+    let refs =
+        prepare_query(&post, &mut items, &reg, Some(&fns), None).expect("prepare_query 应成功");
     assert!(refs.is_empty(), "未请求时 fnRefs 应为空，得到 {refs:?}");
 
     // 显式请求 → fnRefs 含 fnRef
     let post = plan_post("Listing { _id, favoriteCount }", &reg);
     let mut items = vec![json!({ "_id": "l1" })];
-    let refs = prepare_query(&post, &mut items, &reg, Some(&fns), None)
-        .expect("prepare_query 应成功");
+    let refs =
+        prepare_query(&post, &mut items, &reg, Some(&fns), None).expect("prepare_query 应成功");
     assert_eq!(refs, vec!["live_favorite".to_string()]);
 }
 

@@ -32,8 +32,19 @@ export declare function resourceComposeUrl(reference: string, cfg: any): string
 export declare class Registry {
   /** 逐条后处理文档（默认值 → 同步 fn → 递归下钻 → 权限裁剪），返回 `{doc}` */
   processNode(gql: string, doc: any, ctx?: any | undefined | null): any
-  /** 需由 Host 异步执行的计算列 `fnRef` 列表（已按 `comp.read` 权限过滤） */
-  asyncFnRefs(model: string, ctx?: any | undefined | null): Array<string>
+  /**
+   * 需由 Host 异步执行的计算列 `fnRef` 列表（已按 `comp.read` 权限过滤）
+   *
+   * `fields` 为本次查询显式请求的字段：给了就只返回被请求的计算列（与
+   * `prepareQuery` 的 `fnRefs` 同口径）；缺省返回全部，与前版本行为一致。
+   */
+  asyncFnRefs(model: string, ctx?: any | undefined | null, fields?: Array<string> | undefined | null): Array<string>
+  /**
+   * 全部 asyncFn 计算列的键（`computes` 里声明了 `asyncFn` 的字段名）
+   *
+   * 不按请求字段过滤，仅按 `comp.read` 裁剪——「列出全部」的显式入口。
+   */
+  allAsyncFnKeys(model: string, ctx?: any | undefined | null): Array<string>
   /** 收集关系依赖并注入 AST，返回 `{relDeps, ast, injectInfo}` */
   injectDepends(gql: string): any
   /** 剥离 asyncFn 依赖注入的字段，返回 `{items}` */

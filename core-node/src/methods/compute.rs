@@ -9,7 +9,8 @@ use rust_store_core::command::{
     prepare_query as core_prepare_query, strip_query as core_strip_query,
 };
 use rust_store_core::computes::{
-    collect_rel_deps, merge_depends_into_ast, process_node as core_process_node, select_async_fns,
+    all_async_fn_keys as core_all_async_fn_keys, collect_rel_deps, merge_depends_into_ast,
+    process_node as core_process_node, select_async_fns,
     strip_dep_injected as core_strip_dep_injected, InjectInfo,
 };
 use rust_store_core::permission::context_from_value;
@@ -51,14 +52,36 @@ impl Registry {
     }
 
     /// 需由 Host 异步执行的计算列 `fnRef` 列表（已按 `comp.read` 权限过滤）
+    ///
+    /// `fields` 为本次查询显式请求的字段：给了就只返回被请求的计算列（与
+    /// `prepareQuery` 的 `fnRefs` 同口径）；缺省返回全部，与前版本行为一致。
     #[napi]
-    pub fn async_fn_refs(&self, model: String, ctx: Option<Value>) -> Result<Vec<String>> {
+    pub fn async_fn_refs(
+        &self,
+        model: String,
+        ctx: Option<Value>,
+        fields: Option<Vec<String>>,
+    ) -> Result<Vec<String>> {
+        let schema = self.core.get(&model).map_err(err)?;
+        let context = ctx.as_ref().and_then(context_from_value);
+        let entries = match fields {
+            Some(f) => select_async_fns(self.core.role_rules(), schema, context.as_ref(), &f),
+            None => core_all_async_fn_keys(self.core.role_rules(), schema, context.as_ref()),
+        };
+        Ok(entries.into_iter().map(|e| e.fn_ref).collect())
+    }
+
+    /// 全部 asyncFn 计算列的键（`computes` 里声明了 `asyncFn` 的字段名）
+    ///
+    /// 不按请求字段过滤，仅按 `comp.read` 裁剪——「列出全部」的显式入口。
+    #[napi]
+    pub fn all_async_fn_keys(&self, model: String, ctx: Option<Value>) -> Result<Vec<String>> {
         let schema = self.core.get(&model).map_err(err)?;
         let context = ctx.as_ref().and_then(context_from_value);
         Ok(
-            select_async_fns(self.core.role_rules(), schema, context.as_ref())
+            core_all_async_fn_keys(self.core.role_rules(), schema, context.as_ref())
                 .into_iter()
-                .map(|e| e.fn_ref)
+                .map(|e| e.key)
                 .collect(),
         )
     }

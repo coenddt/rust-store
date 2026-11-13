@@ -79,4 +79,6 @@ jobs:
           maturin build --out dist
           pip install --force-reinstall dist/*.whl
       - name: Python 宿主 parity 对拍
-        run: python -m pytest core-py/test/parity_test.py -v
+        # 跑整个 core-py/test 目录：新增的绑定契约测试（如
+        # async_fn_refs_bindings_test.py）若不在硬编码清单里就无人执行，等于没有覆盖。
+        run: python -m pytest core-py/test/ -v
