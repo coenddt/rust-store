@@ -21,9 +21,11 @@
   才写入；`depends` 注入与 `strip_query` 剥离机制不变。对拍集 `pp-async-strip` /
   `pp-sync-and-async` 的 gql 改为显式请求计算列（旧断言依赖泄漏语义，按对拍退役先例
   修正输入，expected 快照不变）；新增 `core/tests/async_fn_projection.rs` 回归（未请求
-  不执行不泄漏 / 请求照常 / fnRefs 过滤 / strip 保留）。玄武实测：报告缓存列表接口
-  单请求 110ms → 约 20ms（原 `dataUnitCount` 批量计算列 ~90ms/次被强加给每次
-  `CacheReport` 查询，并发下还按请求数线性排队放大）。
+  不执行不泄漏 / 请求照常 / fnRefs 过滤 / strip 保留）。玄武实测：**未请求**计算列的
+  `CacheReport` 查询（存在性检查、其他投影）单请求 ~110ms → 约 20ms（原 `dataUnitCount`
+  批量计算列 ~90ms/次被强加给每次查询，并发下还按请求数线性排队放大；列表接口显式
+  请求该计算列，属合法开销不受影响）。绑定层 `async_fn_refs`（「列出全部」语义）经
+  新增的 `all_async_fn_keys` 保持旧语义不变。
 
 ## 5.3.3 (2026-11-08)（5.x 维护分支：加法 + 安全修复）
 
