@@ -1,6 +1,6 @@
 {
   "name": "rust-store-node",
-  "version": "5.3.1",
+  "version": "6.0.1",
   "description": "Node.js binding (napi-rs) for the rust-store multi-backend data engine: GQL parsing, permissions, computed columns and SQL dialect translation for MongoDB, MySQL, SQLite and PostgreSQL",
   "main": "index.js",
   "types": "index.d.ts",
@@ -32,7 +32,7 @@
     "build:debug": "napi build --platform",
     "artifacts": "napi artifacts",
     "prepublishOnly": "napi prepublish -t npm --skip-gh-release",
-    "test": "node --test test/parity.test.js test/dialect.smoke.test.js test/t2q.skill.test.js test/perm.bindings.test.js test/registry.bindings.test.js"
+    "test": "node --test test/parity.test.js test/dialect.smoke.test.js test/t2q.skill.test.js test/perm.bindings.test.js test/registry.bindings.test.js test/write_computes.bindings.test.js"
   },
   "keywords": [
     "rust-store",
@@ -68,10 +68,10 @@
     "sql.js": "^1.8.0"
   },
   "optionalDependencies": {
-    "rust-store-node-win32-x64-msvc": "5.3.1",
-    "rust-store-node-linux-x64-gnu": "5.3.1",
-    "rust-store-node-linux-arm64-gnu": "5.3.1",
-    "rust-store-node-darwin-x64": "5.3.1",
-    "rust-store-node-darwin-arm64": "5.3.1"
+    "rust-store-node-win32-x64-msvc": "6.0.1",
+    "rust-store-node-linux-x64-gnu": "6.0.1",
+    "rust-store-node-linux-arm64-gnu": "6.0.1",
+    "rust-store-node-darwin-x64": "6.0.1",
+    "rust-store-node-darwin-arm64": "6.0.1"
   }
 }

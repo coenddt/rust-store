@@ -1,491 +1,204 @@
 # rust-store
 
-**A single Rust core engine for multi-backend data access — GQL parsing, permission checks, computed columns, command planning and SQL dialect translation, exposed to Node.js and Python through native bindings.**
+**多后端数据访问的纯逻辑 Rust 核心：GQL 进，后端无关的命令 JSON 出，按需翻译成 MySQL / PostgreSQL / SQLite 的参数化 SQL —— 无驱动、无 IO、无时钟。**
 
 ![crates.io](https://img.shields.io/crates/v/rust-store-core)
-![npm version](https://img.shields.io/npm/v/rust-store-node)
-![PyPI version](https://img.shields.io/pypi/v/rust-store-py)
+![npm](https://img.shields.io/npm/v/rust-store-node)
+![PyPI](https://img.shields.io/pypi/v/rust-store-py)
 ![license](https://img.shields.io/badge/license-MIT-blue)
-![rust](https://img.shields.io/badge/rust-stable-orange)
-![bindings](https://img.shields.io/badge/bindings-napi--rs%20%7C%20PyO3-blueviolet)
 
-`rust-store` is the engine behind [`nodejs-store`](https://github.com/coenddt/nodejs-store) and [`py-store`](https://github.com/coenddt/py-store). It contains **no database driver and performs no IO**: it turns a query (GQL) or a write into a backend-agnostic **command** (MongoDB command JSON) for its host to execute, and translates those commands into parameterized SQL for MySQL / PostgreSQL / SQLite.
+当前发布 **5.3.2** —— crates.io 上是 `rust-store-core`，npm 上是 `rust-store-node`，PyPI 上是 `rust-store-py`。主干 `6.0.0` 与维护分支 `5.3.3` 已就位、**未发布**（变更见 [CHANGELOG](./CHANGELOG.md)）。
 
-> **Store family on Gitee:** [`rust-store`](https://gitee.com/coenddt/rust-store) (this repo — shared Rust core) · [`nodejs-store`](https://gitee.com/coenddt/nodejs-store) (Node.js host, npm `nodejs-store`) · [`py-store`](https://gitee.com/coenddt/py-store) (Python host, pip `storepy`)
+> English: [README.en.md](./README.en.md)
 
-> 中文文档见 [README.zh-CN.md](README.zh-CN.md)。
-
-**Documentation site:** <https://coenddt.github.io/rust-store/> — every scenario walkthrough with runnable code and the engine's exact limits, one indexable page per scenario.
+- 一门查询语言只规划一次，在 MongoDB、MySQL、PostgreSQL、SQLite 上执行。
+- 两个绑定只做 JSON 转换，所以 Node.js 与 Python 不可能各自漂移。
+- 30 个文件、380 个测试函数钉住契约；引擎从不打开连接。
 
 ---
 
-## Table of contents
+## 凌晨两点，同一张表，两个答案
 
-- [What it is](#what-it-is)
-- [When to use it](#when-to-use-it)
-- [How it relates to nodejs-store and py-store](#how-it-relates-to-nodejs-store-and-py-store)
-- [Workspace layout](#workspace-layout)
-- [Installation](#installation)
-- [Quick start](#quick-start)
-- [API reference](#api-reference)
-- [GQL capabilities](#gql-capabilities)
-- [Backends and dialects](#backends-and-dialects)
-- [Permission model](#permission-model)
-- [Triggers](#triggers)
-- [Testing and parity](#testing-and-parity)
-- [Transactional capabilities](#transactional-capabilities)
-- [Boundaries and gotchas](#boundaries-and-gotchas)
-- [FAQ](#faq)
-- [Related projects](#related-projects)
+设想凌晨两点值班的工程师。他面对同一张 `orders` 表，看到两个数字。
 
----
+MongoDB 部署显示每张订单最新的三条明细 —— 运营团队刷了一整天的那个视图。PostgreSQL 部署显示全部明细。订单 8841 一边 3 条，另一边 11 条。**87 张订单对不上**。没有异常抛出：两条语句都解析成功，都返回了行，代码评审时都看着正确。
 
-## What it is
+那条语句是手写的。一次重构里，限制「每个父记录取前 N 条子记录」的那段子句 —— 按外键分区的窗口函数 —— 被删掉了。应用无从发现，因为没有任何一层知道少了一个子句。**MongoDB 一直是对的；第二个答案只是在回答另一个问题。**
 
-A multi-backend data engine written once in Rust and shared by every host language.
+修法不是写一条更好的 SQL 字符串，而是不再手写第二个答案。一条查询现在只规划一次，落成一种规范形态 —— MongoDB 命令 JSON；每一个关系型答案都由一个纯函数从这形态推导出来，而这个函数必须**大声说明**自己翻译不了什么。
 
-- **Query language**: GQL — a MongoDB-flavoured tree syntax with relations, pagination, grouping and aggregate predicates.
-- **Planning**: GQL + params → **MongoDB command JSON** (`find` / `aggregate` / `countDocuments` / writes).
-- **Translation**: MongoDB command JSON → **parameterized SQL** for MySQL, PostgreSQL and SQLite (pure functions).
-- **Result rehydration**: flat JOIN rows → nested documents.
-- **Cross-cutting concerns**: schema registry, permission engine (schema / field / relation / computed-column level), computed columns (`fn` / `asyncFn` / `agg`), soft-delete archive planning, federation planning across datasources.
+**命令规划器是主角，SQL 只是它的影子。** 这个仓库就是这件事。
 
-**Core principles** (enforced across the codebase):
+## 它实际做什么
 
-1. **No IO, no clock, no randomness.** The core never opens a connection and never reads the system clock. `now` and `newId(s)` are always passed in by the host — this is what makes the engine deterministic and cross-language reproducible.
-2. **Explicit over silent.** Anything that cannot be translated safely raises an error or emits a structured `unsupported` + warning. The engine never produces SQL that is quietly missing a clause.
-3. **JSON in, JSON out.** Bindings only convert and forward; they add no behaviour, so Node.js and Python cannot drift apart semantically.
+`rust-store-core` 接收三样输入 —— 一份 schema 注册表、一条 GQL 查询或一份写入载荷、一个显式的权限上下文 —— 产出交给宿主执行的惰性 JSON 命令。同一批命令随后仍然不碰数据库，被翻译成关系型后端的参数化 SQL。没有缓冲、没有重试、没有替你做执行：每个公开步骤都是一个 `input -> output` 函数，不启服务就能单测。
 
-### How it differs from specific projects
-
-Positioning only, based on those projects' public documentation at the time of writing — verify against your own requirements.
-
-- **vs `sqlx` / Diesel / SeaORM** — those are Rust database toolkits and ORMs that talk to SQL databases directly. `rust-store-core` never opens a connection: it plans a command and translates dialects, and the resulting command JSON is executed by the Node.js or Python host. That is what lets one engine serve both hosts with identical semantics.
-- **vs writing the layer twice** — the usual alternative is a JavaScript implementation plus a Python re-implementation, which drifts over time. Here a single Rust core is bound twice (`napi-rs`, `PyO3`) over JSON-only bridges, and `core/tests/parity*.rs` plus the golden fixtures in `fixtures/` enforce that the two bindings stay identical.
-- **vs `transports`-style "one core, several bindings" projects** — sharing a Rust core across bindings is a proven pattern for serialization/transport layers. `rust-store` applies it to *data access semantics*: one GQL, one permission engine and four SQL/Mongo dialects behind two language bindings.
-- **vs doing it in the host language** — implementing GQL parsing, permissions and four SQL dialects in JavaScript *and* Python means two code paths, two bug surfaces and two sets of edge cases. The Rust core makes the boundary explicit: pure logic in one place, IO in the hosts.
-
-## When to use it
-
-- **You are building the Node.js or Python hosts** ([`nodejs-store`](https://github.com/coenddt/nodejs-store) / [`py-store`](https://github.com/coenddt/py-store)) or debugging them — this repo is where GQL parsing, permissions and dialect translation actually live.
-- **You want the same query dialect in a Rust service.** `rust-store-core` is a plain Rust library: register schemas, plan a query, translate to SQL, hand the command to your own driver.
-- **You are building a host for another language.** The core is language-agnostic; `core-node` (napi-rs) and `core-py` (PyO3) are two worked examples of the JSON command contract.
-- **You need guaranteed parity between a Node service and a Python service.** Both consume the identical engine, so a query behaves the same in both.
-- **You want permission and computed-column logic out of your application code**, expressed in the schema and enforced at plan time.
-- **You are building an AI / natural-language query layer.** Planning is a pure function (`gql → plan`), so a model's output can be compiled, inspected and rejected before anything touches a database.
-
-## How it relates to nodejs-store and py-store
-
-```
-                 ┌──────────────────────────────┐
-   Node.js  ──▶  │  nodejs-store (npm, host)    │ ─┐
-                 └──────────────────────────────┘  │  rust-store-node (napi-rs)
-                                                   ▼
-                                     ┌───────────────────────────────┐
-                                     │ rust-store/core (pure logic)  │
-                                     │ GQL · permissions · computes  │
-                                     │ command planning · dialects   │
-                                     └───────────────────────────────┘
-                                                   ▲
-                 ┌──────────────────────────────┐  │  rust-store-py (PyO3)
-   Python   ──▶  │  py-store (pip, host)        │ ─┘
-                 └──────────────────────────────┘
-```
-
-- The **core** owns all pure logic.
-- The **hosts** own driver IO, callbacks (sync computed columns, async computed columns) and placeholder substitution.
-- The **bindings** are thin JSON bridges.
-
-If you only want to *use* the data layer, install `nodejs-store` or `storepy` — you do not need this repo directly.
-
-## Workspace layout
-
-| Directory | Crate / package | Purpose |
+| 关注点 | `rust-store-core` | 宿主（`nodejs-store` / `py-store` / 你的服务） |
 | --- | --- | --- |
-| `core/` | `rust-store-core` | Language-agnostic core: GQL / permissions / computed columns / command planning. Pure logic, no IO. |
-| `core-node/` | `rust-store-node` | Node binding (napi-rs) → `dist/rust-store-node.node`. Published to npm as `rust-store-node`. |
-| `core-py/` | `rust-store-py` | Python binding (PyO3) → `dist/rust_store_py.pyd`. Published to PyPI as `rust-store-py`. |
-| `core-ffi/` | `rust-store-ffi` | C ABI surface for `go-store` (version 0.1.0, `publish = false`). |
-| `host/` | `rust-store` | Pure-Rust host (version 0.1.0, not published). |
+| GQL 解析与校验 | 是 | — |
+| 命令规划（find / aggregate / 写） | 是 | — |
+| MongoDB 命令 JSON → SQL 翻译 | 是 | — |
+| 平铺 JOIN 行 → 嵌套文档 | 是 | — |
+| 权限判定（schema / 字段 / 关系 / 行） | 是 | — |
+| `agg` 计算列 | 引擎内联求值 | — |
+| `fn` / `asyncFn` 计算列 | 声明并注入依赖 | 执行回调 |
+| 连接、连接池、事务、重试 | — | 是 |
+| DDL、索引、迁移 | — | 是 |
+| 时钟、ID 生成、随机数 | — | 是 |
 
-The workspace shares a single root `target/` and root `Cargo.lock`. `rust-store-core` is published to crates.io (`cargo add rust-store-core`); the binding crates (`rust-store-node` / `rust-store-py`) are `publish = false` and ship through npm and PyPI instead. `core-ffi` and `host` are versioned independently at 0.1.0 and are not published.
+读路径的输出是一个 `QueryPlan` —— `{ collection, mode, commands, postprocess, sort }`。其中 `commands` 是 MongoDB 命令 JSON，携带一个位置四元组（`source`、`database`、`schema`、`collection`），宿主据此知道该用哪条连接。写入返回一条 `command`，外加文档落库后的样子（已补齐默认值与计算值）。
 
-Internal modules worth knowing: `pipeline/` (GQL parse → AST → `$lookup`/`$group` build), `command/` (query/count/write/mutation planners), `dialect/` (filter, select, write, row rehydration, introspection, overlay), `computes/` (sync / async / agg), `permission.rs`, `federation/`, `schema/`.
+## 它如何工作
 
-## Installation
+### MongoDB 是规范方言
 
-Bindings (what hosts depend on):
+规划只发生一次，落成 MongoDB 驱动本来就懂的语句：`find`、`aggregate`、`countDocuments`、`insertOne`、`updateMany`、`deleteMany`。关系由引擎编译成 `$lookup` / `$addFields`；`$pipeline` 直通已被移除，出现即解析错误，而不是静默空操作。SQL 再由同一条命令经 `dialect::translate` 产出，不存在第二套需要同步的查询模型。
 
-```bash
-npm i rust-store-node          # Node binding; platform natives ship as optionalDependencies
-pip install rust-store-py      # Python binding (maturin wheel)
-```
+方言分歧只发生在翻译这一层：PostgreSQL 用 `$n` 占位符和 `RETURNING`；MySQL 与 SQLite 用 `?`；标识符在 MySQL 上反引号，其余双引号。根级 `$group` / `$having` 变成 `GROUP BY` / `HAVING`；关系聚合谓词变成 `EXISTS` / `NOT EXISTS`；关系滚动的 `agg` 列变成派生表 `LEFT JOIN`；按父取前 N 变成 `ROW_NUMBER() OVER (PARTITION BY fk ORDER BY ...)` —— 正是那个夜里缺失的子句。
 
-Rust library:
+### 翻译不了就出一张回执，不猜
 
-```bash
-cargo add rust-store-core     # pure logic: GQL → command JSON → SQL, no IO
-```
+`translate` 返回 `{ backend, stmts, warnings, unsupported }`。当某一段无法安全下推时，`stmts` 会刻意省略它，`unsupported` 点名 code、别名与原因。宿主必须拒绝或降级；**绝不能把它当成完整查询去执行**。两阶段计划使用 `PHASE1_IDS` 占位符，由宿主用第一条命令取回的 id 替换，再调用 `restore_sort_order` 把最终列表恢复成调用方要求的顺序。
 
-API docs are built automatically on [docs.rs](https://docs.rs/rust-store-core). Working from a checkout instead? Use a path dependency: `rust-store-core = { path = "path/to/rust-store/core" }`.
+同一规则贯穿 core：未知 GQL 子句、schema 外字段、没有 `$group` 的 `$having`、空条件的批量写 —— 全部报错。没有任何分支会悄悄产出一条更弱的查询。
 
-Build toolchain for development: Rust stable (edition 2021) with `cargo` / `clippy` / `rustfmt`; `napi-rs` CLI for `core-node`; `maturin >= 1.7, < 2.0` for `core-py`.
+### 权限是 schema 数据，上下文必须显式
 
-Building the bindings locally:
+读、写角色按 schema、字段、关系、计算列分别声明，除 `internal` 外没有硬编码。有效角色集与声明清单比对；显式豁免清单可以绕过；显式拒写清单优先；RBAC 叠加层追加表级与行级限制，拒绝压过允许。`creator` 是伪角色，动态解析为「文档的 owner 键等于 `ctx.userId`」。声明式 `accessKeys` 提供行级过滤：宿主在 `ctx` 传入对应数组，引擎把它并入读条件与写校验，并按后端下推为原生 `$in`、`JSON_OVERLAPS`、`&&` 或 `json_each`。
 
-```bash
-# Node binding (core-node/)
-npx napi build --platform --release          # release flow: .github/workflows/release-npm.yml
+上下文是每个规划调用上的显式参数 —— 没有 async-local storage，没有隐式环境用户。省略即「无上下文」。`require_context` 默认为关闭，以对齐原始实现；在启动时打开，并让真正的内部调用传 `Context::system()`，就能得到 fail-secure 行为。
 
-# Python binding (core-py/)
-maturin build --manifest-path core-py/Cargo.toml --release
-```
-
-## Quick start
-
-### Node.js (`core-node`, camelCase)
-
-```js
-const { Registry } = require('rust-store-node');
-
-const reg = new Registry();
-reg.register({ name: 'User', collection: 'users', fields: { name: { type: 'string' } }, relations: {} });
-
-const plan = reg.planQuery('User{name}', {}, null);   // → MongoDB command JSON
-```
-
-Sync computed-column callbacks are registered with `setFn`; `asyncFn` computed columns use the two-phase `prepareQuery` / `stripQuery` flow.
-
-### Python (`core-py`, snake_case)
-
-```python
-from rust_store_py import Registry
-
-reg = Registry()
-reg.register({"name": "User", "collection": "users", "fields": {"name": {"type": "string"}}, "relations": {}})
-
-plan = reg.plan_query("User{name}", {}, None)  # → MongoDB command JSON (dict)
-```
-
-Sync computed columns use `set_fn`; `asyncFn` uses the same two-phase flow. **Errors are always raised as Python exceptions (`PyErr`)** — they are never mixed into the returned dict.
-
-### System context
-
-`ctx` is an explicit parameter on every plan method. `{ internal: true }` marks a *system call* (permission engine passes everything, no owner injection), which is semantically different from `undefined`/`None` (no context).
-
-- Node: `const { Registry, systemContext } = require('rust-store-node')` → `systemContext()` returns `{ internal: true }`.
-- Python: `rust_store_py.system_context()` (module-level function).
-
-## API reference
-
-Node and Python names correspond one-to-one (camelCase ↔ snake_case). All methods below exist in both bindings.
-
-### Lifecycle and schema
-
-| Node | Python | Notes |
-| --- | --- | --- |
-| `new Registry()` | `Registry()` | Explicit registry instance (no module-level global) |
-| `register(defn)` | `register(defn)` | Registers a schema; auto-derives the `<Name>Deleted` archive table |
-| `has(name)` / `list()` | `has(name)` / `list()` | |
-| `setFn(fnRef, cb)` / `clearFns()` | `set_fn(fn_ref, cb)` / `clear_fns()` | Sync computed-column callbacks |
-| `setRequireContext(bool)` / `requireContext()` | `set_require_context(bool)` / `require_context()` | Fail-secure switch (default off) |
-
-> The binding `Registry` has **no** `get(name)` — hosts keep their own schema dictionary.
-
-### Read path
-
-`buildPipeline` / `build_pipeline`, `planQuery` / `plan_query`, `planQueryOne` / `plan_query_one`, `planQueryWithCount` / `plan_query_with_count`, `resolvePage` / `resolve_page`, `restoreSortOrder` / `restore_sort_order`, `planExists` / `plan_exists`, `planCount` / `plan_count`, `sortsByRelation` / `sorts_by_relation`.
-
-Notes: `planQueryOne` forces `$limit(1)` when no explicit `$limit` is present. `planQueryWithCount`'s `total` is supplied by the host after it runs the `countCommand`.
-
-### Write path
-
-`planInsert` / `plan_insert`, `planInsertMany` / `plan_insert_many`, `planUpdate` / `plan_update`, `planUpdateMany` / `plan_update_many`, `planRemove` / `plan_remove`, `planArchiveDocs` / `plan_archive_docs`, `planUpsert` / `plan_upsert`, `planMutation` / `plan_mutation`, `applyWriteDefaults` / `apply_write_defaults`.
-
-Notes:
-
-- `planUpdate` / `planRemove` return `{ "needsProbe": cmd }` when a `creator` permission check requires a probe; the host executes the probe and re-enters with `probeFound` / `probeDoc` to get `{ "command": cmd }`.
-- `planUpdateMany` rejects guest / unauthorised callers outright and **does not** use the creator probe.
-- `planRemove` returns an archive `findCommand` plus a `deleteCommand`; archived documents are written to `<collection>_deleted` with a `deletedAt` field.
-- `archive` (optional bool, default `true`) on a schema definition opts it out of soft-delete: when `false`, the `<Name>Deleted` archive model is not derived at registration, so `planRemove` emits no `findCommand` and `planArchiveDocs` rejects — archiving is structurally impossible for that schema. Call-level `archive` options are host concerns; core plans are options-free.
-- `planMutation` expands into an ordered step sequence; parent/child dependencies are expressed with `{{step.<N>._id}}` placeholders that the host fills in.
-- Every plan method takes an optional trailing `routeOverride` / `route_override` (`{source, database, schema}`).
-
-### Permissions
-
-`canRead` / `can_read`, `canWrite` / `can_write`, `shouldInjectOwner` / `should_inject_owner`, `mergeOwnerCondition` / `merge_owner_condition`, `readableFields` / `readable_fields`, `readableRelations` / `readable_relations`, `writableFields` / `writable_fields`, `filterWritableData` / `filter_writable_data`.
-
-#### `accessKeys` reference (declarative row-level permission)
-
-A single schema declaration gives row-level filtering: the host passes the matching list arrays in `ctx`, and the core merges them into query conditions and write validation — no filtering code in business logic.
+**空名单不等于拒绝。** `read: []` / `write: []` 表示「未配置」，按注册表的 `unconfigured` 姿态判定（默认不限制）。要表达「谁都不许读」，用显式开关 `denyRead: true`：
 
 ```json
 {
-  "name": "CacheCalendar",
-  "accessKeys": {
-    "satCode": { "read": "satsRead", "write": "satsWrite", "bypassRoles": ["admin", "internal"] }
-  },
-  "fields": { "satCode": { "type": "string" }, "total": { "type": "int" } }
-}
-```
-
-Example `ctx`:
-
-```json
-{ "userId": "u1", "roles": ["viewer"], "satsRead": ["GEO","LEO"], "satsWrite": ["GEO"] }
-```
-
-Semantics:
-
-- **Rule**: scalar read = value ∈ list; array read = intersects the list, array write = target array ⊆ list.
-- **AND with existing permissions**: field whitelist, `ownerKey` and RBAC conditions still apply.
-- **Missing key fails closed**: if `ctx` lacks `satsRead` / `satsWrite`, planning errors (`ERR_PERMISSION:ACCESS:`) instead of degrading to an empty condition.
-- **Empty list**: reads return nothing, writes are all rejected.
-- **`bypassRoles` skips that key only**: matching roles exempt this field's access condition and nothing else.
-
-Dialect pushdown: Mongo native `$in`; MySQL `JSON_OVERLAPS`; PG `&&`; SQLite `json_each`.
-
-### Computed columns and post-processing
-
-`processNode` / `process_node`, `asyncFnRefs` / `async_fn_refs`, `injectDepends` / `inject_depends`, `stripDepInjected` / `strip_dep_injected`, `prepareQuery` / `prepare_query` (phase one, returns `{items, fnRefs}`), `stripQuery` / `strip_query` (phase three).
-
-### Datasource, dialect, federation
-
-| Node | Python | Notes |
-| --- | --- | --- |
-| `resolveDatasource(schemaName, config)` | `resolve_datasource(...)` | Returns `"mongo"` / `"mysql"` / `"postgres"` / `"sqlite"` |
-| `schemaDatasource(schemaName)` | `schema_datasource(...)` | `null` when undeclared (semantics: `default`) |
-| `dialectTranslate(backend, cmd)` | `dialect_translate(...)` | MongoDB command JSON → SQL statement sequence |
-| `restoreRows(shape, rows)` | `restore_rows(...)` | Flat rows → nested documents |
-| `schemaFromRows(rows, backend)` | `schema_from_rows(...)` | Introspection rows → schemaJSON |
-| `mergeSchema(base, overlay)` | `merge_schema(...)` | Physical structure + local overlay |
-| `planFederated(gql, params, ctx, dsConfig)` | `plan_federated(...)` | Splits one GQL into per-source commands + in-memory join edges; result includes `degraded` |
-| `mergeFederated(plan, results)` | `merge_federated(...)` | `results` must match `plan.sources` in order and length |
-
-Module-level: `systemContext()` (Node) / `system_context()` (Python).
-
-**APIs that do not exist** (do not invent them): there is no `aggregate` passthrough, no public `parseGql` / `parse_gql` method (parsing is internal via `pipeline::parse_gql`), and **no IO / driver / execution method of any kind**.
-
-## GQL capabilities
-
-```text
-ModelName($condition:@c0,$sort:@s1,$skip:@sk,$limit:@l1) {
-  field1, field2, obj.subField,
-  RelationName($condition:@c2,$sort:@s3,$limit:@l2) { field3, NestedRelation { field4 } }
-}
-```
-
-- Values are referenced from the params object by `@key`.
-- Relations are declared in the schema (`type: "many" | "one"`) and compiled by the engine into `$lookup` / `$addFields` — **never hand-write `$lookup`**.
-- Recursion guards: `MAX_DEPTH = 10`, `MAX_PAGINATED_DEPTH = 4`.
-- **`$pipeline` passthrough has been removed** — its presence is an explicit parse error, not a silent no-op.
-
-### Root-level `$group` / `$having`
-
-```text
-Course($condition:@c0, $group:@g0, $having:@h0, $sort:@s0, $skip:@sk, $limit:@l0) { status, n, total }
-```
-
-- Spec: `{ "by": ["status","meta.level"], "agg": { "n": {"$count":"*"}, "total": {"$sum":"price"} } }`.
-- Operator whitelist (identical on the `$group` and SQL-translation sides): `$count` / `$sum` / `$avg` / `$min` / `$max`; `$count: "*"` means row count.
-- Fixed execution order: `$condition` (WHERE) → `$group` (GROUP BY) → `$having` (HAVING) → `$sort` → `$skip`/`$limit` → projection. With `$group`, sort/pagination apply to the **grouped result**, and the `$sort` key domain is `by` keys ∪ `agg` aliases.
-- `$having` without `$group` is an error.
-- Validation: `by` accepts scalar fields (including object dot-paths); relations / arrays / bare objects / out-of-schema fields are `Err`. `agg` accepts only scalar fields of the same table (relations / arrays / objects / dot-paths / foreign fields are `Err`).
-- SQL translation (`dialect/select/group_agg.rs`): Mongo `$group` (`_id` + accumulators) → `GROUP BY` + aggregate columns; `$match` after `$group` → `HAVING`; whole-table single group (`by` omitted / `[]`) → no `GROUP BY`.
-
-### Relation aggregate predicates (§9.6)
-
-Filter parents by an aggregate over a relation — a semi-join with no fan-out:
-
-- Shorthand: `{ "<relation>": { "$exists": true|false } }`, `{ "$count": { "$of"?: field, "<cmp>": value } }`, `{ "$sum"|"$avg"|"$min"|"$max": { "$of": field, "<cmp>": value } }`, optionally combined with a `$filter` block.
-- Main form: `{ filter?, agg, having }`.
-- Comparison operators: `$gt` / `$gte` / `$lt` / `$lte` / `$eq` / `$ne`.
-- `$not` wrapping a single relation predicate, or `$exists: false`, produces an anti-join.
-- SQL: `EXISTS` / `NOT EXISTS`; MongoDB: sentinel surrogate keys.
-- One relation level only; `orders.items.price` is `Err`. A relation the caller cannot read is `Err`, never silently `false`. Cannot be combined with root-level `$group`.
-
-### Computed columns
-
-Declared in the schema; three forms:
-
-| Form | Evaluated | Notes |
-| --- | --- | --- |
-| `fn` | host (sync, via `set_fn`) | dependencies are injected into the projection automatically |
-| `asyncFn` | host (async, two-phase) | same injection, resolved after the query returns |
-| `agg` | **engine inline** | relation agg: `{"$count": "<relation>"}` or `{"$sum"|"$avg"|"$min"|"$max": "<relation>.<field>"}`; inline array agg: `{"$size": "<arrayField>"}` or `{"$sum"|"$avg"|"$max"|"$min"|"$countDistinct": "<arrayField>.<elementField>"}` |
-
-`agg` is mutually exclusive with `fn` / `asyncFn`. Empty-set semantics: `$count → 0`, others → `None` (nullable). SQL uses a derived table `LEFT JOIN (… GROUP BY fk)`; MongoDB uses `$lookup` + `$addFields`.
-
-The `agg` path target is resolved by its first segment: a relations key → relation agg (above); a declared **array field** → inline array agg over the document's own array — empty array / missing field: `$size`/`$sum`/`$countDistinct` → `0`, `$avg`/`$max`/`$min` → `null`; `$countDistinct` counts distinct non-null values; `depends` must include the first segment; one element level only; available on MongoDB and the local evaluator, SQL backends reject it explicitly. Any other first segment fails at registration.
-
-## Backends and dialects
-
-- **MongoDB** — native aggregation pipeline.
-- **MySQL** — parameterized SQL, `information_schema` introspection.
-- **SQLite** — parameterized SQL (`?`), `sqlite_master` + `PRAGMA` introspection.
-- **PostgreSQL** — parameterized SQL (`$n`), `RETURNING` for read-after-write.
-- **local** — collections persisted as JSON files on local disk; commands evaluated directly by the core's local evaluator (no driver, no SQL), zero external services.
-
-Datasource registration: the host passes `dsConfig = { "sources": { "<name>": "<kind>" } }` (`null` = single-source Mongo). SQL joins across databases of the same source are still pushed down (qualified `JOIN`); Mongo cross-database relations degrade to in-memory federation.
-
-Cross-backend translations: root `$group` / `$having` → `GROUP BY` / `HAVING`; the `$count`/`$sum`/`$avg`/`$min`/`$max` whitelist; relation aggregate predicates → `EXISTS` / `NOT EXISTS` (`WHERE EXISTS (SELECT 1 … GROUP BY fk HAVING …)`); relation-rolling `agg` computed columns → derived table `LEFT JOIN (… GROUP BY fk)`; per-parent top-N (`$sort`/`$skip`/`$limit` inside a relation) → `ROW_NUMBER() OVER (PARTITION BY fk ORDER BY …)`.
-
-**Mongo-only or explicitly-unsupported on SQL**: object dot-paths in `$group.by` (Mongo can execute, SQL cannot map to a scalar column → `Err`); root `$sort` keys that cannot be mapped (unknown field / object or array field / relation name itself / no matching relation drill-down) are simply not pushed down (warning + host-side fallback sort) while Mongo executes them normally.
-
-## Permission model
-
-Schema-level `read` / `write`, field-level `field.read` / `field.write`, relation-level `rel.read`, computed-column-level `comp.read`.
-
-- `super_admin` / `admin` / `internal` pass everything.
-- `guest` has no write permission regardless of schema configuration.
-- `write: []` (empty whitelist) denies all writes.
-- `creator` is a pseudo-role resolved dynamically as `doc.createdBy == ctx.userId`.
-- The permission context is an **explicit parameter** (`ctx`) — this is a deliberate difference from older implicit `AsyncLocalStorage`-style designs.
-
-Guarding helpers for AI query hosts: `timestamps` value validation (only `true` / `false` / `"ms"` / `"s"`, invalid values fail at registration) and federation `degraded` events (`{code, layer, message, hint}`, returned in `plan.degraded`) so non-pushdownable cross-source pagination/sort never blocks a query silently. See `core/tests/guards.rs`.
-
-## Triggers
-
-Declarative trigger chains on a schema: write events (`insert` / `update` / `remove`) are expanded, at plan time, into an ordered list of side-effect steps returned alongside the write command (`plan.triggers`) for the host to run inside the same atomic envelope. The core owns parsing, validation and expansion (`core/src/command/triggers.rs`); the host executors live in nodejs-store `src/crud/triggers.js` and py-store `py_store/crud/triggers.py` (both hosts expand the same fixture byte-for-byte identically — golden coverage in `core/tests/triggers.rs` + `fixtures/triggers/cases.json`).
-
-**Declaration form** (top-level schema `triggers` field):
-
-```json
-{
-  "triggers": {
-    "insert": [
-      { "name": "decStock", "into": "Product", "op": "update",
-        "condition": { "_id": "{{root.productId}}" },
-        "data": { "$inc": { "stock": -1 } } },
-      { "name": "stockLog", "into": "StockLog", "op": "insert",
-        "data": { "orderId": "{{root._id}}", "delta": -1, "at": "{{now}}" } }
-    ],
-    "update": [
-      { "name": "onPaid", "onFields": ["status"],
-        "when": { "eq": ["{{root.status}}", "paid"] },
-        "fnRef": "grantPoints",
-        "args": { "userId": "{{root.userId}}", "amount": "{{root.amount}}" } }
-    ]
+  "name": "AuditLog",
+  "collection": "audit_logs",
+  "denyRead": true,
+  "read": [],
+  "fields": {
+    "actor": { "type": "string" },
+    "action": { "type": "string" }
   }
 }
 ```
 
-| Field | Meaning |
-|---|---|
-| `name` | Step name; de-duplicated by `(name, _id)` within one top-level call (at most one execution) |
-| `into` | Target schema (command steps) |
-| `op` | `insert` / `update` / `remove` (whitelist, validated at registration) |
-| `onFields` | Field-level hit list for the `update` event; must be declared schema fields |
-| `when` | Post-hit condition guard (minimal grammar: `eq/ne/gt/gte/lt/lte/in/and/or/not`) |
-| `condition` / `data` | Write target condition and data for command steps (`update` / `remove` require `condition`; `remove` forbids `data`) |
-| `fnRef` / `args` | Host implementation and args for callback steps (a missing implementation at startup ⇒ `ERR_TRIGGER_FN_MISSING`) |
-| `cron` | 5-field cron for the `schedule` event (required there, forbidden on every other event) |
+`denyRead` 只接受布尔值，缺省 `false`；字符串、数字、`null` 等一律在注册期显式报错。判据单点在 `permission::can_read_schema`，query / count / exists / lookup / federation 全部读路径共用，并优先于一切角色（含 `internal` 与显式豁免清单）。`ctx = None` 的系统内部调用保持 fail-open；要连内部调用一并拒绝时，配合 `require_context(true)` 并传显式系统上下文。
 
-Trigger events are `insert` / `update` / `remove` / `schedule`; any other event key is a registration-time `Err`.
+### 写入时 `null` 的两种含义
 
-**Placeholders**: `{{root.<field>}}` (event-source document field; for `update` = the post-change value), `{{before.<field>}}` (pre-change value), `{{now}}` (host clock). A placeholder must occupy the whole string value (whole-value substitution only); embedding it inside a string (e.g. `"order-{{root._id}}"`) raises `ERR_TRIGGER_PLACEHOLDER` — no silent drift.
+- **insert**：只有键缺失才填声明默认值；显式 `null` 原样落库，不会被默认值覆盖。
+- **update 的 `$set`**：显式 `null` 表示「不写该字段」（与 5.x 旧义一致），不会把列置空；清空字段请用 `$unset: ["field"]` —— 物理列置 `NULL`，同时从 `__present` 移除存在标记。
 
-**Evaluation**: an `update` event first checks that the `onFields` values actually changed (structural deep compare, no-op suppression — an unchanged value does not fire), then the `when` guard. `insert` has no `before` and skips the field-level check; `remove` uses the archived (pre-delete) document as root. System fields (`createdAt` / `updatedAt` / `deletedAt`) are excluded from the trigger probe projection, so their changes never fire. The `schedule` event (`cron`) is enumerated by the host scheduler plugin (`expandScheduleTriggers` / `expand_schedule_triggers`) and reuses the same trigger chain; it has no `root` / `before` context, so only `{{now}}` is allowed.
+### 本版钉死的三个行为
 
-**Boundaries**: trigger steps and the source write run inside the same `runAtomic` envelope → a single-source real transaction; touching a second datasource runs sequentially and declares `nonAtomic` through the feedback channel; cross-source writes inside `store.session()` fail closed. **No cascading** (a trigger write does not fire further triggers; declaring a `cascade` key is a registration-time `Err`); `updateMany` does not support field-level triggers (explicitly refused, no silent degradation); the command step `op: "upsert"` is a registration-time `Err` (no single-location semantics); declaring triggers under the `text2query` profile is an `Err` (pure-query hosts have no write path).
+1. **错误有三种状态，不是两种。** 需要先做归属探测的写操作返回 `needsProbe`；宿主执行后重入。探测匹配不到行，结果是 `ERR_NOT_FOUND:` —— 绝不是权限错误，因为「已删除」和「不是你的」会把用户指向不同的人。行存在但调用方无权触碰时，保留原始权限措辞（`ERR_PERMISSION:ACCESS:` 等），不重新包装。
+2. **`creator` / `owner` 权限自带字段与列。** schema 的 `read` 或 `write` 含 `creator` 时，注册期就补上 owner 键 —— 默认 `createdBy`，可用 `ownerKey` 改名，永不为 `_id`；显式声明则保留声明类型。插入时若尚未设置，就从 `ctx.userId` 填充，显式 owner 永不被覆盖。宿主的 DDL 生成器按同一规则加列，所以合法 schema 不会以未知列的身份到达 SQL。
+3. **schema 的 `default` 在落库前生效。** 插入路径只为缺失的键填声明过的默认值：显式值优先，显式 `null` 保留为 `null`，没有默认值的字段不会补类型零值。同一规则也喂给返回文档，所以「写了什么」与「拿回什么」不可能互相矛盾。
 
-## Transactional capabilities
-
-Engine-side additions for transactional workloads (relation predicates in mutations with
-plain-condition sugar, autoincrement primary keys, `$group by` one-relation paths), shared
-by both hosts. Engine notes, code paths and parity guardrails:
-**[doc/transaction-capabilities.md](doc/transaction-capabilities.md)** ·
-[中文](doc/transaction-capabilities.zh-CN.md).
-
-- Mutation conditions referencing a declared relation normalize into a preCommand
-  (aggregate → `EXISTS` on SQL, native on Mongo) plus `_id $in` — fixing the previous
-  silent no-op on the MongoDB side.
-- `_id: {strategy: "autoincrement"}` schemas bypass host ID supply; SQL INSERTs gain
-  `RETURNING _id` where supported, and implicit `int → 0` defaults no longer apply.
-- `$group by` accepts `one`-relation paths (`$lookup`+`$unwind` on Mongo, `LEFT JOIN` on
-  SQL); `many` paths fail explicitly.
-- Host DDL generators (byte-identical across hosts) now also emit `CREATE [UNIQUE] INDEX`
-  from `schema.indexes`.
-- Concurrency primitives `planClaim` / `planCompareAndSet` (host facade names; core
-  `plan_claim` / `plan_compare_and_set`) plan `atomic_commands` sequences — all commands
-  must run in one connection inside one transaction. `claim` locks and marks the first
-  `limit` rows matching a filter (`FOR UPDATE SKIP LOCKED` on MySQL/PG; SQLite uses an
-  atomic `IN (subquery)` update plus a same-subquery row fetch — the claim filter must
-  not reference columns the update writes, or the row fetch misses). `compareAndSet`
-  emits one conditional UPDATE; matched-row semantics come from the host's
-  rowCount / `changes()`. SQL backends only — Mongo executors must reject both kinds
-  explicitly. Host-side facade wiring (claim / compareAndSet / renewLease) lands with
-  the host release.
-
-## Testing and parity
-
-```bash
-# 1) core (pure Rust, no host dependency)
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test -p rust-store-core
-
-# 2) Node binding (core-node/)
-npm ci
-npx napi build --platform
-npm test
-
-# 3) Python binding (repo root)
-cd core-py && pip install maturin pytest && maturin build --out dist && pip install --force-reinstall dist/*.whl
-cd .. && python -m pytest core-py/test/parity_test.py -v
-
-# 4) Golden baseline, recomputed on all three sides
-node tools/verify-fixtures.js
+```mermaid
+flowchart LR
+  A[Plan update] --> B{Probe needed}
+  B -- yes --> C[Host runs probe]
+  C --> D{Row found}
+  D -- no --> E[ERR_NOT_FOUND]
+  D -- yes --> F{Permitted}
+  F -- no --> G[Original permission error]
+  F -- yes --> H[Write command]
 ```
 
-- Core tests: `core/tests/parity*.rs` (parity, parity_computes, parity_commands, parity_write, parity_fnfns, parity_dialect, parity_federation), plus `guards.rs`, `pushdown_usecases.rs`, `regression_d_fixes.rs`, `route_override.rs`.
-- Binding parity: `core-node/test/{parity.test.js, dialect.smoke.test.js, t2q.skill.test.js}` and `core-py/test/parity_test.py`.
-- Golden fixtures: `fixtures/{pipeline,commands,computes,fnfns,federation,expected,host}/`. There is **no generator** — `tools/verify-fixtures.js` recomputes every case through all three implementations and deep-compares against the frozen snapshot; all three green means "no diff, reproducible".
-- **The binding crates have no Rust unit tests** (`[lib] test = false`), so `cargo test --workspace` does not cover them — always run the host-side parity suites after changing a binding.
+## 跑起来
 
-## Boundaries and gotchas
+```bash
+cargo add rust-store-core     # Rust 库，crates.io
+npm i rust-store-node         # Node 绑定；平台原生包随 optionalDependencies 分发
+pip install rust-store-py     # Python 绑定，maturin 构建
+```
 
-1. **No clock, no randomness in `core`.** `now` / `newId(s)` must be supplied by the host, which is what makes cross-language results reproducible.
-2. **`ctx` is explicit** on every plan method. Omitting it means "no context" (permissive by default; an error when `require_context` is on).
-3. **`require_context` defaults to off (fail-open)** for parity with the original JS implementation. Turn it on at host startup and pass `systemContext()` for internal calls to get fail-secure behaviour.
-4. **Stable error prefixes**: `ERR_PERM_PREFIX`, `ERR_NO_WRITE`, `ERR_NO_BATCH_WRITE`, `ERR_NO_CONTEXT` (`core/src/command/mod.rs`). Hosts map these to their own error types. Python must raise them as `PyErr`, never return them.
-5. **Empty-condition batch writes are rejected**: `updateMany` / `remove` with `{}`, `null` or an empty logical group (`{"$and":[]}` / `{"$or":[]}`) is treated as unconditional and explicitly refused — it never touches a whole table.
-6. **`__present` is an internal SQL sentinel column**: it distinguishes "explicit null (key present)" from "missing (no key)". It is injected and consumed by the translation layer; in PostgreSQL `ON CONFLICT DO UPDATE`, references must be table-qualified or you get `column reference "__present" is ambiguous`.
-7. **U1–U4 are global errors**: filtering directly on array fields (U1), deep equality on object fields (U2), object dot-path filtering (U3) and object dot-path sorting (U4) all raise on every backend; empty logical groups raise too. Relation-path sorting is *not* object dot-path sorting and is unaffected.
-8. **`timestamps` validation**: only `true` / `false` / `"ms"` / `"s"` (default ms); invalid values fail at registration. Unit conversion is the host's clock's job.
-9. **Federation `degraded` does not block**: non-pushdownable cross-source pagination/sort produces structured events the host is expected to feed into an automated feedback loop.
-10. **Untranslatable means explicit** (project rule): translation must raise or emit `unsupported` + warning; it never emits SQL that is missing a clause.
-11. **`planFederated` results must match `plan.sources` in order and length**, or `mergeFederated` will misalign.
+注册一份 schema、规划一次读取，再把命令翻译到每个关系型后端。下面这段是公开 Rust API，取自 `core/tests/parity_dialect.rs`：
 
-## FAQ
+```rust
+use serde_json::{json, Map};
 
-**Is `rust-store` an ORM?**
-No. It is a planning and translation engine. It holds no driver, opens no connection and executes nothing — the host runs every command.
+use rust_store_core::command::plan_query;
+use rust_store_core::dialect::{translate, Backend};
+use rust_store_core::permission::Context;
+use rust_store_core::schema::Registry;
 
-**Do I need this repo to use the data layer?**
-No. Install `nodejs-store` (npm) or `storepy` (PyPI). This repo matters if you are building, debugging or extending the engine itself, or writing a host for another language.
+fn main() -> Result<(), String> {
+    let mut registry = Registry::new();
+    registry.register(&json!({
+        "name": "Order",
+        "collection": "orders",
+        "timestamps": false,
+        "fields": {
+            "code":   { "type": "string" },
+            "status": { "type": "string" },
+            "amount": { "type": "float" }
+        },
+        "relations": {}
+    }))?;
 
-**How do I write GQL queries?**
-See [GQL capabilities](#gql-capabilities). The full syntax and examples are also documented in the companion `text-to-query` skill, which turns natural-language questions into GQL + params.
+    let mut params = Map::new();
+    params.insert(
+        "c0".to_string(),
+        json!({ "status": "paid", "amount": { "$gte": 10 } }),
+    );
 
-**Why do Node.js and Python behave identically?**
-Both bindings wrap the same Rust core and only convert JSON. No logic is duplicated in the hosts, so semantics cannot drift. The parity suites and golden fixtures exist to prove this continuously.
+    // 纯规划：不打开连接，不读时钟。
+    let plan = plan_query(
+        "Order($condition:@c0){ code, amount }",
+        &params,
+        &registry,
+        Some(&Context::system()), // 内部调用：权限放行，不注入 owner
+    )?;
 
-**How does aggregation work across four different databases?**
-Root-level `$group` / `$having` map to `GROUP BY` / `HAVING`; relation aggregate predicates map to `EXISTS` / `NOT EXISTS`; relation-rolling `agg` computed columns map to a derived-table `LEFT JOIN`. MongoDB uses its native pipeline. All four backends are covered by the same semantics.
+    let cmd = plan.commands.first().ok_or("query planned no command")?;
 
-**What happens when something cannot be translated to SQL?**
-The engine raises explicitly or emits an `unsupported` + warning event. It never produces SQL that silently omits a clause. MongoDB can still execute a few things SQL cannot (e.g. object dot-paths in `$group.by`), which is why those cases are errors only on the SQL side.
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let out = translate(backend, cmd, &registry)?;
+        if !out["unsupported"].as_array().map_or(false, |a| a.is_empty()) {
+            // `stmts` 已省略不支持的那一段：拒绝或降级。
+            eprintln!("{}: incomplete -> {}", backend.as_str(), out["unsupported"]);
+            continue;
+        }
+        println!("{}: {}", backend.as_str(), out["stmts"][0]["text"]);
+    }
 
-**Can I use it from Rust directly?**
-Yes — `rust-store-core` is a plain Rust library (published to crates.io, so `cargo add rust-store-core`, or depend on it by path from a checkout). You register schemas, plan queries and translate commands, then execute them with the driver of your choice.
+    Ok(())
+}
+```
 
-## Related projects
+Node 与 Python 绑定暴露同样的调用，分别叫 `planQuery` / `plan_query` 与 `dialectTranslate` / `dialect_translate`，camelCase 与 snake_case 一一对应。Node 绑定抛异常，Python 绑定抛 Python 异常，从不把错误混进结果对象。
 
-- [`nodejs-store`](https://github.com/coenddt/nodejs-store) ([Gitee](https://gitee.com/coenddt/nodejs-store)) — Node.js host (npm `nodejs-store`).
-- [`py-store`](https://github.com/coenddt/py-store) ([Gitee](https://gitee.com/coenddt/py-store)) — Python host (pip `storepy`).
-- `text-to-query` — a companion skill that compiles natural-language questions into GQL + params for this engine.
+## 边界：什么时候不要用
 
-## License
+- **没有连接、连接池、事务。** 引擎交回命令。`plan_claim` 与 `plan_compare_and_set` 产出 `atomic_commands` 序列，必须在同一连接、同一事务里顺序执行 —— 顺序、隔离与重试归宿主。
+- **没有 DDL，没有迁移。** `CREATE TABLE`、`ALTER`、索引与回填都在宿主。注册 schema 只做校验，不改你的数据库。
+- **没有身份，不写策略。** 它只评估 schema 声明了什么。它不知道用户是谁，不存用户，不做认证。`require_context` 默认关闭；忘记打开的服务在配置层面就是 fail-open。
+- **没有时钟、ID、随机数。** `now` 与 `new_id` 由调用方提供。`local` 求值器把集合当 JSON 收下、返回文档，持久化是别人的事。
+- **不是 ORM。** 没有实体、延迟关系、工作单元、变更追踪 —— 只有计划和命令。
+- **不是网关。** 联邦规划把一条 GQL 拆到多个源并返回 join 边；执行这些源、合并结果留在宿主。自然语言入口是受限的 `text2query` 档，不是通用 NL 层。
 
-[MIT](LICENSE)
+## 它在家族里的位置
+
+`rust-store` 是引擎；[`nodejs-store`](https://github.com/coenddt/nodejs-store) 与 [`py-store`](https://github.com/coenddt/py-store) 是持有驱动、事务与回调的宿主；[`store-api`](https://github.com/coenddt/store-api) 这类协议皮坐在它们之上。如果你只想使用数据层，装一个宿主就够了 —— 本仓库在你构建、调试、扩展引擎本身，或为另一种语言写宿主时才重要。
+
+## 一图看懂
+
+```mermaid
+flowchart LR
+  GQL[GQL query and params] --> PLAN[Command planner]
+  WRITE[Insert update remove] --> PLAN
+  SCHEMA[Schema registry] --> PLAN
+  CTX[Explicit context] --> PLAN
+  PLAN --> CMD[Backend neutral command JSON]
+  CMD --> MONGO[MongoDB driver]
+  CMD --> EVAL[Local evaluator]
+  CMD --> TRANS[Dialect translator]
+  TRANS --> MYSQL[MySQL parameterized SQL]
+  TRANS --> PG[PostgreSQL parameterized SQL]
+  TRANS --> SQLITE[SQLite parameterized SQL]
+```
+
+三句话：查询只规划一次，落成 MongoDB 命令；SQL 由同一条命令纯函数推导，翻译不了就明说；权限和默认值都在规划期钉死，执行永远留给宿主。

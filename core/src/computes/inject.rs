@@ -134,6 +134,12 @@ pub fn collect_field_deps(fields: &mut Vec<String>, schema: &Schema) -> Vec<Stri
             if trimmed.is_empty() || trimmed == "_id" {
                 continue;
             }
+            // BUGMW6VKGIVE050：depends 含计算列自身键时必须跳过。
+            // 自身是计算列而非源字段，注入后会把它当作投影字段取回，
+            // 导致自依赖取值错误（旧版 5.x 一直带此缺陷，6.0.0 仍未修）。
+            if trimmed == entry.key {
+                continue;
+            }
             // 关系子字段（`lessons{duration}`）或关系名 → 由 collect_rel_deps 负责，跳过
             if trimmed.contains('{') || schema.relations.contains_key(trimmed) {
                 continue;

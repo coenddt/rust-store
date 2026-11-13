@@ -7,7 +7,7 @@
 # that has to differ between the repository and the published site is handled here:
 #
 #   * page-relative Markdown links are rewritten to the .html URLs Jekyll emits;
-#   * links to files that are not part of the site (LICENSE, README.zh-CN.md, .trae/...)
+#   * links to files that are not part of the site (LICENSE, README.en.md, .trae/...)
 #     are pointed at GitHub instead;
 #   * every page body is wrapped in {% raw %} because Liquid runs before the Markdown
 #     converter and would otherwise swallow the literal {{...}} placeholders that appear
@@ -52,7 +52,7 @@ find "$SRC/use-cases" -name '*.md' -print0 | xargs -0 sed -i \
 
 # The README page: files that are not part of the site live on GitHub.
 sed -i \
-  -e "s#](README\.zh-CN\.md)#](https://github.com/${REPO_SLUG}/blob/${BRANCH}/README.zh-CN.md)#g" \
+  -e "s#](README\.en\.md)#](https://github.com/${REPO_SLUG}/blob/${BRANCH}/README.en.md)#g" \
   -e "s#](LICENSE)#](https://github.com/${REPO_SLUG}/blob/${BRANCH}/LICENSE)#g" \
   -e "s#](doc/transaction-capabilities\.md)#](https://github.com/${REPO_SLUG}/blob/${BRANCH}/doc/transaction-capabilities.md)#g" \
   -e "s#](doc/transaction-capabilities\.zh-CN\.md)#](https://github.com/${REPO_SLUG}/blob/${BRANCH}/doc/transaction-capabilities.zh-CN.md)#g" \

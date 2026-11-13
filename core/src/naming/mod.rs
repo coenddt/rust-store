@@ -69,8 +69,29 @@ impl Target {
     }
 }
 
+/// 是否已是合法的 camelCase 标识符（允许前导 `_`，其余仅 ASCII 字母数字，首字母小写）。
+///
+/// 这类名字本身就是 schema 声明的逻辑名，也是落库物理名（Mongo/Node/Java 等），
+/// 归一化会把连续大写缩写降级（`sandboxXIRR` → `sandboxXirr`）并丢掉前导下划线
+/// （`_cutoverDebug` → `cutoverDebug`），导致与存量数据字段名对不上。
+fn is_camel_identity(s: &str) -> bool {
+    let body = s.trim_start_matches('_');
+    let mut chars = body.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    body.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
 /// 逻辑名 → 目标风格物理名（可逆：先 `canonical` 再按 `style` 重组）
+///
+/// camelCase 目标对「已合规的 camelCase 逻辑名」恒等返回：翻译必须幂等且不改变
+/// 声明名，否则连续大写缩写/前导下划线字段会与物理数据错位。
 pub fn translate(logical: &str, target: Target) -> String {
+    if target.style() == Style::Camel && is_camel_identity(logical) {
+        return logical.to_string();
+    }
     let tokens = canonical(logical);
     match target.style() {
         Style::Snake => to_snake(&tokens),
@@ -118,5 +139,36 @@ mod tests {
     fn unknown_target_errors() {
         assert!(Target::from_str_or_err("oracle").is_err());
         assert!(translate_by_str("orderTotal", "oracle").is_err());
+    }
+
+    /// 连续大写缩写 / 前导下划线的声明名在 camelCase 目标下必须恒等（回归：
+    /// `sandboxXIRR` 曾被译成 `sandboxXirr`，读存量数据得 null）。
+    #[test]
+    fn camel_identity_preserves_acronyms_and_leading_underscore() {
+        for (src, dst) in [
+            ("sandboxXIRR", "sandboxXIRR"),
+            ("sandboxMOIC", "sandboxMOIC"),
+            ("estimatedIRR", "estimatedIRR"),
+            ("userID", "userID"),
+            ("myURLField", "myURLField"),
+            ("_cutoverDebug", "_cutoverDebug"),
+        ] {
+            assert_eq!(translate(src, Target::Mongodb), dst);
+            assert_eq!(translate(src, Target::Node), dst);
+            // 幂等：再次翻译不变
+            assert_eq!(
+                translate(&translate(src, Target::Mongodb), Target::Mongodb),
+                dst
+            );
+        }
+    }
+
+    /// 非恒等输入仍走归一（分隔符/首字母大写/全大写单词）。
+    #[test]
+    fn camel_identity_does_not_bypass_normalization() {
+        assert_eq!(translate("order_total", Target::Mongodb), "orderTotal");
+        assert_eq!(translate("Order.Total", Target::Mongodb), "orderTotal");
+        assert_eq!(translate("OrderTotal", Target::Mongodb), "orderTotal");
+        assert_eq!(translate("HTTP", Target::Mongodb), "http");
     }
 }

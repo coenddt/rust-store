@@ -274,6 +274,33 @@ fn read_injects_in_condition() {
     assert!(s.contains("C1"), "清单元素应原样落入条件: {s}");
 }
 
+/// V5：清单键允许数字元素（`context_from_value` 允许）时，SQL 方言的 `$in`
+/// 必须能正确绑定数字参数（此前未跑过 SQL 后端，无法确认 binder 是否拒收非字符串）。
+#[test]
+fn numeric_access_list_binds_in_sql() {
+    use rust_store_core::dialect::{translate, Backend};
+
+    let reg = registry_with(&[sat_schema()]);
+    let c = ctx_of(json!({ "userId": "u1", "satsRead": ["C1", 7] }));
+    let plan = plan_sat(&reg, Some(&c));
+    let cmd = &plan.commands[0];
+
+    for backend in [Backend::Mysql, Backend::Postgres, Backend::Sqlite] {
+        let out = translate(backend, cmd, &reg).expect("translate 应接受数字清单");
+        let stmt = &out["stmts"][0];
+        let text = stmt["text"].as_str().unwrap_or("");
+        let params = stmt["params"].as_array().cloned().unwrap_or_default();
+        assert!(
+            text.contains(" IN ("),
+            "[{backend:?}] 清单应翻译为 IN: {text}"
+        );
+        assert!(
+            params.iter().any(|p| p.as_i64() == Some(7)),
+            "[{backend:?}] 数字元素必须进入绑定参数: {params:?}"
+        );
+    }
+}
+
 #[test]
 fn empty_list_reads_nothing() {
     let reg = registry_with(&[sat_schema()]);

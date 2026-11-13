@@ -4,6 +4,191 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 6.0.1 (2026-11-10)
+
+> 本版本是 `6.0.0` 的补丁批次；内部构建号 `+fix1` / `+fix2` 均对应发布版 **`6.0.1`**：
+> `fix1` = 计算列 `depends` 自引用注入修复（BUGMW6VKGIVE050），`fix2` = 三个 upsert 缺陷修复。
+> 三端（crate / PyPI / npm）统一为 `6.0.1`（`6.0.0` 已被 crates.io 占用，同号不可重发）。
+
+### Fixed
+
+- **计算列 `depends` 含计算列自身键时跳过注入**（BUGMW6VKGIVE050）：`collect_field_deps`
+  遇到 `depends` 引用自身键不再把该键注入，避免计算列依赖自身造成循环。
+- **upsert `$setOnInsert` 覆盖 filter 等值键**（P0）：`merge_insert_defaults` 改为接收执行条件，
+  filter 中直接等值 `{field: v}` 与显式 `{field: {"$eq": v}}` 的顶层键不再补 schema default
+  （`$and` 内等值键同样跳过；`$in` / `$ne` / 范围算子仍按非单值基线处理，default 正常写入）。
+  修复前 `userId` / `auctionItemId` / `moduleType` / `resourceId` 等基线被写成空串，
+  导致 upsert 幂等失效并静默绕过 partial unique 索引。
+- **upsert 与原生操作符 update 未校验 object 字段**：`plan_upsert` 与 `build_raw_update`
+  补调 `validate_object_fields`，与 insert / 普通 update 同码拒绝写入非对象值（internal 上下文不豁免）。
+- **`plan_upsert` 把 `_id.default` 注入 `$setOnInsert`**：构造 `$setOnInsert` 时无条件排除 `_id`，
+  避免 upsert 命中已有文档的更新分支触发 MongoDB `ImmutableField`；显式传入的 `_id` 不受影响。
+
+## 6.0.0 (2026-11-08)
+
+> 相对已发布的 `v5.3.2`。破坏性项集中在权限与默认值语义。先看迁移清单，再看逐条明细。
+
+### 迁移清单
+
+| 若你在…… | 升级后的行为 | 迁移动作 |
+|---|---|---|
+| schema 里写了 `ownerKey: "_id"` | 注册期显式报错（此前静默把 `_id` 当归属字段） | 改用独立字符串字段（如 `createdBy`）；`ownerKey` 字段类型必须是 `string` |
+| 客户端 insert 时传 `createdBy` | 被忽略并由 `ctx.userId` 覆盖；取不到 userId 报 `ERR_NO_WRITE` | 归属键交系统维护；仅 `ctx.internal` 的系统调用可显式写入 |
+| 客户端 update 的 `$set` / `$unset` 触及归属键 | 报 `ERR_PERMISSION`（含 `createdBy.x` 点号路径与 `$set` 内操作符） | 从写载荷中移除归属键 |
+| `write` 含 `creator` 的 update / remove | 先返回 `{needsProbe}`，宿主回喂命中文档后二次规划 | 宿主实现 probe 重入；`updateMany` / `removeMany` 无 userId 报 `ERR_NO_BATCH_WRITE` |
+| 依赖 `count` 在无读权限时仍返回行数 | 改为 `ERR_PERMISSION`（与 query / exists 同码） | 给调用方补读权限 |
+| 用 `read: []` 表达「谁都不许读」 | 恢复 5.x 旧义：空名单 = 未配置 = 不限制 | 改为 `denyRead: true` |
+| 依赖 update 的 `$set: { a: null }` 把字段写成 null | 该字段不更新（与 5.x 旧义一致） | 清空字段改用 `$unset: ["a"]` |
+| Node 宿主读取超出 IEEE-754 安全整数范围的值 | 出参由 `number` 改为驱动原始字符串（宿主 6.0.0 同版本线，`toNumber` 超界） | 按字符串处理，不做数值运算或比较 |
+
+### Breaking（权限收紧：归属键与 creator 归属）
+
+- **`ownerKey` 不得为 `_id`**：注册期显式拒绝（此前静默把 `_id` 当归属字段，探针与注入全部失效）；
+  声明的 `ownerKey` 字段类型必须为 `string`，否则注册报错。
+- **归属键只由系统维护**：`insert` 忽略并覆盖客户端传入的 `createdBy`（取 `ctx.userId`，
+  取不到则 `ERR_NO_WRITE`）；`update` / `updateMany` 的 `$set` / `$unset` 若触及归属键
+  （含 `createdBy.x` 点号路径与 `$set` 内操作符）直接报 `ERR_PERMISSION`。
+  **例外：`ctx.internal`（宿主可信系统调用：metadef 落库 / 迁移 / 种子数据）允许显式写入
+  归属值**——不剔除、不覆盖，也不再因缺少 `userId` 报错（此前 internal 同样被剔除，
+  导致宿主 `test_metadef` 的 `KeyError: 'createdBy'`）。
+- **creator 受限写入先探针**：`write: ["creator"]` 的 `update` / `remove` 即使 ctx 有 userId，
+  也先返回 `{needsProbe}`（宿主回喂命中文档后二次规划），执行条件强制并入归属；
+  `updateMany` / `removeMany` 无 userId 报 `ERR_NO_BATCH_WRITE`，单条 `upsert` 无 userId 报 `ERR_NO_WRITE`。
+- **RBAC `ownerOnly` 的 remove/update**：探针命中后执行条件改为「原条件 ∧ 归属」，
+  不再以原始条件下发 `deleteMany` / `updateMany`。
+
+### Changed（空名单保持 5.x 旧义 + 新增显式拒绝开关）
+
+- **`read: []` / `write: []` / 字段级 `read: []` 维持 5.x 旧义：空名单 = 未配置（不限制）**。
+  本轮曾拟改为「显式空名单 = 拒绝」，因会破坏现有下游（不改代码/配置即失效）而回退；
+  语义收口回 `permission::evaluate`，空名单与键缺失同走 `unconfigured` 姿态（默认 `Open`）。
+- **新增顶层 `denyRead`（可选布尔，缺省 `false`）**：`denyRead: true` 才表达「谁都不许读」。
+  - 判据**单点**在 `permission::can_read_schema`（query / count / exists / lookup / federation
+    全部读路径共用），优先于一切角色（含 `internal` 与豁免清单）；
+  - `ctx = None`（系统内部调用，fail-open 契约）不受影响，需要连内部调用一并拒绝时配合
+    `require_context(true)` 使用显式系统上下文；
+  - `read: []` 与 `denyRead: true` 并存 ⇒ **`denyRead` 生效**（显式拒绝意图优先）；
+  - 注册期做类型校验：非布尔报错（`denyRead 必须为布尔值`）；未知顶层键仍照旧报错。
+  - 与宿主 workflow 白名单同一口径：**空名单不构成拒绝，拒绝必须显式表达**（宿主对齐结论
+    见 `common-store/doc/topic/自检-store核心与绑定-第二轮/版本归类与分支策略.md` §九）。
+- **不变**：`None`（未配置）按 `unconfigured` 策略；`internal`、豁免角色清单、`ctx=None`
+  的直通语义不变。
+
+### Added
+
+- **`Registry::unregister`（schema 注销 / 原子回滚原语）**：`register_batch` 单批次失败本就零副作用，
+  但宿主 `start()` 若逐条 `register`，中途失败会残留已注册项。新增
+  `Registry::unregister(name) -> Result<(), String>`：
+  - **未知 name 幂等成功**（回滚清单可整份重放；注册期错误仍原样上抛，不吞错）；
+  - 注册期自动派生的 `<Name>Deleted` 归档表一并清理（按 `Entry::archive_of` 精确匹配，
+    不按名字后缀猜，独立注册的同名归档不受影响）；
+  - `indexes` / `field_order` / 链路 / 版本均内嵌于被删 `Entry`，无全局派生缓存；
+  - 版本号不保留（同名重注册从 1 重新计数，其他 schema 不受影响），不引入墓碑表；
+  - 非 base 策略视图调用 ⇒ `ERR_POLICY_VIEW_READONLY`。
+  - 绑定：`core-py::Registry.unregister(name)`、`core-node::Registry.unregister(name)`、
+    `host::Store.unregister(schema_name)`。
+- **`plan_exists_with_ctx`（带 ctx 的存在性判据）**：`exists` 此前只走无 ctx 的 `plan_exists`，
+  宿主公开 `exists()` 因此可绕过 `read: []`、读白名单与 RBAC 探测任意条件是否命中。
+  新入口与 `plan_count` 复用同一套读校验（`ensure_context` → `can_read_schema` →
+  `rbac::ensure_read`），并注入静态 owner 条件与 RBAC 行条件；返回结构与旧入口一致
+  （`findOne` + `{_id:1}`）。旧 `plan_exists` 保留为无 ctx 的内部入口（语义不变）。
+  绑定：`core-py::Registry.plan_exists_with_ctx(model, condition, ctx, route_override)`、
+  `core-node::Registry.planExistsWithCtx(model, condition, ctx, routeOverride)`。
+- **host `schema_definition`（schema 只读定义导出）**：协议皮原先只能拿到 `schema_fields`
+  的字段名列表，无法判断点路径是否声明/类型；新增
+  `Store::schema_definition(schema_name) -> Result<Value, String>`，按 `field_order` 输出
+  core `FieldDef` 直出（`type` / `required` / `default` / `read` / `write` / 嵌套 `fields`
+  原始定义 / `strategy` / `dim` / `metric`）。host 只暴露信息，白名单与类型判定语义留在协议皮。
+- **`apply_write_computes`（写后仅叠同步计算列）**：`update` 的 `returns` 此前没有 core 出口，
+  宿主只能按「defaults 键序 + 落库 doc 基」自行兜底拼装，计算列缺失。新增
+  `computes::apply_computes` 的绑定导出：`core-node::Registry.applyWriteComputes(model, doc)`、
+  `core-py::Registry.apply_write_computes(model, doc)`、`host::Store.apply_write_computes(schema_name, doc)`。
+  - 入参必须是 `returnDocument: AFTER` 的**落库文档**；只叠 `computes` 中的同步 `fn`
+    计算列，**不补任何默认值**（D1：默认值只在 insert 物化一次，重复填充会让
+    「落库 / returns / 读回」出现三种取值）；
+  - 无 `fn` 声明原样返回；声明 `fn: true` 却未注册实现时显式报错，不静默跳过。
+
+### Fixed（语义一致性）
+
+- **insert 返回 == 落库文档**：`returns` 只补 computes，不再补字段类型零值（此前返回 `views: 0` /
+  `secret: ""` 而库里无该键）；仅显式 `default` 参与落库。
+- **显式 `null` 可读回**：默认值回填只在键**缺失**时生效，`null` 不再被默认值覆盖。
+- **嵌套 object 与数组的默认值规则统一**：object 字段值必须是对象（否则报
+  `字段 {key} 声明为 object，实际值不是对象`），object 内部默认值按缺失键递归回填。
+- **未声明关系报错**：聚合 `$lookup` 引用未在 schema 声明的关系时报错，不再静默丢弃。
+- **upsert `$setOnInsert` 合并字段 `default`**：与 `insert` 对齐，显式传入值优先。
+- **SQL 列序固定**：`writable_cols` / `writable_cols_union` 按 schema 声明序（新增
+  `Schema.field_order`）发射，不再随 `HashMap` 迭代随机。
+- **归档模型继承归属字段**：自动补出的 `ownerKey` 字段随归档 schema 一起下发。
+- **注册规范化**：顶层未知键、字段定义未知键（递归）、`indexes` 非法结构 / 引用不存在的键
+  均注册报错，不再静默丢弃。允许键清单以宿主真实形状为准：顶层含 `system`（正式可选布尔键，
+  缺省 `false`，非布尔报错；落到 `Schema.system`，仅作「宿主内建模型」分类标记，归档派生继承，
+  **不影响 DDL 与权限判定**）、`denyRead`（可选布尔，缺省 `false`，非布尔报错；显式拒绝读，
+  判据单点在 `can_read_schema`）、`description`，字段级含 `description`，并允许 `x-*`
+  前缀扩展键（`x-graphql` / `x-grpc` / `x-mcp` 等协议适配注记）。
+- **FFI ctx 往返**：`accessKeys` 清单键完整往返；`internal` 与 py/node/host 共用
+  `context_from_value`（`is_truthy` 语义），不再各自解析。
+- **count 与 query 共用读判据**：`plan_count` 此前不做表级读校验，未命中读白名单的角色
+  （含 `denyRead: true` 的模型）仍可 `countDocuments` 数出全表行数（RBAC enforce 的 default deny
+  同样被绕过）；现与 query 一致走 `can_read_schema` + `rbac::ensure_read`。
+- **显式 `null` 维持 5.x 旧义：不写该字段**：`remove_undefined` 与 dialect 的 `$set` 继续跳过
+  `null`（`$set: {a: null}` = 不更新 a）；清空字段请用 `$unset`（物理列置 NULL 并从 `__present`
+  移除令牌）。此前曾拟把 `null` 当「显式存在」落库，因会改变现有下游读回结果而回退。
+- **upsert 显式 object 递归补默认**：`$setOnInsert` 的探测 probe 一律填 null，显式传入的嵌套 object
+  无法补声明默认；现按真实值探测（同一路径仍只落 `$set`，避免 Mongo 同路径冲突）。
+- **FFI 单测恢复执行**：`core-ffi` 的 `test = false` 使 C 边界单测从未运行；已开启并补
+  `rcore_translate_name` 的 ABI 契约（正常往返 / 空指针 / 非法 UTF-8 / 未知 backend）。
+
+### 宿主侧同版本线（node 6.0.0，不在本仓 core）
+
+- **`toNumber` 超界出参**：`nodejs-store` 的 `fd597f9` 把超出 IEEE-754 安全整数范围的整数
+  从 `number` 改为保留驱动原始字符串（`9223372036854775807` 不再变成 `9223372036854776000`）。
+  读该列并做算术/数值比较的 Node 下游会失效。**本仓 core 无代码改动**，core 内
+  `to_number`（分页 `page` / `pageSize` / `$skip` / `$limit` 归一）语义不变；此项随
+  `rust-store-node` 6.0.0 同版本线一并告知。
+
+## 5.3.3（维护分支，未发布）
+
+> 维护分支只收**非破坏性**改动：纯新增符号 + 安全修复。现有 5.x 下游不改代码/配置即可升级。
+
+### Added（纯新增，现有下游无需改动）
+
+- **`Registry::unregister(name)`**：注销 schema（含注册期自动派生的 `<Name>Deleted` 归档表）。
+  未知 name 幂等成功（宿主 `start()` 失败回滚清单可整份重放）；版本号随项删除，同名重注册从 1
+  计数；策略视图调用返回 `ERR_POLICY_VIEW_READONLY`。经 core-py / core-node / host 同步导出。
+- **`plan_exists_with_ctx(...)`**：带 ctx 的存在性判据，与 `plan_count` 同一套读校验
+  （表级白名单 / RBAC / 归属与行条件），关闭宿主 `exists()` 的越权旁路；旧 `plan_exists` 保留
+  为内部语义（`ctx = None`）。
+- **`Store::schema_definition(name)`**（host）：只读导出字段类型与嵌套 `fields` 原始定义，
+  供协议皮判定点路径声明与类型。5.x 无字段声明序跟踪，键序不保证跨进程稳定。
+- **顶层 `denyRead`（可选布尔，缺省 `false`）**：`denyRead: true` 表达「谁都不许读」，
+  与 `read: []` 解耦（`read: []` 维持 5.x 旧义 = 未配置 = 不限制）。判据单点在
+  `permission::can_read_schema`，优先于一切角色（含 `internal` 与豁免清单）；`ctx = None`
+  保持 fail-open（需连内部调用一并拒绝时配合 `require_context(true)`）。非布尔在注册期
+  显式报错。与主干 `6.0.0` 同键名、同判据、同优先级。
+- **`apply_write_computes`（写后仅叠同步计算列）**：收口 `update` 返回值缺计算列的兜底。
+  只叠 `computes` 中的同步 `fn` 计算列、**不补默认值**（D1：默认值只在 insert 物化一次）；
+  无 `fn` 声明原样返回，声明 `fn: true` 未注册实现时显式报错。经 core-py / core-node 导出
+  （host 同名转发）。
+
+### Fixed（安全收紧：count 读判据）
+
+- **`plan_count` 补表级读判据**：与 `query` / `plan_exists_with_ctx` 同码
+  （`can_read_schema` + `rbac::ensure_read`）。此前 5.x 的 count 不受读白名单 / `denyRead` /
+  RBAC 约束，越权者可数出全表行数。**行为变化**：对无权调用者由「返回行数」变为
+  `ERR_PERMISSION`（安全修复，升级说明需告知）。
+
+### 已知语义差异（与主干 `6.0.0`，5.x 不改变）
+
+- **写路径空名单口径不同**：5.x 的 `write: []` 表示**拒绝一切写**（非 `internal` 且不在
+  `exemptRoles` 的调用者一律 `ERR_PERMISSION`，即使 `unconfigured.allow` 为真）；主干 `6.0.0`
+  的 `write: []` 与键缺失同义，按 `unconfigured` 姿态判定（默认**不限制**）。
+  - 5.x 用户若要「只允许特定角色写」，必须**显式列出写名单**（如 `write: ["admin"]`）；
+    写 `write: []` 是「谁都不许写」的显式封锁，不要当成「未配置」。
+  - 本差异**保留**：把 5.x 改成主干的空名单语义属破坏性变更（原本被拒绝的写会重新放行），
+    违反维护分支只收加法与安全修复的原则。
+  - 读路径两线已一致：`read: []` 均为「未配置 = 不限制」，要禁止读一律用 `denyRead: true`。
+
 ## 5.2.1 (2026-11-02)
 
 ### Fixed（发版 CI 修复，能力不变）

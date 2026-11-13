@@ -191,6 +191,10 @@ pub struct Schema {
     pub id_prefix: String,
     pub timestamps: bool,
     pub fields: HashMap<String, FieldDef>,
+    /// 字段声明顺序（规范化时按 `fields` 定义键序采集，补出的时间戳/归属字段追加在尾）。
+    /// X1：`HashMap` 迭代序随机会让 SQL 列序随进程变化；所有按 schema 字段生成
+    /// 的 SQL 列清单必须走本顺序，保证跨进程 / 跨宿主可复现。
+    pub field_order: Vec<String>,
     pub relations: HashMap<String, RelationDef>,
     /// 保持注册顺序：`build_agg_stages` 的输出顺序依赖它
     pub computes: Vec<(String, ComputeDef)>,
@@ -198,6 +202,11 @@ pub struct Schema {
     pub triggers: super::triggers::Triggers,
     pub read: Option<Vec<String>>,
     pub write: Option<Vec<String>>,
+    /// 显式拒绝读（顶层 `denyRead`，可选布尔，缺省 `false`）。
+    ///
+    /// 与「空名单」解耦：`read: []` 是 5.x 旧义（未配置 = 不限制），要表达
+    /// 「谁都不许读」必须显式置本开关。判据单点在 `permission::can_read_schema`。
+    pub deny_read: bool,
     /// 原始索引定义（`[{keys: {...}, options: {...}}]`），upsert 条件构建依赖 unique 索引
     pub indexes: Vec<Value>,
     /// 数据源名（由 `register_batch` 的 [`Location`] 注入；`None` = 缺省 `default`）。
@@ -214,9 +223,28 @@ pub struct Schema {
     /// 声明式行级权限绑定键（`accessKeys`；注册期已校验字段存在性）。
     /// 判决逻辑见 [`crate::access`]；空表 = 未声明（零行为变化）。
     pub access_keys: Vec<super::access_keys::AccessKeyDef>,
+    /// 内建 / 系统模型声明（顶层 `system`，可选布尔，缺省 `false`）。
+    ///
+    /// 语义（正式键，非透传占位）：
+    /// - 仅用于**分类**：宿主与工具链据此把该模型标识为「宿主内建」（如 py-store /
+    ///   nodejs-store 的 `__workflowRun` / `__schemaDef`），与业务模型区分；
+    /// - **不影响 DDL**：建表由宿主按注册表生成，内建模型同样建表；
+    /// - **不影响权限**：读写仍由 `read` / `write` / `accessKeys` 判定，`system`
+    ///   不授予 internal、不放宽任何角色白名单；
+    /// - 归档派生继承本标记（系统模型的 `<Name>Deleted` 同样是系统模型）。
+    pub system: bool,
 }
 
 impl Schema {
+    /// X1：按声明序返回字段名（替代 `fields.keys()` 的随机迭代序）。
+    pub fn field_names(&self) -> Vec<String> {
+        self.field_order
+            .iter()
+            .filter(|k| self.fields.contains_key(k.as_str()))
+            .cloned()
+            .collect()
+    }
+
     pub fn compute(&self, name: &str) -> Option<&ComputeDef> {
         self.computes
             .iter()
@@ -267,6 +295,51 @@ impl Schema {
     }
 }
 
+/// 字段定义允许的键（N4）：未列出的键会被静默丢弃（如 `of`/`comment`），
+/// 注册期必须显式拒绝，避免「写了但没生效」。
+const ALLOWED_FIELD_KEYS: &[&str] = &[
+    "type",
+    "required",
+    "default",
+    "read",
+    "write",
+    "fields",
+    "strategy",
+    "dim",
+    "metric",
+    // `description`：字段级文档注记（store-graphql / store-grpc 文档管道，含嵌套字段）。
+    "description",
+];
+
+/// N4：递归校验字段定义（含嵌套 `fields`）不含未知键。
+fn validate_field_def_keys(prefix: &str, def: &Map<String, Value>) -> Result<(), String> {
+    for k in def.keys() {
+        // `x-*`：字段级协议注记（与 schema 顶层同一扩展命名空间），core 透传不解释。
+        if !ALLOWED_FIELD_KEYS.contains(&k.as_str()) && !k.starts_with("x-") {
+            return Err(format!(
+                "字段 {prefix} 含未知属性 \"{k}\"（允许：{}；另允许 x-* 扩展键）",
+                ALLOWED_FIELD_KEYS.join("/")
+            ));
+        }
+    }
+    if let Some(Value::Object(nested)) = def.get("fields") {
+        for (k, val) in nested {
+            match val {
+                Value::String(_) => {}
+                Value::Object(o) => {
+                    validate_field_def_keys(&format!("{prefix}.{k}"), o)?;
+                }
+                other => {
+                    return Err(format!(
+                        "字段 {prefix}.{k} 定义类型非法（须为类型字符串或对象），实际 {other}"
+                    ))
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// 规范化 fields 定义（字符串简写 → `{type, required:false}`）
 pub(super) fn normalize_fields(v: Option<&Value>) -> Result<HashMap<String, FieldDef>, String> {
     let mut out = HashMap::new();
@@ -287,6 +360,8 @@ pub(super) fn normalize_fields(v: Option<&Value>) -> Result<HashMap<String, Fiel
                 metric: None,
             }
         } else if let Some(o) = val.as_object() {
+            // N4：未知键静默丢弃 → 显式拒绝
+            validate_field_def_keys(key, o)?;
             // 向量属性必须显式提取：未提取的键会被静默丢弃（VR-01 / 取证 3.5）
             let dim = match o.get("dim") {
                 None | Some(Value::Null) => None,
@@ -316,7 +391,9 @@ pub(super) fn normalize_fields(v: Option<&Value>) -> Result<HashMap<String, Fiel
                     .unwrap_or("")
                     .to_string(),
                 required: o.get("required").and_then(|v| v.as_bool()).unwrap_or(false),
-                default: o.get("default").filter(|v| !v.is_null()).cloned(),
+                // 保留显式 `default: null`（Option 的三态：未声明 / null / 具体值）。
+                // 丢弃 null 会让 Return 路径回落到类型零值，把「明确补 null」变成 0。
+                default: o.get("default").cloned(),
                 read: str_list(o.get("read")),
                 write: str_list(o.get("write")),
                 fields: o.get("fields").filter(|v| is_truthy(v)).cloned(),

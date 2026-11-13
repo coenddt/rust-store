@@ -22,19 +22,19 @@
 - [Documentation site](https://coenddt.github.io/rust-store/): the scenario walkthroughs as individual, indexable pages — the fastest way in
 - [crates.io: rust-store-core](https://crates.io/crates/rust-store-core): the pure-logic Rust library — `cargo add rust-store-core`; use it directly from a Rust service
 - [docs.rs: rust-store-core](https://docs.rs/rust-store-core): auto-generated API reference for every public function
-- [README](https://github.com/coenddt/rust-store#readme): architecture, API reference, GQL capabilities, dialects, permission model, parity testing, gotchas
+- [中文 README](https://github.com/coenddt/rust-store#readme): 架构、API 参考、GQL 能力、方言、权限模型、parity 测试、易踩的坑
 - [Use cases](https://github.com/coenddt/rust-store/tree/main/doc/use-cases): six scenario walkthroughs — embed the core in a Rust service, natural language → query compiler, one dialect across four databases, Node.js / Python parity, reuse the permission model, SQL pushdown limits by dialect
-- [Chinese README](https://github.com/coenddt/rust-store/blob/main/README.zh-CN.md): 中文文档
+- [English README](https://github.com/coenddt/rust-store/blob/main/README.en.md): architecture, API reference, GQL capabilities, dialects, permission model, parity testing, gotchas
 - [CHANGELOG](https://github.com/coenddt/rust-store/blob/main/CHANGELOG.md)
 
 ## Concepts
 
-- [Core principles](https://github.com/coenddt/rust-store#what-it-is): no IO / no clock / no randomness; explicit over silent; JSON in, JSON out
-- [API reference](https://github.com/coenddt/rust-store#api-reference): `Registry` plan methods, permissions, computes, dialect translation, federation
-- [GQL capabilities](https://github.com/coenddt/rust-store#gql-capabilities): relations, `$group` / `$having`, relation aggregate predicates (semi/anti-join), computed columns
-- [Backends and dialects](https://github.com/coenddt/rust-store#backends-and-dialects): the four targets and what is Mongo-only
-- [Permission model](https://github.com/coenddt/rust-store#permission-model): schema / field / relation / computed-column level, `creator`, system context
-- [Boundaries and gotchas](https://github.com/coenddt/rust-store#boundaries-and-gotchas): error prefixes, `__present` sentinel, U1–U4 rules, federation `degraded`
+- [Core principles](https://github.com/coenddt/rust-store#它实际做什么): no IO / no clock / no randomness; explicit over silent; JSON in, JSON out
+- [API reference](https://github.com/coenddt/rust-store#readme): `Registry` plan methods, permissions, computes, dialect translation, federation
+- [GQL capabilities](https://github.com/coenddt/rust-store#它如何工作): relations, `$group` / `$having`, relation aggregate predicates (semi/anti-join), computed columns
+- [Backends and dialects](https://github.com/coenddt/rust-store#mongodb-是规范方言): the four targets and what is Mongo-only
+- [Permission model](https://github.com/coenddt/rust-store#权限是-schema-数据上下文必须显式): schema / field / relation / computed-column level, `creator`, system context
+- [Boundaries and gotchas](https://github.com/coenddt/rust-store#边界什么时候不要用): error prefixes, `__present` sentinel, U1–U4 rules, federation `degraded`
 
 ## Optional
 

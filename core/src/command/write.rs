@@ -2,8 +2,12 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::computes::{apply_defaults_and_computes, apply_field_defaults, DefaultFill, FnRegistry};
-use crate::permission::{can_write_schema, evaluate, merge_owner_condition, Context, Doc};
+use crate::computes::{
+    apply_computes, apply_field_defaults, validate_object_fields, DefaultFill, FnRegistry,
+};
+use crate::permission::{
+    can_read_schema, can_write_schema, evaluate, merge_owner_condition, Context, Doc,
+};
 use crate::rbac::{
     ensure_write, ensure_write_on_doc, filter_writable_data_overlay, merge_row_condition,
     probe_condition_fields, WriteAction,
@@ -15,7 +19,7 @@ use crate::types::{
 
 use super::cmd::{cmd_count_documents, cmd_find_one, cmd_insert_one};
 use super::write_links::attach_write_links;
-use super::{ensure_context, ERR_NOT_FOUND, ERR_NO_WRITE};
+use super::{ensure_context, ERR_NOT_FOUND, ERR_NO_WRITE, ERR_PERMISSION};
 
 /// 生成插入命令（对应 JS `insert`）
 ///
@@ -44,7 +48,7 @@ pub fn plan_insert(
     let triggers = super::triggers::expand_triggers(registry, ctx, schema_name, "insert")?;
     let mut plan = json!({
         "command": cmd_insert_one(schema, &doc),
-        "returns": apply_defaults_and_computes(&doc, schema, fn_registry)?,
+        "returns": apply_computes(&doc, schema, fn_registry)?,
     });
     // 未配置触发器时不出现 triggers 键（A2 零回归）
     if !triggers.is_empty() {
@@ -114,12 +118,23 @@ pub(super) fn build_insert_doc(
                 schema.name
             ));
         }
-        if !doc.get(owner).map(is_truthy).unwrap_or(false) {
+        // P10：归属键由系统写入，insert 不得冒充他人。
+        // 有用户身份时**覆盖**显式传入值；无身份时拒绝写入（不静默保留伪造值）。
+        if let Some(c) = ctx.filter(|c| !c.internal) {
+            let uid = c.user_id.clone().filter(|u| !u.is_empty()).ok_or_else(|| {
+                format!("{ERR_NO_WRITE}：creator 权限写入 {owner} 需要 ctx.userId")
+            })?;
+            doc.insert(owner.to_string(), json!(uid));
+        } else if !doc.get(owner).map(is_truthy).unwrap_or(false) {
+            // 内部调用 / 无 ctx：保留显式值；缺省时按原逻辑注入（无身份则不写）
             if let Some(uid) = ctx.and_then(|c| c.user_id.clone()) {
                 doc.insert(owner.to_string(), json!(uid));
             }
         }
     }
+
+    // D3：object 字段收到非对象值 → 显式报错（否则默认值静默不生效）
+    validate_object_fields(&Value::Object(doc.clone()), schema)?;
 
     // 自动时间戳
     if schema.timestamps {
@@ -145,15 +160,45 @@ pub(super) fn build_insert_doc(
     )
 }
 
-/// 判断存在性（对应 JS `exists`）
+/// 判断存在性（对应 JS `exists`）——**无 ctx 的旧入口**，等价
+/// [`plan_exists_with_ctx`] 传 `ctx = None`（内部调用语义，保持既有行为）。
+///
+/// 宿主面向终端用户的 `exists()` 必须改调 [`plan_exists_with_ctx`]：本入口无法
+/// 表达调用方身份，`read: []` / 读白名单 / RBAC 均不会生效（越权旁路）。
 pub fn plan_exists(
     schema_name: &str,
     registry: &Registry,
     condition: &Value,
 ) -> Result<Value, String> {
+    plan_exists_with_ctx(schema_name, registry, condition, None)
+}
+
+/// 带 ctx 的存在性判据（对应宿主 `exists()` 的合法入口）。
+///
+/// 读校验与 [`plan_count`] 单点一致，逐层判定：
+/// 1. `ensure_context`：注册表要求上下文时无 ctx 直接拒绝；
+/// 2. `can_read_schema`：表级读白名单（`read: []` 为显式拒绝）；
+/// 3. `rbac::ensure_read`：RBAC 表级 deny-wins；
+/// 4. 条件形状 / 关系谓词校验（与旧入口一致）；
+/// 5. 注入静态 owner 条件与 RBAC 行条件 —— 存在性只能看见「自己读得到的行」。
+///
+/// 返回结构与 [`plan_exists`] 完全一致：`findOne` 命令 + `{_id: 1}` 投影。
+pub fn plan_exists_with_ctx(
+    schema_name: &str,
+    registry: &Registry,
+    condition: &Value,
+    ctx: Option<&Context>,
+) -> Result<Value, String> {
     // 条件拒绝名单（缺陷 D-02）
     validate_condition(condition)?;
+    ensure_context(registry, ctx)?;
     let schema = registry.get(schema_name)?;
+    // 表级读判据（与 query / count 同码）：`read: []` 与未命中白名单都不得放行
+    if ctx.is_some() && !can_read_schema(registry.role_rules(), schema, ctx) {
+        return Err(ERR_PERMISSION.to_string());
+    }
+    // RBAC 表级读判定（deny-wins，叠加于静态白名单之后）
+    crate::rbac::ensure_read(registry, schema, ctx)?;
     // §11.4（D2）：与 pipeline 读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
     validate_condition_shape(schema, condition, registry.profile())?;
     // §9.6 关系聚合谓词无法用标量 `findOne` 表达 → 显式 Err（否则 Mongo 静默给错结果）
@@ -164,7 +209,12 @@ pub fn plan_exists(
                 .to_string(),
         );
     }
-    Ok(cmd_find_one(schema, condition, Some(&json!({ "_id": 1 }))))
+    // 静态 owner 条件 + RBAC 行条件（两引擎 $and，deny-wins）
+    let owner_merged =
+        merge_owner_condition(registry.role_rules(), schema, ctx, Some(condition.clone()));
+    let filter = merge_row_condition(registry, schema, ctx, "read", owner_merged)?
+        .unwrap_or_else(|| json!({}));
+    Ok(cmd_find_one(schema, &filter, Some(&json!({ "_id": 1 }))))
 }
 
 /// 统计数量（对应 JS `count`）：filter 为 nullish 时用 `{}`
@@ -181,7 +231,15 @@ pub fn plan_count(
         // 条件拒绝名单（缺陷 D-02）
         validate_condition(f)?;
     }
+    ensure_context(registry, ctx)?;
     let schema = registry.get(schema_name)?;
+    // 表级读判据必须与 query 单点一致：`read: []`（显式拒绝）与未授权白名单
+    // 都不得改用 countDocuments 绕过（否则可数出全表行数）。
+    if ctx.is_some() && !can_read_schema(registry.role_rules(), schema, ctx) {
+        return Err(ERR_PERMISSION.to_string());
+    }
+    // RBAC 表级读判定（deny-wins，叠加于静态白名单之后）
+    crate::rbac::ensure_read(registry, schema, ctx)?;
     // §11.4（D2）：与 pipeline 读路径同码拒绝 U1~U4 形态（数组/对象/点号路径）
     if let Some(f) = filter {
         validate_condition_shape(schema, f, registry.profile())?;
@@ -339,7 +397,9 @@ pub fn check_write_perm(
         }
     }
 
-    if can_write_schema(registry.role_rules(), schema, Some(c)) {
+    if can_write_schema(registry.role_rules(), schema, Some(c))
+        && !crate::permission::write_restricted_to_creator(registry.role_rules(), schema, Some(c))
+    {
         // 静态放行：RBAC 行级 / accessKeys 受控时仍需探针（否则静默放行越权行更新/删除）
         if row_restricted && is_truthy(condition) {
             return match probe {
@@ -414,6 +474,31 @@ pub fn check_write_perm(
         };
     }
     Err(deny_msg.to_string())
+}
+
+/// 写执行条件收口：静态 owner（creator 独占写）+ RBAC 行条件 + accessKeys 行条件
+/// 全部并入最终 filter（P1/P2）。
+///
+/// 探针仍用原始条件做权限判定（越权命中 → 既有 403 错误码与文案不变），
+/// 但**真正执行**的 findOneAndUpdate / deleteMany / updateMany / upsert 必须用
+/// 本函数合入归属与行级条件——否则探针放行后仍可命中他人文档。
+pub(super) fn effective_write_condition(
+    registry: &Registry,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    condition: &Value,
+    action: WriteAction,
+) -> Result<Value, String> {
+    let owner_merged = crate::permission::merge_write_owner_condition(
+        registry.role_rules(),
+        schema,
+        ctx,
+        Some(condition.clone()),
+    );
+    Ok(
+        merge_row_condition(registry, schema, ctx, action.as_str(), owner_merged)?
+            .unwrap_or_else(|| condition.clone()),
+    )
 }
 
 #[cfg(test)]

@@ -839,8 +839,7 @@
         "title": "hello",
         "_id": "PLOYW3V28AAAA",
         "createdAt": 1700000000000,
-        "updatedAt": 1700000000000,
-        "views": 0
+        "updatedAt": 1700000000000
       },
       "newId": "PLOYW3V28AAAA"
     }
@@ -868,7 +867,7 @@
         "title": "x",
         "createdAt": 1700000000000,
         "updatedAt": 1700000000000,
-        "views": 0
+        "views": null
       },
       "newId": "P-CUSTOM"
     }
@@ -896,8 +895,7 @@
         "_id": "PLOYW3V28AAAA",
         "createdBy": "u1",
         "createdAt": 1700000000000,
-        "updatedAt": 1700000000000,
-        "secret": ""
+        "updatedAt": 1700000000000
       },
       "newId": "PLOYW3V28AAAA"
     }
@@ -1139,31 +1137,19 @@
     "name": "upd-creator-schema-pass",
     "kind": "update",
     "result": {
-      "commands": [
-        {
-          "kind": "findOneAndUpdate",
-          "collection": "posts_w",
-          "filter": {
-            "_id": "p1"
-          },
-          "update": {
-            "$set": {
-              "title": "new"
-            }
-          },
-          "options": {
-            "returnDocument": "after"
-          },
-          "source": "default",
-          "database": null,
-          "schema": null
-        }
-      ],
-      "returns": {
-        "_id": "p1",
-        "title": "new",
-        "createdBy": "u1",
-        "views": 0
+      "needsProbe": {
+        "collection": "posts_w",
+        "database": null,
+        "filter": {
+          "_id": "p1"
+        },
+        "kind": "findOne",
+        "projection": {
+          "_id": 1,
+          "createdBy": 1
+        },
+        "schema": null,
+        "source": "default"
       }
     }
   },
@@ -1330,32 +1316,19 @@
     "name": "rm-creator-schema-pass",
     "kind": "remove",
     "result": {
-      "commands": [
-        {
-          "kind": "find",
-          "collection": "posts_w",
-          "filter": {
-            "_id": "p1"
-          },
-          "projection": null,
-          "source": "default",
-          "database": null,
-          "schema": null
+      "needsProbe": {
+        "collection": "posts_w",
+        "database": null,
+        "filter": {
+          "_id": "p1"
         },
-        {
-          "kind": "deleteMany",
-          "collection": "posts_w",
-          "filter": {
-            "_id": "p1"
-          },
-          "source": "default",
-          "database": null,
-          "schema": null
-        }
-      ],
-      "returns": {
-        "deletedCount": 1,
-        "archivedCount": 0
+        "kind": "findOne",
+        "projection": {
+          "_id": 1,
+          "createdBy": 1
+        },
+        "schema": null,
+        "source": "default"
       }
     }
   },
@@ -1722,147 +1695,21 @@
   {
     "name": "q-ownerkey-read-own",
     "kind": "query",
-    "result": {
-      "collection": "users",
-      "mode": "find",
-      "commands": [
-        {
-          "kind": "find",
-          "collection": "users",
-          "filter": {
-            "$and": [
-              {
-                "_id": "USR1"
-              },
-              {
-                "_id": "USR1"
-              }
-            ]
-          },
-          "projection": {
-            "_id": 1,
-            "name": 1
-          },
-          "source": "default",
-          "database": null,
-          "schema": null
-        }
-      ],
-      "postprocess": {
-        "ast": {
-          "model": "User",
-          "params": {
-            "condition": "@c0"
-          },
-          "fields": [
-            "name"
-          ],
-          "relations": {}
-        },
-        "inject": null
-      },
-      "sort": null
-    }
+    "error": true
   },
   {
     "name": "q-ownerkey-inject-list",
     "kind": "query",
-    "result": {
-      "collection": "users",
-      "mode": "find",
-      "commands": [
-        {
-          "kind": "find",
-          "collection": "users",
-          "filter": {
-            "_id": "USR1"
-          },
-          "projection": {
-            "_id": 1,
-            "name": 1
-          },
-          "source": "default",
-          "database": null,
-          "schema": null
-        }
-      ],
-      "postprocess": {
-        "ast": {
-          "model": "User",
-          "params": {
-            "condition": "@__core_owner__"
-          },
-          "fields": [
-            "name"
-          ],
-          "relations": {}
-        },
-        "inject": null
-      },
-      "sort": null
-    }
+    "error": true
   },
   {
     "name": "upd-ownerkey-self-pass",
     "kind": "update",
-    "result": {
-      "commands": [
-        {
-          "kind": "findOneAndUpdate",
-          "collection": "users_w",
-          "filter": {
-            "_id": "USR1"
-          },
-          "update": {
-            "$set": {
-              "name": "me"
-            }
-          },
-          "options": {
-            "returnDocument": "after"
-          },
-          "source": "default",
-          "database": null,
-          "schema": null
-        }
-      ],
-      "returns": {
-        "_id": "USR1",
-        "name": "me"
-      }
-    }
+    "error": true
   },
   {
     "name": "rm-ownerkey-self-pass",
     "kind": "remove",
-    "result": {
-      "commands": [
-        {
-          "kind": "find",
-          "collection": "users_w",
-          "filter": {
-            "_id": "USR1"
-          },
-          "projection": null,
-          "source": "default",
-          "database": null,
-          "schema": null
-        },
-        {
-          "kind": "deleteMany",
-          "collection": "users_w",
-          "filter": {
-            "_id": "USR1"
-          },
-          "source": "default",
-          "database": null,
-          "schema": null
-        }
-      ],
-      "returns": {
-        "deletedCount": 1,
-        "archivedCount": 0
-      }
-    }
+    "error": true
   }
 ]

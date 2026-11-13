@@ -167,9 +167,11 @@ pub fn can_register(policy: &MetaPolicy, ctx: Option<&Context>) -> bool {
 /// - 豁免：有效角色 ∩ `rules.exempt_roles` ≠ ∅ → true（默认空 = 无豁免）。豁免检查
 ///   **先于**未配置姿态——设计 §11.3「一切判决环节直通」：`set_exempt_roles` 与
 ///   `Closed` 并存时豁免仍生效（豁免是显式信任声明，姿态管不住它）；
-/// - 未配置（role_list 缺失/空）：`Open` 放行（guest 读拒已随清单化移除——迁移差异，
-///   设计 §11.4）；`Closed` 对非内部用户全拒（fail-secure）；ctx=None 与 internal
-///   的直通不受姿态影响（无 ctx 维度归 `require_context` 管，设计 §11.6）。
+/// - **未配置（`role_list` 缺失）与显式空名单（`Some([])`）同义**：均视为「未配置」，
+///   走 `unconfigured` 姿态（`Open` 放行 / `Closed` 对非内部用户全拒；ctx=None 与
+///   internal 的直通不受姿态影响，无 ctx 维度归 `require_context` 管，设计 §11.6）。
+///   这是 5.x 旧义：`read: []` / `write: []` = 不限制；「谁都不许读」改由顶层
+///   `denyRead: true` 显式表达（判据单点在 [`can_read_schema`]）。
 pub fn evaluate(
     rules: &RoleRules,
     ctx: Option<&Context>,
@@ -185,16 +187,15 @@ pub fn evaluate(
     if has_any(c, &rules.exempt_roles) {
         return true;
     }
-    let empty = role_list.map(|r| r.is_empty()).unwrap_or(true);
-    if empty {
-        // 未配置姿态显式化（原 empty 分支的 guest 读拒随清单化移除）
+    // 未配置（键缺失）与显式空名单（`Some([])`）同义：均走 `unconfigured` 姿态。
+    // 5.x 旧义 `read: []` = 不限制；「谁都不许读」由 `denyRead: true` 在
+    // `can_read_schema` 单点表达，不在本函数内另判一遍。
+    let Some(list) = role_list.filter(|l| !l.is_empty()) else {
         return rules.unconfigured == UnconfiguredPolicy::Open;
-    }
+    };
 
     // ① 角色匹配
     let effective = effective(c);
-    // `empty` 已早退，此处 role_list 必为 Some 且非空
-    let Some(list) = role_list else { return true };
     if list.iter().any(|r| effective.iter().any(|x| x == r)) {
         return true;
     }
@@ -328,7 +329,20 @@ pub fn is_relation_readable(
 
 // ─── Schema 级检查 ────────────────────────────────────────────
 
+/// Schema 级读判决（**全部读路径的唯一闸门**：query / count / exists / lookup /
+/// federation 均经此）。
+///
+/// `denyRead: true` 是显式「谁都不许读」声明，**优先于一切角色**（含 `internal` 与
+/// 豁免清单）。唯一不受其影响的是 `ctx = None`——那是「系统内部调用，跳过权限检查」
+/// 的既有 fail-open 契约（见模块文档），与「谁都不许读」不在同一维度；需要连内部
+/// 调用一并拒绝的宿主应配合 `require_context(true)` 使用显式系统上下文。
+///
+/// `read: []` 恢复 5.x 旧义：空名单与缺失同义（不限制），由 [`evaluate`] 统一处理，
+/// 本函数**不**为空名单另写判据（判据单点，防 read/write 漂移）。
 pub fn can_read_schema(rules: &RoleRules, schema: &Schema, ctx: Option<&Context>) -> bool {
+    if ctx.is_some() && schema.deny_read {
+        return false;
+    }
     evaluate(
         rules,
         ctx,
@@ -339,17 +353,11 @@ pub fn can_read_schema(rules: &RoleRules, schema: &Schema, ctx: Option<&Context>
 }
 
 /// 拒写清单命中者一切写路径拒绝（读不受影响，默认空——无拒写）；
-/// R2 语义保留：write 显式配置为空白名单（`[]`）= 未声明任何可写角色 → 拒绝一切写，
-/// 豁免清单命中者与 internal 例外。
+/// 空名单（`[]`）恢复 5.x 旧义：与缺失同义（不限制），由 [`evaluate`] 统一收口，
+/// 这里不再另写空名单判断（判据单点，防 read/write 漂移）。
 pub fn can_write_schema(rules: &RoleRules, schema: &Schema, ctx: Option<&Context>) -> bool {
     if let Some(c) = ctx {
         if has_any(c, &rules.deny_write_roles) {
-            return false;
-        }
-        if !c.internal
-            && matches!(schema.write, Some(ref w) if w.is_empty())
-            && !has_any(c, &rules.exempt_roles)
-        {
             return false;
         }
     }
@@ -429,6 +437,60 @@ pub fn merge_owner_condition(
     }
 }
 
+/// 写路径是否被 `creator` 独占：`write` 白名单含 `creator`，且当前有效角色
+/// 未命中任何非 `creator` 写角色（内建 / 豁免 / 无 ctx 除外）。
+///
+/// 该判定是 P1 的根因收口：`can_write_schema` 对 `Doc::Missing` 恒放行 creator，
+/// 因此单条 update/remove 会走「静态放行」分支而不发探针。写路径必须先用本函数
+/// 判定是否需要归属限制（探针 + 行条件注入）。
+pub fn write_restricted_to_creator(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+) -> bool {
+    let Some(c) = ctx else { return false };
+    if c.internal || has_any(c, &rules.exempt_roles) {
+        return false;
+    }
+    let Some(write) = schema.write.as_ref() else {
+        return false;
+    };
+    if !write.iter().any(|r| r == "creator") {
+        return false;
+    }
+    let effective = effective(c);
+    !write
+        .iter()
+        .any(|r| r != "creator" && effective.iter().any(|x| x == r))
+}
+
+/// 写路径归属条件：`creator` 独占写时注入 `owner_key = ctx.userId`。
+///
+/// 与读路径的 [`merge_owner_condition`] 同构，但按 `write` 判定（P1）：此前
+/// update/updateMany/remove/upsert 只做探针、执行时仍用原始条件，导致可改他人数据。
+pub fn merge_write_owner_condition(
+    rules: &RoleRules,
+    schema: &Schema,
+    ctx: Option<&Context>,
+    condition: Option<Value>,
+) -> Option<Value> {
+    if !write_restricted_to_creator(rules, schema, ctx) {
+        return condition;
+    }
+    let c = ctx?;
+    let uid = c.user_id.as_deref()?;
+    if uid.is_empty() {
+        return condition;
+    }
+    let mut owner = Map::new();
+    owner.insert(schema.owner_key().to_string(), json!(uid));
+    let owner = Value::Object(owner);
+    match condition.filter(is_truthy) {
+        None => Some(owner),
+        Some(c) => Some(json!({ "$and": [c, owner] })),
+    }
+}
+
 // ─── 字段级过滤（写） ─────────────────────────────────────────
 
 pub fn get_writable_fields(
@@ -438,8 +500,16 @@ pub fn get_writable_fields(
 ) -> Option<HashSet<String>> {
     let c = ctx?;
     let schema_writable = can_write_schema(rules, schema, ctx);
+    let owner_key = schema.owner_key();
+    // internal = 宿主可信系统调用（metadef 落库 / 迁移 / 种子数据）：允许显式写归属键。
+    // 非 internal（受行控约束的调用方）：归属键由系统写入（insert 注入 / upsert
+    // $setOnInsert），一律剔除——含点号路径（root 即归属键）与 `$set` 夹带（P10）。
+    let trusted = c.internal;
     let mut allowed = HashSet::new();
     for (key, field) in &schema.fields {
+        if key == owner_key && !trusted {
+            continue;
+        }
         match &field.write {
             Some(wl) => {
                 if evaluate(rules, Some(c), Some(wl), Doc::Missing, schema.owner_key()) {

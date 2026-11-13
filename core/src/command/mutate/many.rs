@@ -14,7 +14,7 @@ use crate::types::{validate_condition, validate_condition_shape};
 
 use super::{
     build_raw_update, build_set_data, has_raw_operators, is_blank_condition, needs_new_id,
-    plan_rel_pred_mutation, IdCursor,
+    plan_rel_pred_mutation, reject_owner_write, IdCursor,
 };
 
 /// 批量插入（对应 JS `insertMany`）。
@@ -99,9 +99,26 @@ pub fn plan_update_many(
     // RBAC 表级写判定（deny-wins）+ 行级条件合并（updateMany 无探针通道，
     // ownerOnly / condition 并入 filter——匹配不到即 0 行，与读路径语义一致）
     ensure_write(registry, schema, ctx, WriteAction::Update)?;
-    let eff_condition =
-        merge_row_condition(registry, schema, ctx, "update", Some(condition.clone()))?
-            .unwrap_or_else(|| json!({}));
+    // P1：creator 独占写必须带可用 userId，否则无处注入归属条件（禁无主批量写）
+    if crate::permission::write_restricted_to_creator(registry.role_rules(), schema, ctx)
+        && !ctx
+            .and_then(|c| c.user_id.as_deref())
+            .map(|u| !u.is_empty())
+            .unwrap_or(false)
+    {
+        return Err(ERR_NO_BATCH_WRITE.to_string());
+    }
+    let owner_merged = crate::permission::merge_write_owner_condition(
+        registry.role_rules(),
+        schema,
+        ctx,
+        Some(condition.clone()),
+    );
+    let eff_condition = merge_row_condition(registry, schema, ctx, "update", owner_merged)?
+        .unwrap_or_else(|| json!({}));
+
+    // P10：归属键不可经 updateMany 改写（点号路径 / 原生操作符一律显式拒绝）
+    reject_owner_write(schema, ctx, data)?;
 
     let update_doc = if has_raw_operators(data) {
         build_raw_update(registry, schema, ctx, data, now)?

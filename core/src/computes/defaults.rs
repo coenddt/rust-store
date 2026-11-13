@@ -16,7 +16,9 @@ fn none_if_null(v: Value) -> Option<Value> {
     }
 }
 
-/// 取规范化字段定义的默认值（无则 None），语义对齐 Python：null 视为未配置
+/// 取规范化字段定义的默认值（无则 None）。
+///
+/// 显式 `default`（**含 `null`**）优先；未声明 default 才按类型取零值。
 pub fn field_default(field: &FieldDef) -> Option<Value> {
     if let Some(d) = &field.default {
         return Some(d.clone());
@@ -24,15 +26,16 @@ pub fn field_default(field: &FieldDef) -> Option<Value> {
     none_if_null(get_default(&field.field_type))
 }
 
-/// 取原始（未规范化）字段定义的默认值，供嵌套 object 子字段使用
+/// 取原始（未规范化）字段定义的默认值，供嵌套 object 子字段使用。
+///
+/// 与 [`field_default`] 同语义：只要声明了 `default` 键就采用其值（含 `null`），
+/// 无 default 才按类型补零值（`default:null` 必须补 null，不能降级成 0）。
 pub(super) fn raw_field_default(defn: &Value) -> Option<Value> {
     match defn {
         Value::String(s) => none_if_null(get_default(s)),
         Value::Object(o) => {
             if let Some(d) = o.get("default") {
-                if !d.is_null() {
-                    return Some(d.clone());
-                }
+                return Some(d.clone());
             }
             let t = o.get("type").and_then(|v| v.as_str()).unwrap_or("");
             none_if_null(get_default(t))
@@ -56,7 +59,7 @@ fn raw_is_object_field(defn: &Value) -> bool {
 /// 默认值填充模式（「缺失」的定义与「补哪些默认」随路径而变，禁混用）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefaultFill {
-    /// returns 回喂路径：`null` 视为缺失，补类型零值 + 显式 default（与 JS parity）。
+    /// returns 回喂路径：`null` 视为缺失，补显式 default（含 `null`）；未声明 default 才补类型零值（与 JS parity）。
     Return,
     /// insert 落库路径（A3）：**仅在键缺失**时补，且**只补 schema 显式声明的 default**。
     ///
@@ -122,9 +125,10 @@ fn fill_nested_defaults_mode(obj: &mut Value, fields_def: &Value, fill: DefaultF
 
 /// 合并字段默认值（仅根文档，不递归计算列）。
 ///
-/// `DefaultFill::Return`：补类型零值 + 显式 default，`null` 视为缺失（returns 回喂路径，
-/// 与 JS parity）；`DefaultFill::Insert`：仅键缺失时补、只补显式 default（insert 落库路径，
-/// A3 —— 保留显式 null，未声明默认的字段仍按 NULL 落库）。
+/// `DefaultFill::Return`：补显式 default（含 `null`），未声明 default 才补类型零值，
+/// `null` 视为缺失（returns 回喂路径，与 JS parity）；`DefaultFill::Insert`：仅键缺失时补、
+/// 只补**非 null** 显式 default（insert 落库路径，A3 —— 保留显式 null，
+/// 未声明默认的字段仍按 NULL 落库）。
 ///
 /// 抽取自 [`apply_defaults_and_computes`]，保证「落库」与「返回值」同源，禁另造规则。
 pub fn apply_field_defaults(doc: &Value, schema: &Schema, fill: DefaultFill) -> Value {
@@ -169,7 +173,20 @@ pub fn apply_defaults_and_computes(
     schema: &Schema,
     fn_registry: Option<&dyn FnRegistry>,
 ) -> Result<Value, String> {
-    let mut result = apply_field_defaults(doc, schema, DefaultFill::Return);
+    let result = apply_field_defaults(doc, schema, DefaultFill::Return);
+    apply_computes(&result, schema, fn_registry)
+}
+
+/// 仅叠加同步 fn 计算列，**不做任何默认值填充**。
+///
+/// D1：`insert` 的 `returns` 必须以**落库 doc**（[`DefaultFill::Insert`] 结果）为基，
+/// 否则同一行会出现「落库 / returns / 读回」三种取值。默认值只应在写入时物化一次。
+pub fn apply_computes(
+    doc: &Value,
+    schema: &Schema,
+    fn_registry: Option<&dyn FnRegistry>,
+) -> Result<Value, String> {
+    let mut result = doc.clone();
 
     // 同步 fn 计算列（对应 JS `if (comp.fn) result[key] = comp.fn(result)`）
     let cache = ensure_cache(schema);
@@ -179,10 +196,30 @@ pub fn apply_defaults_and_computes(
             None => return Err(format!("计算列 {} 未注册同步实现", entry.key)),
         };
         let Some(o) = result.as_object_mut() else {
-            return Err("apply_defaults_and_computes：结果不是对象".to_string());
+            return Err("apply_computes：结果不是对象".to_string());
         };
         o.insert(entry.key.clone(), v);
     }
 
     Ok(result)
+}
+
+/// D3：object 字段的类型校验（写入前显式报错，禁止默认值静默不生效）。
+///
+/// 只校验声明了 `fields` 的 object 字段；`null` 视为显式清空，允许。
+pub fn validate_object_fields(doc: &Value, schema: &Schema) -> Result<(), String> {
+    let Some(o) = doc.as_object() else {
+        return Ok(());
+    };
+    for (key, field) in &schema.fields {
+        if !is_object_field(field) {
+            continue;
+        }
+        if let Some(v) = o.get(key) {
+            if !v.is_null() && !v.is_object() {
+                return Err(format!("字段 {key} 声明为 object，实际值不是对象：{v}"));
+            }
+        }
+    }
+    Ok(())
 }

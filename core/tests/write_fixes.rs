@@ -62,9 +62,9 @@ fn a2_insert_doc_contains_created_by() {
     assert_eq!(doc["createdBy"], "u1", "落库文档应注入归属键: {doc}");
 }
 
-/// A2：显式传入的 createdBy 不被覆盖
+/// A2/P10：显式传入的 createdBy 不得冒充，insert 用 ctx.userId 覆盖
 #[test]
-fn a2_explicit_created_by_is_kept() {
+fn a2_explicit_created_by_is_overridden_by_ctx() {
     let reg = registry_with(&[json!({
         "name": "Task",
         "collection": "tasks",
@@ -76,7 +76,10 @@ fn a2_explicit_created_by_is_kept() {
     })]);
     let c = ctx_of(json!({ "userId": "u1" }));
     let doc = insert_doc(&reg, Some(&c), json!({ "title": "x", "createdBy": "u2" }));
-    assert_eq!(doc["createdBy"], "u2", "显式归属键应优先: {doc}");
+    assert_eq!(
+        doc["createdBy"], "u1",
+        "P10：归属键由 ctx.userId 覆盖，显式值不得冒充: {doc}"
+    );
 }
 
 fn default_schema() -> Value {
@@ -208,14 +211,16 @@ fn owner_key_insert_doc_uses_custom_field() {
     );
 }
 
-/// 显式声明 ownerKey 字段 ⇒ 保留声明的类型，不被补成 string
+/// N1：显式声明归属字段但类型非 string ⇒ 注册期 Err（禁静默变味）
 #[test]
-fn owner_key_explicit_declaration_keeps_type() {
+fn owner_key_explicit_declaration_must_be_string() {
     let mut defn = owner_schema(json!("creatorId"), json!(["creator"]));
     defn["fields"]["creatorId"] = json!({ "type": "int" });
-    let reg = registry_with(&[defn]);
-    let schema = reg.get("Task").expect("Task 应已注册");
-    assert_eq!(schema.fields["creatorId"].field_type, "int");
+    let mut reg = Registry::new();
+    let err = reg
+        .register(&defn)
+        .expect_err("N1：归属字段声明为非 string 应在注册期拒绝");
+    assert!(err.contains("必须为 string"), "{err}");
 }
 
 /// 不使用 owner 行控（无 creator）⇒ 不补字段（行为不变）
@@ -226,10 +231,12 @@ fn owner_key_without_owner_control_adds_nothing() {
     assert!(!schema.fields.contains_key("creatorId"));
 }
 
-/// ownerKey = `_id`（系统主键）⇒ 不把 _id 补成普通字段
+/// ownerKey = `_id`（系统主键）⇒ 注册期拒绝（N1：主键不得兼任归属键）
 #[test]
-fn owner_key_id_is_not_added_as_field() {
-    let reg = registry_with(&[owner_schema(json!("_id"), json!(["creator"]))]);
-    let schema = reg.get("Task").expect("Task 应已注册");
-    assert!(!schema.fields.contains_key("_id"));
+fn owner_key_id_is_rejected() {
+    let mut reg = Registry::new();
+    let err = reg
+        .register(&owner_schema(json!("_id"), json!(["creator"])))
+        .expect_err("N1：ownerKey 不得为 _id");
+    assert!(err.contains("不得为 \"_id\""), "{err}");
 }

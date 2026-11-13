@@ -819,6 +819,7 @@
   {
     "kind": "query",
     "name": "q-ownerkey-read-own",
+    "expect_error": true,
     "schemas": [
       {
         "name": "User", "collection": "users", "timestamps": false,
@@ -835,6 +836,7 @@
   {
     "kind": "query",
     "name": "q-ownerkey-inject-list",
+    "expect_error": true,
     "schemas": [
       {
         "name": "User", "collection": "users", "timestamps": false,
@@ -851,6 +853,7 @@
   {
     "kind": "update",
     "name": "upd-ownerkey-self-pass",
+    "expect_error": true,
     "schemas": [
       {
         "name": "UserW", "collection": "users_w", "idPrefix": "USR", "timestamps": false,
@@ -871,6 +874,7 @@
   {
     "kind": "remove",
     "name": "rm-ownerkey-self-pass",
+    "expect_error": true,
     "schemas": [
       {
         "name": "UserW", "collection": "users_w", "idPrefix": "USR", "timestamps": false,

@@ -120,7 +120,11 @@ pub(in crate::command) fn is_blank_condition(v: &Value) -> bool {
     }
 }
 
-/// JS `_removeUndefined`：剔除对象中的 null 值（JSON 无 undefined），返回新对象
+/// 写路径数据清洗（5.x 旧义，对应 JS `_removeUndefined`）：剔除对象中的 null 值
+/// （JSON 无 undefined），返回新对象。
+///
+/// 显式 `null` = **不写该字段**（不落列、不维护 `__present`）；要清空字段请用 `$unset`，
+/// 二者语义分明，不做三态推断。
 pub(in crate::command) fn remove_undefined(obj: &Value) -> Value {
     match obj.as_object() {
         Some(o) => Value::Object(
@@ -165,6 +169,44 @@ fn find_one_and_update_options(options: &Value) -> Value {
     Value::Object(m)
 }
 
+/// P10：归属键禁止经 update/updateMany 改写（含点号路径与任何原生操作符）。
+///
+/// 过滤会静默丢弃该键（等于吞掉越权意图），这里改为显式报错：归属键属系统维护，
+/// 用户不能改自己的也不能改他人的。`ctx = None` / `internal` 为系统内部路径，放行。
+pub(in crate::command) fn reject_owner_write(
+    schema: &Schema,
+    ctx: Option<&Context>,
+    data: &Value,
+) -> Result<(), String> {
+    let Some(c) = ctx else { return Ok(()) };
+    if c.internal {
+        return Ok(());
+    }
+    let owner = schema.owner_key();
+    let is_owner_key = |k: &str| k == owner || k.split('.').next() == Some(owner);
+    if let Some(obj) = data.as_object() {
+        // $set 模式：直接字段键
+        let plain = obj.keys().filter(|k| !k.starts_with('$'));
+        if plain.into_iter().any(|k| is_owner_key(k)) {
+            return Err(format!(
+                "ERR_PERMISSION:归属键 {owner} 由系统维护，不允许通过写操作修改"
+            ));
+        }
+        // 原生操作符模式：任一操作符的目标键
+        for (op, payload) in obj.iter().filter(|(k, _)| k.starts_with('$')) {
+            let Some(m) = payload.as_object() else {
+                continue;
+            };
+            if m.keys().any(|k| is_owner_key(k)) {
+                return Err(format!(
+                    "ERR_PERMISSION:归属键 {owner} 由系统维护，不允许通过 {op} 修改"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// update/updateMany 共用：原生操作符模式（`$` 开头的 key 透传 $inc/$unset/$addToSet 等）
 pub(in crate::command) fn build_raw_update(
     registry: &Registry,
@@ -187,6 +229,11 @@ pub(in crate::command) fn build_raw_update(
     }
     // accessKeys：其余原生操作符（$unset/$inc/...）不得改写受控字段
     crate::access::validate_raw_operators(schema, ctx, &data)?;
+    // D3：`$set` 里的 object 字段收到非对象值 → 显式报错（与 insert / $set 模式同码；
+    // internal 上下文不豁免）。原生操作符路径不得绕过类型强校验。
+    if let Some(set_part) = data.get("$set").filter(|v| !v.is_null()) {
+        crate::computes::validate_object_fields(set_part, schema)?;
+    }
     if schema.timestamps {
         let set_part = data.get("$set").cloned().unwrap_or_else(|| json!({}));
         let mut merged = object_of(&set_part);
@@ -213,6 +260,8 @@ pub(in crate::command) fn build_set_data(
     if let Some(obj) = src.as_object() {
         crate::access::validate_write_values(schema, ctx, obj)?;
     }
+    // D3：object 字段收到非对象值 → 显式报错（否则默认值静默不生效）
+    crate::computes::validate_object_fields(&src, schema)?;
     let mut set_data = object_of(&remove_undefined(&src));
     set_data.remove("_id");
     Ok(set_data)

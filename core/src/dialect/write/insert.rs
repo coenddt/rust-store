@@ -187,8 +187,9 @@ fn quote_join(backend: Backend, cols: &[String]) -> String {
 /// `_id` 为保留字段，文档带时恒写首位
 fn writable_cols(schema: &Schema, doc: &Value) -> Vec<String> {
     let mut cols: Vec<String> = schema
-        .fields
-        .keys()
+        .field_order
+        .iter()
+        .filter(|k| schema.fields.contains_key(k.as_str()))
         .filter(|k| doc.get(k.as_str()).map(|v| !v.is_null()).unwrap_or(false))
         .cloned()
         .collect();
@@ -210,8 +211,9 @@ fn writable_cols_union(schema: &Schema, docs: &[Value]) -> Vec<String> {
             .any(|d| d.get(k).map(|v| !v.is_null()).unwrap_or(false))
     };
     let mut cols: Vec<String> = schema
-        .fields
-        .keys()
+        .field_order
+        .iter()
+        .filter(|k| schema.fields.contains_key(k.as_str()))
         .filter(|k| has_value(k.as_str()))
         .cloned()
         .collect();
@@ -219,4 +221,52 @@ fn writable_cols_union(schema: &Schema, docs: &[Value]) -> Vec<String> {
         cols.insert(0, "_id".to_string());
     }
     cols
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Map, Value};
+
+    use crate::schema::Registry;
+
+    use super::writable_cols;
+
+    /// X1：SQL 列序必须与 schema 声明序一致（此前取 `fields.keys()`，随 HashMap
+    /// 随机迭代序变化，跨进程不可复现）。
+    #[test]
+    fn writable_cols_follow_schema_field_order() {
+        let mut reg = Registry::new();
+        reg.register(&json!({
+            "name": "Wide",
+            "collection": "wide",
+            "idPrefix": "w",
+            "timestamps": false,
+            "fields": {
+                "f01": { "type": "string" }, "f02": { "type": "string" },
+                "f03": { "type": "string" }, "f04": { "type": "string" },
+                "f05": { "type": "string" }, "f06": { "type": "string" },
+                "f07": { "type": "string" }, "f08": { "type": "string" },
+                "f09": { "type": "string" }, "f10": { "type": "string" },
+                "f11": { "type": "string" }, "f12": { "type": "string" }
+            },
+            "relations": {},
+        }))
+        .expect("注册应成功");
+        let schema = reg.get("Wide").unwrap();
+        let mut doc = Map::new();
+        doc.insert("_id".to_string(), json!("w1"));
+        for k in schema.field_names() {
+            doc.insert(k, json!("v"));
+        }
+        let cols = writable_cols(schema, &Value::Object(doc.clone()));
+        let mut expected = vec!["_id".to_string()];
+        expected.extend(schema.field_names());
+        assert_eq!(cols, expected, "列序必须稳定且按声明序");
+        // 同一 schema 连续两次调用结果一致（回归随机序）
+        assert_eq!(
+            writable_cols(schema, &Value::Object(doc)),
+            cols,
+            "列序在同一进程内也必须稳定"
+        );
+    }
 }

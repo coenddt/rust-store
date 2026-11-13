@@ -20,6 +20,7 @@ use rust_store_core::command::{
     finalize_query, plan_archive_docs, plan_insert, plan_query, plan_query_one, plan_remove,
     plan_update, restore_sort_order, Probe, PHASE1_IDS,
 };
+use rust_store_core::computes::apply_computes;
 use rust_store_core::dialect::Backend;
 use rust_store_core::permission::Context;
 use rust_store_core::schema::Registry;
@@ -148,6 +149,18 @@ impl Store {
         w.register(defn)
     }
 
+    /// 注销一个 schema（含 core 注册期自动派生的 `<Name>Deleted` 归档表）。
+    ///
+    /// 语义与 core [`Registry::unregister`] 一致：未知 name **幂等成功**（回滚清单可整份
+    /// 重放）；版本号随项删除，同名重注册从 1 重新计数；非 base 视图的写操作不经过本方法。
+    pub fn unregister(&self, schema_name: &str) -> Result<(), String> {
+        let mut w = self
+            .registry
+            .write()
+            .map_err(|_| "registry 写锁中毒".to_string())?;
+        w.unregister(schema_name)
+    }
+
     /// 开关「必须带上下文」（core `ensure_context`；默认关闭 = fail-open，与双宿主一致）
     pub fn set_require_context(&self, require: bool) {
         if let Ok(mut w) = self.registry.write() {
@@ -245,6 +258,44 @@ impl Store {
     pub fn schema_fields(&self, schema_name: &str) -> Result<Vec<String>, String> {
         exec::with_registry(&self.registry, |reg| {
             Ok(reg.get(schema_name)?.fields.keys().cloned().collect())
+        })
+    }
+
+    /// schema 定义（只读导出）：字段类型 + 嵌套 object 的 `fields` 原始定义。
+    ///
+    /// 与 core `Schema` / `FieldDef` 同源，直接取自注册表，**不另建 schema 模型**；
+    /// 本方法只做信息暴露，白名单 / 点路径语义由协议皮自行判定。
+    /// `fields` 按 `field_order`（声明序）输出，键同 [`schema_fields`]，值为
+    /// core 字段定义的直出：`type` / `required` / `default` / `read` / `write` /
+    /// `fields`（嵌套 object 的原始定义，未规范化）/ `strategy` / `dim` / `metric`。
+    pub fn schema_definition(&self, schema_name: &str) -> Result<Value, String> {
+        exec::with_registry(&self.registry, |reg| {
+            let schema = reg.get(schema_name)?;
+            let mut fields = Map::new();
+            for key in &schema.field_order {
+                let Some(f) = schema.fields.get(key) else {
+                    continue;
+                };
+                fields.insert(
+                    key.clone(),
+                    json!({
+                        "type": f.field_type.clone(),
+                        "required": f.required,
+                        "default": f.default.clone(),
+                        "read": f.read.clone(),
+                        "write": f.write.clone(),
+                        "fields": f.fields.clone(),
+                        "strategy": f.strategy.clone(),
+                        "dim": f.dim,
+                        "metric": f.metric.clone(),
+                    }),
+                );
+            }
+            Ok(json!({
+                "name": schema.name.clone(),
+                "collection": schema.collection.clone(),
+                "fields": Value::Object(fields),
+            }))
         })
     }
 
@@ -369,6 +420,18 @@ impl Store {
         let outcome = exec::exec_translated(conn.conn(), &translated).await?;
         drop(conn);
         Ok(outcome.docs.into_iter().next())
+    }
+
+    /// 写路径结果回喂（**仅同步计算列**）：对更新后的落库文档叠加 `fn: true`
+    /// 计算列，**不补任何默认值**（D1：默认值只在 insert 物化一次）。
+    ///
+    /// 入参必须是 `returnDocument: AFTER` 取回的完整文档。Host 未内置同步 `fn`
+    /// 回调桥（`plan_insert` 亦传 `None`），故 schema 声明 `fn: true` 时显式报错、
+    /// 不静默跳过；无 `fn` 声明的 schema 原样返回。
+    pub fn apply_write_computes(&self, schema_name: &str, doc: &Value) -> Result<Value, String> {
+        let reg = self.read_reg()?;
+        let schema = reg.get(schema_name)?;
+        apply_computes(doc, schema, None)
     }
 
     /// 删除（归档编排：find 源文档 → plan_archive_docs 写归档表 → deleteMany；

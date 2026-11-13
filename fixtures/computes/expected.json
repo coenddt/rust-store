@@ -291,7 +291,6 @@
       "reviewer"
     ],
     "writableFields": [
-      "createdBy",
       "meta",
       "title"
     ],
@@ -354,7 +353,6 @@
     ],
     "readableRelations": [],
     "writableFields": [
-      "createdBy",
       "title"
     ],
     "filteredData": {
@@ -376,7 +374,6 @@
     ],
     "readableRelations": [],
     "writableFields": [
-      "createdBy",
       "title"
     ],
     "filteredData": {
@@ -418,7 +415,6 @@
     ],
     "readableRelations": [],
     "writableFields": [
-      "createdBy",
       "title"
     ],
     "filteredData": {

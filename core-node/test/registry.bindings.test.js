@@ -23,6 +23,20 @@ const DEFN = {
   relations: {},
 };
 
+test('unregister: 主项与派生归档一并注销，未知 name 幂等', () => {
+  const reg = new native.Registry();
+  reg.register(DEFN);
+  assert.deepStrictEqual(reg.list(), ['C', 'CDeleted']);
+
+  reg.unregister('C');
+  assert.ok(!reg.has('C'));
+  assert.ok(!reg.has('CDeleted'), '派生归档表必须随主项清理');
+  assert.deepStrictEqual(reg.list(), []);
+
+  reg.unregister('C'); // 未知 ⇒ 幂等成功（回滚清单可整份重放）
+  assert.deepStrictEqual(reg.list(), []);
+});
+
 test('clearSchemas: 清空 schema 与注册顺序，保留配置开关', () => {
   const reg = new native.Registry();
   reg.register(DEFN);

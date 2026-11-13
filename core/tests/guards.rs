@@ -82,9 +82,12 @@ fn owner_key_defaults_to_created_by_and_accepts_custom_keys() {
             "createdBy"
         );
     }
-    // 显式非空字符串 → 原样生效；系统键 `_id`（漉金Core FinanceUser 形态）合法
-    let reg = registry_with(base_schema_with_owner_key(json!("_id")));
-    assert_eq!(reg.get("Post").expect("schema 应存在").owner_key(), "_id");
+    // 显式非空字符串 → 原样生效；`_id` 被 N1 拒绝（主键不得兼任归属键）
+    let mut reg0 = Registry::new();
+    let err = reg0
+        .register(&base_schema_with_owner_key(json!("_id")))
+        .expect_err("ownerKey = _id 应注册期拒绝");
+    assert!(err.contains("不得为 \"_id\""), "{err}");
     let reg = registry_with(base_schema_with_owner_key(json!("ownerRef")));
     assert_eq!(
         reg.get("Post").expect("schema 应存在").owner_key(),

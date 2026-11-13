@@ -151,12 +151,18 @@ fn bridge(handle: u64) -> Option<BridgeFnRegistry> {
 fn ctx_to_value(ctx: Option<&Context>) -> Value {
     match ctx {
         None => Value::Null,
-        Some(c) => json!({
-            "userId": c.user_id,
-            "roles": c.roles,
-            "role": c.role,
-            "internal": c.internal,
-        }),
+        Some(c) => {
+            let mut m = serde_json::Map::new();
+            m.insert("userId".to_string(), json!(c.user_id));
+            m.insert("roles".to_string(), json!(c.roles));
+            m.insert("role".to_string(), json!(c.role));
+            m.insert("internal".to_string(), json!(c.internal));
+            // X2：accessKeys 清单键必须随 ctx 往返，否则计算列回调拿不到清单
+            for (k, v) in &c.access_lists {
+                m.insert(k.clone(), v.clone());
+            }
+            Value::Object(m)
+        }
     }
 }
 
@@ -164,35 +170,12 @@ fn value_to_ctx(v: &Value) -> Result<Option<Context>, String> {
     if v.is_null() {
         return Ok(None);
     }
-    let obj = v
-        .as_object()
-        .ok_or_else(|| "ctx 必须是对象或 null".to_string())?;
-    let user_id = obj.get("userId").and_then(|x| x.as_str().map(String::from));
-    let roles = match obj.get("roles") {
-        None | Some(Value::Null) => None,
-        Some(Value::Array(a)) => Some(
-            a.iter()
-                .map(|x| {
-                    x.as_str()
-                        .map(String::from)
-                        .ok_or_else(|| "ctx.roles 元素必须是字符串".to_string())
-                })
-                .collect::<Result<Vec<String>, String>>()?,
-        ),
-        Some(_) => return Err("ctx.roles 必须是数组或 null".to_string()),
-    };
-    let role = obj.get("role").and_then(|x| x.as_str().map(String::from));
-    let internal = obj
-        .get("internal")
-        .and_then(|x| x.as_bool())
-        .unwrap_or(false);
-    Ok(Some(Context {
-        user_id,
-        roles,
-        role,
-        internal,
-        ..Default::default()
-    }))
+    if !v.is_object() {
+        return Err("ctx 必须是对象或 null".to_string());
+    }
+    // X5：与 py/node/host 共用同一套解析（accessKeys 清单 + `is_truthy` 的 internal
+    // 语义），此前 FFI 手写解析：internal 只认布尔、其余键一律丢弃。
+    Ok(rust_store_core::permission::context_from_value(v))
 }
 
 /// probe 编码：`"not_probed"` | `"not_found"`（兼容旧串 `"no_result"`）| `{"found": {...}}`
@@ -286,6 +269,27 @@ unsafe fn json_arg(p: *const c_char) -> Result<Value, String> {
 pub extern "C" fn rcore_api_version() -> *const c_char {
     static V: &[u8] = b"go-store ffi v0.1.0 / core contract 2026-09\0";
     V.as_ptr() as *const c_char
+}
+
+/// 逻辑名 → 目标后端物理标识符（家族唯一算法 `core::naming`；与 core-py / core-node
+/// 的 `translate_name` 同一实现，宿主 DDL 不得自研 snake_case 转换）。
+///
+/// `backend` 取 `sqlite` / `mysql` / `postgres` 等 `naming::Target` 可识别值；非法值显式报错。
+///
+/// # Safety
+/// `logical` / `backend` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
+#[no_mangle]
+pub unsafe extern "C" fn rcore_translate_name(
+    logical: *const c_char,
+    backend: *const c_char,
+) -> *mut c_char {
+    guard(|| {
+        let logical = unsafe { cstr(logical)? };
+        let backend = unsafe { cstr(backend)? };
+        Ok(json!(rust_store_core::naming::translate_by_str(
+            logical, backend
+        )?))
+    })
 }
 
 /// 释放本 crate 返回的字符串（调用方义务）
@@ -1030,4 +1034,86 @@ pub unsafe extern "C" fn rcore_finalize_query(
         })?;
         Ok(json!(items))
     })
+}
+#[cfg(test)]
+mod tests {
+    use super::{ctx_to_value, rcore_free, rcore_translate_name, value_to_ctx};
+    use serde_json::json;
+    use std::ffi::{CStr, CString};
+    use std::os::raw::c_char;
+
+    /// 调用导出面并读取信封（读后立即 `rcore_free`，不泄漏）。
+    fn call_translate(logical: *const c_char, backend: *const c_char) -> serde_json::Value {
+        let p = unsafe { rcore_translate_name(logical, backend) };
+        assert!(!p.is_null(), "导出面不得返回 null 指针");
+        let raw = unsafe { CStr::from_ptr(p) }
+            .to_str()
+            .expect("信封必须是合法 UTF-8")
+            .to_string();
+        unsafe { rcore_free(p) };
+        serde_json::from_str(&raw).expect("信封必须是 JSON")
+    }
+
+    /// X2 / X5：FFI 的 ctx 解析/回填必须与 py/node/host 同语义。
+    #[test]
+    fn ffi_ctx_roundtrip_keeps_access_lists_and_internal_semantics() {
+        // `internal: 1` —— py/node 用 is_truthy 视为 true；旧 FFI 只认 bool → false
+        let v = json!({ "userId": "u1", "roles": ["editor"], "internal": 1, "deptIds": ["d1", 7] });
+        let ctx = value_to_ctx(&v).expect("解析应成功").expect("ctx 非空");
+        assert!(ctx.internal, "internal 必须按 is_truthy 语义");
+        assert_eq!(ctx.access_lists.get("deptIds"), Some(&json!(["d1", 7])));
+
+        // 回填：accessKeys 清单键必须保留（X2 此前丢失）
+        let back = ctx_to_value(Some(&ctx));
+        assert_eq!(
+            back["deptIds"],
+            json!(["d1", 7]),
+            "ctx 回填丢清单键: {back}"
+        );
+        assert_eq!(back["internal"], true);
+
+        // 非法清单形态记入错误表（与 core 一致，不静默）
+        let bad = value_to_ctx(&json!({ "deptIds": "d1" })).unwrap().unwrap();
+        assert!(bad.access_list_errors.contains_key("deptIds"));
+
+        // 非对象仍显式报错
+        assert!(value_to_ctx(&json!("x")).is_err());
+        assert!(value_to_ctx(&serde_json::Value::Null).unwrap().is_none());
+    }
+
+    /// 新增导出面 `rcore_translate_name` 的 ABI 契约：
+    /// 正常往返、null 指针、非法 UTF-8、未知 backend 都必须给出可读信封（不得 panic / 返回 null）。
+    #[test]
+    fn ffi_translate_name_abi_contract() {
+        let logical = CString::new("createdAt").expect("无 NUL");
+        let mysql = CString::new("mysql").expect("无 NUL");
+
+        let ok = call_translate(logical.as_ptr(), mysql.as_ptr());
+        assert_eq!(ok["ok"], true, "正常往返应成功: {ok}");
+        assert_eq!(ok["data"], "created_at", "mysql snake_case: {ok}");
+
+        let null_arg = call_translate(std::ptr::null(), mysql.as_ptr());
+        assert_eq!(null_arg["ok"], false, "空指针必须显式报错: {null_arg}");
+        assert!(
+            null_arg["error"].as_str().unwrap_or("").contains("null"),
+            "错误文案应指明空指针: {null_arg}"
+        );
+
+        // CString 允许任意非 NUL 字节；0xff/0xfe 不是合法 UTF-8 序列
+        let illegal = CString::new(vec![0xffu8, 0xfe]).expect("无 NUL");
+        let bad = call_translate(illegal.as_ptr(), mysql.as_ptr());
+        assert_eq!(bad["ok"], false, "非法 UTF-8 必须显式报错: {bad}");
+        assert!(
+            bad["error"].as_str().unwrap_or("").contains("UTF-8"),
+            "错误文案应指明编码问题: {bad}"
+        );
+
+        let unknown = CString::new("cassandra").expect("无 NUL");
+        let err = call_translate(logical.as_ptr(), unknown.as_ptr());
+        assert_eq!(err["ok"], false, "未知 backend 必须显式报错: {err}");
+        assert_eq!(
+            err["code"], "other",
+            "未知 backend 归类为 other，不得误报权限类: {err}"
+        );
+    }
 }

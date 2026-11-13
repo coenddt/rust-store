@@ -82,3 +82,49 @@ test('readableComputes: 未配 read → 全集；无 computes → 空数组（�
   });
   assert.deepStrictEqual(reg.readableComputes('BareDoc', CTX_USER), []);
 });
+
+test('planExistsWithCtx: read: [] 放行、denyRead 拒绝、白名单通过、旧入口保持内部语义', () => {
+  const reg = new native.Registry();
+  reg.register({
+    name: 'DenyDoc',
+    collection: 'deny_docs',
+    timestamps: false,
+    read: [],
+    fields: { title: 'string' },
+    relations: {},
+  });
+  // read: [] 恢复 5.x 旧义：空名单 = 未配置，不限制（放行）
+  assert.strictEqual(
+    reg.planExistsWithCtx('DenyDoc', { title: 'x' }, CTX_ADMIN).kind,
+    'findOne',
+    'read: [] 不得拒绝 exists（5.x 旧义：不限制）'
+  );
+
+  reg.register({
+    name: 'BlockedDoc',
+    collection: 'blocked_docs',
+    timestamps: false,
+    denyRead: true,
+    fields: { title: 'string' },
+    relations: {},
+  });
+  assert.throws(
+    () => reg.planExistsWithCtx('BlockedDoc', { title: 'x' }, CTX_ADMIN),
+    /ERR_PERMISSION/,
+    'denyRead: true 必须拒绝 exists'
+  );
+
+  reg.register({
+    name: 'AdminDoc',
+    collection: 'admin_docs',
+    timestamps: false,
+    read: ['admin'],
+    fields: { title: 'string' },
+    relations: {},
+  });
+  const plan = reg.planExistsWithCtx('AdminDoc', { title: 'x' }, CTX_ADMIN);
+  assert.strictEqual(plan.kind, 'findOne');
+  assert.deepStrictEqual(plan.projection, { _id: 1 });
+  // 旧入口（无 ctx）保持 fail-open：内部调用不被新判据掐断
+  assert.strictEqual(reg.planExists('DenyDoc', { title: 'x' }).kind, 'findOne');
+});

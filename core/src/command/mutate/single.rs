@@ -3,7 +3,7 @@
 use serde_json::{json, Value};
 
 use crate::command::cmd::{cmd_delete_many, cmd_find, cmd_find_one_and_update, cmd_insert_many};
-use crate::command::write::{check_write_perm, Probe};
+use crate::command::write::{check_write_perm, effective_write_condition, Probe};
 use crate::command::write_links::attach_write_links;
 use crate::command::{ensure_context, ERR_NO_BATCH_WRITE, ERR_NO_DELETE, ERR_NO_WRITE};
 use crate::permission::Context;
@@ -13,7 +13,7 @@ use crate::types::{validate_condition, validate_condition_shape};
 
 use super::{
     build_raw_update, build_set_data, find_one_and_update_options, has_raw_operators,
-    is_blank_condition, object_of,
+    is_blank_condition, object_of, reject_owner_write,
 };
 
 /// 更新一条（对应 JS `update`，`findOneAndUpdate` + returnDocument AFTER）。
@@ -62,6 +62,9 @@ pub fn plan_update(
         return Ok(json!({ "needsProbe": cmd }));
     }
 
+    // P10：归属键不可经 update 改写（点号路径 / 原生操作符一律显式拒绝）
+    reject_owner_write(schema, ctx, data)?;
+
     let update_doc = if has_raw_operators(data) {
         build_raw_update(registry, schema, ctx, data, now)?
     } else {
@@ -76,9 +79,13 @@ pub fn plan_update(
         json!({ "$set": Value::Object(set_data) })
     };
 
+    // P1/P2：执行条件必须合入归属（write:creator）与 RBAC/accessKeys 行条件，
+    // 否则探针放行后 findOneAndUpdate 仍可能命中他人文档。
+    let eff_condition =
+        effective_write_condition(registry, schema, ctx, condition, WriteAction::Update)?;
     let command = cmd_find_one_and_update(
         schema,
-        condition,
+        &eff_condition,
         &update_doc,
         &find_one_and_update_options(options),
     );
@@ -141,13 +148,16 @@ pub fn plan_remove(
         .unwrap_or(false);
     let eff_condition = if has_rel_pred {
         let pre = super::plan_rel_pred_mutation(schema, registry, ctx, condition)?;
-        let mut delete_command = cmd_delete_many(schema, &pre.condition);
+        // P2：关系谓词改写后同样要合入归属 / RBAC 行条件（否则 deleteMany 仍可删他人行）
+        let eff =
+            effective_write_condition(registry, schema, ctx, &pre.condition, WriteAction::Remove)?;
+        let mut delete_command = cmd_delete_many(schema, &eff);
         if let Some(obj) = delete_command.as_object_mut() {
             obj.insert("preCommand".to_string(), pre.lookup_command);
         }
         let mut plan = json!({
             "archiveCollection": if registry.has(&archive_name_of(schema_name)) { json!(registry.get(&archive_name_of(schema_name))?.collection) } else { Value::Null },
-            "findCommand": cmd_find(schema, &pre.condition, None),
+            "findCommand": cmd_find(schema, &eff, None),
             "deleteCommand": delete_command,
         });
         // 未配置触发器时不出现 triggers 键（A2 零回归）
@@ -158,7 +168,7 @@ pub fn plan_remove(
         }
         return attach_write_links(plan, registry, &[schema_name], registry.write_link_policy());
     } else {
-        condition
+        effective_write_condition(registry, schema, ctx, condition, WriteAction::Remove)?
     };
 
     let archive_name = format!("{}Deleted", schema_name);
@@ -166,12 +176,12 @@ pub fn plan_remove(
         let arch = registry.get(&archive_name)?;
         (
             json!(arch.collection),
-            Some(cmd_find(schema, eff_condition, None)),
+            Some(cmd_find(schema, &eff_condition, None)),
         )
     } else {
         (Value::Null, None)
     };
-    let delete_command = cmd_delete_many(schema, eff_condition);
+    let delete_command = cmd_delete_many(schema, &eff_condition);
     let mut plan = json!({
         "archiveCollection": archive_collection,
         "findCommand": find_command,

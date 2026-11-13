@@ -56,6 +56,10 @@ struct Entry {
     links: Vec<Location>,
     /// 版本：首次注册 = 1；跨批次 reload 同名 ⇒ +1
     version: u64,
+    /// 派生来源：`Some(main)` = 本项是注册期为 `main` 自动派生的归档表
+    /// `<main>Deleted`；`None` = 独立注册项。注销主项时据此一并清理派生对象
+    /// （不按名字后缀猜，避免误删独立注册的同名归档）。
+    archive_of: Option<String>,
 }
 
 /// 批次分组结果（判据单点输出；`register_batch` 与 `schema::load::plan_load` 共用）。
@@ -527,6 +531,8 @@ impl Registry {
             name: String,
             schema: Schema,
             links: Vec<Location>,
+            /// 该拟定项是否为某主项自动派生的归档表
+            archive_of: Option<String>,
         }
         let mut planned: Vec<Planned> = Vec::new();
         for name in &class.order {
@@ -545,13 +551,14 @@ impl Registry {
                     name: name.clone(),
                     schema: schema.clone(),
                     links: links.clone(),
+                    archive_of: None,
                 });
                 // 归档附表紧随主定义派生（`links` 继承主链路，定位同主）；
                 // archive:false（漉金Core 接入扩展 02）完全不派生（不进模型表、
                 // 不建集合、不占名称冲突检查名额）
                 let archive_on = obj.get("archive").map(is_truthy).unwrap_or(true);
                 if !is_archive && !name.ends_with("Deleted") && archive_on {
-                    let aobj = archive_defn(obj, name, &schema.collection)
+                    let aobj = archive_defn(obj, name, &schema.collection, &schema)
                         .as_object()
                         .cloned()
                         .unwrap();
@@ -562,6 +569,7 @@ impl Registry {
                         name: aname,
                         schema: aschema,
                         links,
+                        archive_of: Some(name.clone()),
                     });
                 }
             } else {
@@ -578,6 +586,7 @@ impl Registry {
                     name: name.clone(),
                     schema: existing.schema.clone(),
                     links,
+                    archive_of: existing.archive_of.clone(),
                 });
             }
         }
@@ -612,6 +621,7 @@ impl Registry {
             if let Some(e) = catalog.entries.get_mut(&p.name) {
                 e.schema = p.schema;
                 e.links = p.links;
+                e.archive_of = p.archive_of;
                 e.version += 1;
             } else {
                 catalog.entries.insert(
@@ -620,12 +630,48 @@ impl Registry {
                         schema: p.schema,
                         links: p.links,
                         version: 1,
+                        archive_of: p.archive_of,
                     },
                 );
                 catalog.order.push(p.name);
             }
         }
 
+        Ok(())
+    }
+
+    /// 注销一个 schema（含注册期为它自动派生的 `<Name>Deleted` 归档表）。
+    ///
+    /// 语义（宿主 `start()` 失败回滚 / 动态卸载使用）：
+    /// - **未知 name 幂等成功**（返回 `Ok(())`）：注销的目标状态是「该 schema 不存在」，
+    ///   未注册已满足该状态；回滚清单因此可以整份重放而不必逐项判存在。
+    ///   这不违背「禁静默」——注册失败的错误仍原样上抛，本方法只对「已不存在」这一终态幂等。
+    /// - **派生对象一并清理**：`archive_of == Some(name)` 的归档项同时删除（不按名字后缀猜，
+    ///   独立注册的同名归档不受影响）；`indexes` / `field_order` / 链路 / 版本都在被删的
+    ///   `Entry` 内，无全局派生缓存，随项释放。
+    /// - **版本号不保留**：`version` 是「当前存活注册项的世代」，不是审计计数；同名重注册
+    ///   从 1 重新开始，其他 schema 的版本与 `order` 位置不受影响。不引入墓碑表——
+    ///   否则 `has` / `get` / 四元组冲突判定都要多一套「已删除」分支，破坏判据单点。
+    /// - 非 base 策略视图调用 ⇒ `Err(ERR_POLICY_VIEW_READONLY …)`（视图只读）。
+    pub fn unregister(&mut self, name: &str) -> Result<(), String> {
+        self.ensure_base_catalog()?; // 目录唯一真源在 base（视图只读）
+        let catalog = Arc::make_mut(&mut self.catalog);
+        // 未注册 ⇒ 幂等成功（回滚清单可整份重放）
+        if catalog.entries.remove(name).is_none() {
+            return Ok(());
+        }
+        catalog.order.retain(|n| n != name);
+        // 派生对象：仅清理「明确记为本次派生」的归档项
+        let derived: Vec<String> = catalog
+            .entries
+            .iter()
+            .filter(|(_, e)| e.archive_of.as_deref() == Some(name))
+            .map(|(n, _)| n.clone())
+            .collect();
+        for n in derived {
+            catalog.entries.remove(&n);
+            catalog.order.retain(|x| x != &n);
+        }
         Ok(())
     }
 
@@ -998,14 +1044,80 @@ fn build_schema(
     collection: String,
     loc: &Location,
 ) -> Result<Schema, String> {
+    // N5：未知顶层键此前静默丢弃（如拼错的 `ownerkey`/`index`），注册期显式拒绝。
+    // 落点（source/database/schema）由 loc 注入，定义文件禁止出现。
+    const ALLOWED_SCHEMA_KEYS: &[&str] = &[
+        "name",
+        "collection",
+        "replica",
+        "read",
+        "write",
+        "ownerKey",
+        "fields",
+        "relations",
+        "computes",
+        "triggers",
+        "indexes",
+        "archive",
+        "idPrefix",
+        "timestamps",
+        "accessKeys",
+        "datasource",
+        "_isArchive",
+        // `system`：**正式**顶层键，内建 / 系统模型声明（可选布尔，缺省 false），
+        // py-store、nodejs-store 的 metadef/workflow 自 2.7.0 起使用（如 `__workflowRun`）。
+        // 语义：仅作分类标记（宿主 / 工具链据此区分系统内建与业务模型）；
+        // - DDL：由宿主按注册表生成，内建模型同样建表 ⇒ 本键不参与建表 / 迁移判定；
+        // - 权限：仍由 `read` / `write` / `denyRead` / `accessKeys` 判定，`system` 不授予 internal、
+        //   不放宽写权限；
+        // - 归档：系统模型派生的 `<Name>Deleted` 继承本标记。
+        // 禁止靠宿主删键迁就 core（core 是 schema 契约的下游，不是上游）。
+        "system",
+        // `description`：文档管道注记（store-graphql / store-grpc），Schema 级说明。
+        "description",
+        // `denyRead`：**显式拒绝读**开关（可选布尔，缺省 false）。
+        // 与「空名单」彻底解耦：`read: []` 恢复 5.x 旧义（= 未配置，不限制）；
+        // 要表达「谁都不许读」必须显式写 `denyRead: true`。判据单点见
+        // `permission::can_read_schema`。
+        "denyRead",
+    ];
+    for k in obj.keys() {
+        // `x-*`：协议适配注记命名空间（`x-graphql` / `x-grpc` / `x-mcp`），
+        // 属既有生态扩展约定，core 透传不解释。
+        if !ALLOWED_SCHEMA_KEYS.contains(&k.as_str()) && !k.starts_with("x-") {
+            return Err(format!(
+                "schema \"{name}\" 含未知顶层键 \"{k}\"（允许：{}；另允许 x-* 扩展键）",
+                ALLOWED_SCHEMA_KEYS.join("/")
+            ));
+        }
+    }
     let timestamps = parse_timestamps(obj)?;
+    // `system`（正式键）：内建 / 系统模型分类标记。类型非法注册期显式 Err（禁静默回落），
+    // 缺省 false 保持业务模型零变化。
+    let system = match obj.get("system") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(other) => {
+            return Err(format!(
+                "schema \"{name}\" 的 system 必须为布尔值，实际 {other}"
+            ))
+        }
+    };
     // ownerKey（漉金Core 接入扩展 01）：归属键，缺省 = `createdBy`（零破坏）；
     // 存在时必须为非空字符串，非法注册期显式 Err（禁静默回落）。
-    // 不要求键必须出现在 fields 中（`_id` 等系统键合法）。
-    // 提前到 fields 补齐之前：creator 权限补字段要用解析后的键名。
+    // N1：`_id` 是系统主键，归属键不得指向它（会把「按主键自属」与「按归属人」两种
+    // 语义静默混同）；类型在 fields 归一后校验，必须为 string。
     let owner_key = match obj.get("ownerKey") {
         None | Some(Value::Null) => None,
-        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(Value::String(s)) if !s.is_empty() => {
+            if s == "_id" {
+                return Err(format!(
+                    "schema \"{name}\" 的 ownerKey 不得为 \"_id\"（主键由系统管理），\
+                     请使用独立的归属字段（缺省 createdBy）"
+                ));
+            }
+            Some(s.clone())
+        }
         Some(other) => {
             return Err(format!(
                 "schema \"{name}\" 的 ownerKey 必须为非空字符串，实际 {other}"
@@ -1022,6 +1134,17 @@ fn build_schema(
     // （ownerKey，缺省 createdBy）视为必声明字段，与 timestamps 同款自动补齐。
     // 收口「写入路径注入归属键」与「DDL 建列」两处约定，避免 schema 未声明时 SQL 层
     // 才炸 1054。DDL（py-store/nodejs-store）按同一规则补列。
+    // `denyRead`（显式拒绝读）：**只接受布尔**，缺省 false。`null` / 字符串 / 数字等
+    // 一律注册期显式 Err（不把 null 静默当 false，禁掩盖配置错误）。
+    let deny_read = match obj.get("denyRead") {
+        None => false,
+        Some(Value::Bool(b)) => *b,
+        Some(other) => {
+            return Err(format!(
+                "schema \"{name}\" 的 denyRead 必须为布尔值，实际 {other}"
+            ))
+        }
+    };
     let read_roles = str_list(obj.get("read"));
     let write_roles = str_list(obj.get("write"));
     if roles_have_creator(&read_roles) || roles_have_creator(&write_roles) {
@@ -1029,6 +1152,19 @@ fn build_schema(
             &mut fields,
             owner_key.as_deref().unwrap_or(DEFAULT_OWNER_KEY),
         );
+    }
+    // N1：归属字段若已声明，类型必须为 string（null/数字会把归属判定静默变成永不命中）
+    if owner_key.is_some() || roles_have_creator(&read_roles) || roles_have_creator(&write_roles) {
+        let effective_owner = owner_key.as_deref().unwrap_or(DEFAULT_OWNER_KEY);
+        if let Some(def) = fields.get(effective_owner) {
+            if def.field_type != "string" {
+                return Err(format!(
+                    "schema \"{name}\" 的归属字段 \"{effective_owner}\" 必须为 string 类型，\
+                     实际 \"{}\"",
+                    def.field_type
+                ));
+            }
+        }
     }
     let relations = parse_relations(obj);
     // 计算列的 agg 需要校验「路径首段命中关系或数组字段」→ 必须晚于 relations/fields 解析
@@ -1091,6 +1227,21 @@ fn build_schema(
             ))
         }
     }
+    // N5：indexes 结构校验（此前非数组 / keys 非对象 / 未知键引用均静默丢弃）。
+    // 归档表索引沿用主表定义，不校验键引用（归档模型不复制 relations）。
+    let is_archive = obj.get("_isArchive").map(is_truthy).unwrap_or(false);
+    let indexes = parse_indexes(&name, obj.get("indexes"), &fields, &relations, is_archive)?;
+    // X1：字段顺序快照（声明序 + 补出的归属/时间戳字段挂尾），SQL 列清单据此生成
+    let mut field_order: Vec<String> = obj
+        .get("fields")
+        .and_then(|v| v.as_object())
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    for k in fields.keys() {
+        if !field_order.contains(k) {
+            field_order.push(k.clone());
+        }
+    }
     Ok(Schema {
         name,
         collection,
@@ -1101,16 +1252,13 @@ fn build_schema(
             .to_string(),
         timestamps,
         fields,
+        field_order,
         relations,
         computes,
         triggers,
         read: read_roles,
         write: write_roles,
-        indexes: obj
-            .get("indexes")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default(),
+        indexes,
         source: if loc.source == crate::datasource::DEFAULT_SOURCE {
             None
         } else {
@@ -1120,7 +1268,56 @@ fn build_schema(
         schema: loc.schema.clone().filter(|s| !s.is_empty()),
         owner_key,
         access_keys,
+        system,
+        deny_read,
     })
+}
+
+/// N5：索引定义结构校验——数组、每项对象、`keys` 为对象且键引用已声明字段/关系/`_id`。
+fn parse_indexes(
+    schema_name: &str,
+    v: Option<&Value>,
+    fields: &std::collections::HashMap<String, super::definition::FieldDef>,
+    relations: &std::collections::HashMap<String, super::definition::RelationDef>,
+    is_archive: bool,
+) -> Result<Vec<Value>, String> {
+    let Some(v) = v else { return Ok(Vec::new()) };
+    if v.is_null() {
+        return Ok(Vec::new());
+    }
+    let Some(arr) = v.as_array() else {
+        return Err(format!(
+            "schema \"{schema_name}\" 的 indexes 必须为数组，实际 {v}"
+        ));
+    };
+    for (i, item) in arr.iter().enumerate() {
+        let Some(o) = item.as_object() else {
+            return Err(format!(
+                "schema \"{schema_name}\" 的 indexes[{i}] 必须为对象，实际 {item}"
+            ));
+        };
+        let keys = match o.get("keys") {
+            None | Some(Value::Null) => continue,
+            Some(Value::Object(keys)) => keys,
+            Some(other) => {
+                return Err(format!(
+                    "schema \"{schema_name}\" 的 indexes[{i}].keys 必须为对象，实际 {other}"
+                ))
+            }
+        };
+        if is_archive {
+            continue;
+        }
+        for k in keys.keys() {
+            let root = k.split('.').next().unwrap_or(k.as_str());
+            if root != "_id" && !fields.contains_key(root) && !relations.contains_key(root) {
+                return Err(format!(
+                    "schema \"{schema_name}\" 的 indexes[{i}] 键 \"{k}\" 未在字段/关系中声明"
+                ));
+            }
+        }
+    }
+    Ok(arr.clone())
 }
 
 /// `timestamps` 仅接受 true/false/'ms'/'s'；单位换算在 Host（core 无时钟，now 由 Host 传入）
@@ -1366,12 +1563,18 @@ fn parse_agg(
 
 /// 构造 `<Name>Deleted` 归档表 schema 定义（字段 = 原字段 + `deletedAt`）。
 /// 归档表与原表同落点 —— 落点不由定义文件携带，改由批次继承主链路（见 `register_batch`）。
-fn archive_defn(obj: &Map<String, Value>, name: &str, collection: &str) -> Value {
+fn archive_defn(obj: &Map<String, Value>, name: &str, collection: &str, main: &Schema) -> Value {
     let mut arch_fields = obj
         .get("fields")
         .and_then(|v| v.as_object())
         .cloned()
         .unwrap_or_default();
+    // N2：主表因 creator 权限**补出**的归属字段不在原始 fields 里，归档表必须继承，
+    // 否则归档 DDL 缺列、归档写入丢归属人（归档模型不再声明 read/write，无法自动补）。
+    let owner = main.owner_key();
+    if main.fields.contains_key(owner) && !arch_fields.contains_key(owner) {
+        arch_fields.insert(owner.to_string(), json!({ "type": "string" }));
+    }
     arch_fields.insert("deletedAt".to_string(), json!({ "type": "number" }));
     // 剔除 `_id` 的自增策略：归档表显式拷贝源行 `_id` 值（upsert-by-_id 幂等），
     // 不走数据库自增；DDL 侧也据此保持归档表 `_id` 为普通主键列
@@ -1385,6 +1588,8 @@ fn archive_defn(obj: &Map<String, Value>, name: &str, collection: &str) -> Value
         "collection": format!("{}_deleted", collection),
         "idPrefix": "",
         "_isArchive": true,
+        // 系统模型派生的归档模型同样是系统模型（分类标记随派生继承）
+        "system": main.system,
         "fields": Value::Object(arch_fields),
         "indexes": obj.get("indexes").cloned().unwrap_or_else(|| json!([])),
         // 归档表继承主表 timestamps 语义（true/false/'ms'/'s'；缺省 = true 同 parse_timestamps）。

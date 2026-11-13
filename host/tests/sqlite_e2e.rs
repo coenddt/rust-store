@@ -142,3 +142,159 @@ async fn insert_query_update_remove_e2e() {
         .expect("归档表查询失败");
     assert_eq!(archived.0, "alice");
 }
+
+/// 显式 null = 不写该字段；`$unset` 才清空（真实 SQLite 全链路）。
+#[tokio::test]
+async fn explicit_null_is_skipped_and_unset_clears_field() {
+    let store = fresh_store().await;
+    let doc = store
+        .insert("user", &json!({ "name": "bob", "age": 20 }), None)
+        .await
+        .expect("insert 失败");
+    let uid = doc["_id"].as_str().expect("插入结果应有 _id").to_string();
+
+    // $set: {age: null, name: "bobby"} —— null 字段跳过，非 null 字段正常更新
+    let after = store
+        .update(
+            "user",
+            &json!({ "_id": uid.clone() }),
+            &json!({ "$set": { "age": null, "name": "bobby" } }),
+            None,
+        )
+        .await
+        .expect("update 失败")
+        .expect("update 应命中");
+    assert_eq!(
+        after["age"].as_f64(),
+        Some(20.0),
+        "显式 null 不得写该字段（age 应保持 20）: {after}"
+    );
+    assert_eq!(
+        after["name"],
+        json!("bobby"),
+        "非 null 字段正常更新: {after}"
+    );
+
+    // $unset 清空：物理列置 NULL + __present 移除 age 令牌。
+    // （读回按既有 Return 补齐语义把 null 当「缺失」补类型零值 0，属既有读路径契约，
+    //  本轮不涉及；「清空」的落点看物理列与哨兵。）
+    let after = store
+        .update(
+            "user",
+            &json!({ "_id": uid.clone() }),
+            &json!({ "$unset": { "age": "" } }),
+            None,
+        )
+        .await
+        .expect("update 失败")
+        .expect("update 应命中");
+    let raw: (Option<f64>, Option<String>) =
+        sqlx::query_as("SELECT age, \"__present\" FROM \"user\" WHERE \"_id\" = ?")
+            .bind(&uid)
+            .fetch_one(store.sqlite_pool().expect("SQLite 源"))
+            .await
+            .expect("raw 查询失败");
+    assert!(raw.0.is_none(), "$unset 后物理列应为 NULL: {raw:?}");
+    assert!(
+        !raw.1.as_deref().unwrap_or("").contains(",age,"),
+        "__present 应移除 age 令牌: {raw:?}"
+    );
+    assert_eq!(
+        after["age"].as_f64(),
+        Some(0.0),
+        "读回按既有 Return 语义补类型零值: {after}"
+    );
+
+    let rows = store
+        .query(
+            "user($condition: @c0) { name, age }",
+            &params(&[("c0", json!({ "_id": uid }))]),
+            None,
+        )
+        .await
+        .expect("query 失败");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], json!("bobby"));
+    assert_eq!(
+        rows[0]["age"].as_f64(),
+        Some(0.0),
+        "查询读回按既有 Return 语义补类型零值: {:?}",
+        rows[0]
+    );
+}
+
+/// schema 定义导出（协议皮点路径白名单的数据源）：字段类型 + 嵌套 object 的 `fields`
+/// 原样直出，且未知 schema 显式报错（不吞）。
+#[tokio::test]
+async fn schema_definition_exposes_types_and_nested_fields() {
+    let store = Store::connect_sqlite("sqlite::memory:")
+        .await
+        .expect("连接失败");
+    store
+        .register(&json!({
+            "name": "profile",
+            "collection": "profiles",
+            "idPrefix": "pf",
+            "fields": {
+                "name": { "type": "string" },
+                "avatar": {
+                    "type": "object",
+                    "fields": {
+                        "url": { "type": "string" },
+                        "size": { "type": "number" }
+                    }
+                }
+            }
+        }))
+        .expect("注册失败");
+
+    let defn = store.schema_definition("profile").expect("导出失败");
+    assert_eq!(defn["name"], json!("profile"));
+    assert_eq!(defn["fields"]["name"]["type"], json!("string"));
+    assert_eq!(defn["fields"]["avatar"]["type"], json!("object"));
+    assert_eq!(
+        defn["fields"]["avatar"]["fields"]["url"]["type"],
+        json!("string"),
+        "嵌套 object 的 fields 必须原样可见: {defn}"
+    );
+    assert_eq!(
+        defn["fields"]["avatar"]["fields"]["size"]["type"],
+        json!("number")
+    );
+    assert!(
+        store.schema_definition("nope").is_err(),
+        "未声明 schema 必须报错，不得返回空定义"
+    );
+}
+
+/// 注销能力（bootstrap `start()` 失败回滚 / 动态卸载）：主项 + 派生归档一并清理，
+/// 未知 schema 幂等成功。
+#[tokio::test]
+async fn unregister_drops_schema_and_archive_idempotently() {
+    let store = Store::connect_sqlite("sqlite::memory:")
+        .await
+        .expect("连接失败");
+    store
+        .register(&json!({
+            "name": "profile",
+            "collection": "profiles",
+            "idPrefix": "pf",
+            "timestamps": false,
+            "fields": { "name": { "type": "string" } }
+        }))
+        .expect("注册失败");
+    assert!(store.list_schemas().iter().any(|n| n == "profile"));
+    assert!(store.list_schemas().iter().any(|n| n == "profileDeleted"));
+
+    store.unregister("profile").expect("注销失败");
+    assert!(
+        !store
+            .list_schemas()
+            .iter()
+            .any(|n| n == "profile" || n == "profileDeleted"),
+        "派生归档表必须随主项清理"
+    );
+    store
+        .unregister("profile")
+        .expect("未知 schema 注销应幂等成功");
+}

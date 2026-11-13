@@ -244,8 +244,9 @@ def replay_write_case(reg, fx):
             now,
             ctx,
         )
+        # creator 受限写入 ⇒ core 先返回探针（宿主回喂后二次规划），黄金基准即 needsProbe 信封
         if "needsProbe" in out:
-            raise RuntimeError("unexpected needsProbe")
+            return out
         return {"commands": [out["command"]], "returns": returns_of()}
 
     if kind == "update_many":
@@ -256,6 +257,9 @@ def replay_write_case(reg, fx):
 
     if kind == "remove":
         plan = reg.plan_remove(fx.get("model") or "", fx.get("condition"), ctx)
+        # creator 受限删除 ⇒ 先返回探针（同上）
+        if "needsProbe" in plan:
+            return plan
         docs = fx.get("docs") or []
         commands = []
         archived_count = 0
