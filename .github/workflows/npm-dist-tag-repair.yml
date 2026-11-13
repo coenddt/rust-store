@@ -1,0 +1,59 @@
+name: npm-dist-tag-repair
+
+# 手动修复 npm latest 指针。
+#
+# 背景：`npm publish` 不带 --tag 时会把 latest 指到本次发布的版本，于是补发旧 tag
+# （如 v5.3.4）会把 latest 从 6.0.1 降级到 5.3.4，`npm i rust-store-node` 静默装到旧版。
+# release-npm.yml 现已按 semver 判定改发 --tag legacy，并在 back-port 后自动校正平台
+# 子包；本工作流用于修复历史遗留的错指针与事后核对。
+#
+# 触发：手动 dispatch。凭证：NPM_TOKEN secret（同 release-npm.yml）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '把 latest 指向的版本；留空 = 自动取各自已发布的最高稳定版本'
+        required: false
+        default: ''
+      packages:
+        description: '待修包名（空格分隔）；留空 = rust-store-node + 全部平台子包'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    name: repair npm latest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core-node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+      - name: Show current dist-tags
+        env:
+          INPUT_PACKAGES: ${{ inputs.packages }}
+        run: |
+          set -euo pipefail
+          PKGS="${INPUT_PACKAGES:-rust-store-node $(node -p "Object.keys(require('./package.json').optionalDependencies || {}).join(' ')")}"
+          for pkg in $PKGS; do
+            printf '%s: latest=%s\n' "$pkg" "$(npm view "$pkg" dist-tags.latest 2>/dev/null || echo '<unknown>')"
+          done
+      - name: Repair latest
+        env:
+          INPUT_PACKAGES: ${{ inputs.packages }}
+          INPUT_VERSION: ${{ inputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          PKGS="${INPUT_PACKAGES:-rust-store-node $(node -p "Object.keys(require('./package.json').optionalDependencies || {}).join(' ')")}"
+          for pkg in $PKGS; do
+            node scripts/npm-dist-tag.mjs repair "$pkg" ${INPUT_VERSION:+"$INPUT_VERSION"}
+          done

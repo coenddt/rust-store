@@ -23,3 +23,6 @@ npm-debug.log*
 /_config.yml
 /_site/
 /_site_src/
+
+# video-agent-kit 插件缓存（本机生成，勿提交）
+.video_agent/

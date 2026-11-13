@@ -96,12 +96,36 @@ jobs:
         run: npx napi artifacts
       - name: Pack & inspect (must not contain target/ node_modules/ logs)
         run: npm pack --dry-run
+      # npm publish 不带 --tag 时会把 latest 指到本次发布的版本。补发旧 tag（如 v5.3.4）
+      # 因此会把 latest 从 6.0.1 抢到 5.3.4，用户 `npm i rust-store-node` 静默装到旧版。
+      # 待发版本不高于当前 latest 时改发 --tag legacy，latest 保持不动。
+      - name: Resolve dist-tag (back-ports must not hijack latest)
+        id: dist_tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          TAG=$(node scripts/npm-dist-tag.mjs resolve rust-store-node "$VERSION")
+          echo "version=$VERSION tag=$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
       - name: Publish (platform sub-packages + main)
         # 平台子包可能已在中断的重跑中发布过：`napi prepublish` 遇到已存在版本会 403，
         # 此处容忍该情形（版本与 optionalDependencies 的同步先于发布执行，不受影响）；
         # 主包用 `--ignore-scripts` 发布，避免 prepublishOnly 再次重复发布平台子包。
         run: |
           npx napi prepublish -t npm --skip-gh-release || echo "::warning::部分平台子包已存在，跳过重复发布"
-          npm publish --provenance --access public --ignore-scripts
+          npm publish --provenance --access public --ignore-scripts --tag "${{ steps.dist_tag.outputs.tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # `napi prepublish` 没有控制子包 dist-tag 的参数，回发旧版会把五个平台子包的
+      # latest 一起降级。这里按 semver 重新指回已发布的最高稳定版本；正常发布跳过。
+      - name: Restore platform sub-packages' latest after a back-port
+        if: steps.dist_tag.outputs.tag == 'legacy'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pkg in $(node -p "Object.keys(require('./package.json').optionalDependencies || {}).join(' ')"); do
+            node scripts/npm-dist-tag.mjs repair "$pkg"
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
