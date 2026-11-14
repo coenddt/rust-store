@@ -10,23 +10,35 @@ name: release-pypi
 #   Workflow name     = release-pypi.yml
 #   Environment name  = （留空）
 #
-# 触发：推 v* tag，或手动 dispatch（手动触发只构建，不发布）。
+# 触发：
+#   - 推 v* tag：构建 + 发布；
+#   - 手动 dispatch：默认只构建校验（不发布）；inputs.publish = true 时
+#     构建并发布（用于发布流水线自身修复后补发当前版本——tag 指向的
+#     workflow 文件已固化，改动只能通过 main 上的 dispatch 生效）。
 #
 # 注 1：PyO3 未开启 abi3，wheel 与 CPython 版本一一对应。
 # 注 2：解释器集合由本文件显式固定，**不用** --find-interpreter——它是「发现
 #       多少出多少」，构建环境（maturin-action 容器镜像 / runner 自带解释器）
-#       漂移时会静默减产且全 job 依然 success（6.0.2 实测只剩 cp310/cp311）。
-#       现在每个 job 构建完都校验产物 wheel 标签，缺哪个直接红。
-# 注 3：覆盖 CPython 3.10–3.13；free-threaded（cp314t+）与 PyPy 暂不覆盖，
-#       宿主侧有需要再扩矩阵。
+#       漂移时产物跟着漂移且全 job 依然 success。现在每个 job 构建完都校验
+#       产物 wheel 标签，缺哪个直接红。
+# 注 3：覆盖 CPython 3.10–3.13；free-threaded（cp314t+）与 PyPy 暂不覆盖
+#       （6.0.2 的 cp314/cp315/PyPy wheel 是当时镜像解释器集合的副产物，
+#       非承诺范围），宿主侧有需要再扩矩阵。
 # 注 4：本包不产出 sdist——core-py 依赖仓库外的 path 依赖 ../core，
 #       单包 sdist 无法自举构建。
+# 注 5：macos 用两个显式 job 而非 include 扩展——include 条目不含 python 键时
+#       GitHub 会丢弃该组合（6.0.3 首发实测 macos x86_64 四个 job 未生成）。
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: '发布到 PyPI（false=只构建校验）'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -67,8 +79,21 @@ jobs:
           python - "$EXPECT" <<'PY'
           import glob, os, sys
           expect = sys.argv[1].split()
+          # wheel 名 = {name}-{ver}-{pytag}-{abitag}-{platag}.whl，pytag 与
+          # abitag 重复出现（如 -cp312-cp312-win_amd64），不能整段子串匹配，
+          # 要按下标取 pytag、按末段取 platag。
           tags = [os.path.basename(p) for p in glob.glob('core-py/dist/*.whl')]
-          missing = [e for e in expect if not any(t.startswith('rust_store_py-') and f'-{e}-' in t for t in tags)]
+          missing = []
+          for e in expect:
+              pytag, platag = e.split('-', 1)
+              hit = any(
+                  len(t.split('-')) >= 5
+                  and t.split('-')[2] == pytag
+                  and t[:-4].split('-')[-1].startswith(platag)
+                  for t in tags
+              )
+              if not hit:
+                  missing.append(e)
           if missing:
               print(f'缺少预期 wheel: {missing}\n实际产物: {tags}', file=sys.stderr)
               sys.exit(1)
@@ -109,7 +134,17 @@ jobs:
           import glob, os, sys
           expect = sys.argv[1].split()
           tags = [os.path.basename(p) for p in glob.glob('core-py/dist/*.whl')]
-          missing = [e for e in expect if not any(t.startswith('rust_store_py-') and f'-{e}-' in t for t in tags)]
+          missing = []
+          for e in expect:
+              pytag, platag = e.split('-', 1)
+              hit = any(
+                  len(t.split('-')) >= 5
+                  and t.split('-')[2] == pytag
+                  and t[:-4].split('-')[-1].startswith(platag)
+                  for t in tags
+              )
+              if not hit:
+                  missing.append(e)
           if missing:
               print(f'缺少预期 wheel: {missing}\n实际产物: {tags}', file=sys.stderr)
               sys.exit(1)
@@ -152,7 +187,17 @@ jobs:
           import glob, os, sys
           expect = sys.argv[1].split()
           tags = [os.path.basename(p) for p in glob.glob('core-py/dist/*.whl')]
-          missing = [e for e in expect if not any(t.startswith('rust_store_py-') and f'-{e}-' in t for t in tags)]
+          missing = []
+          for e in expect:
+              pytag, platag = e.split('-', 1)
+              hit = any(
+                  len(t.split('-')) >= 5
+                  and t.split('-')[2] == pytag
+                  and t[:-4].split('-')[-1].startswith(platag)
+                  for t in tags
+              )
+              if not hit:
+                  missing.append(e)
           if missing:
               print(f'缺少预期 wheel: {missing}\n实际产物: {tags}', file=sys.stderr)
               sys.exit(1)
@@ -163,19 +208,14 @@ jobs:
           name: wheels-windows-x64-py${{ matrix.python }}
           path: core-py/dist/*.whl
 
-  # ── macOS（x86_64 / arm64）────────────────────────────────────────
-  macos:
-    name: macos (${{ matrix.target }}, py${{ matrix.python }})
-    runs-on: ${{ matrix.runner }}
+  # ── macOS（x86_64 / arm64，两个显式 job，见头注释注 5）────────────
+  macos-intel:
+    name: macos (x86_64, py${{ matrix.python }})
+    runs-on: macos-15-intel
     strategy:
       fail-fast: false
       matrix:
         python: ['3.10', '3.11', '3.12', '3.13']
-        include:
-          - runner: macos-15-intel
-            target: x86_64
-          - runner: macos-latest
-            target: aarch64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -184,7 +224,7 @@ jobs:
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: core-py
-          target: ${{ matrix.target }}
+          target: x86_64
           args: --release --out dist
       - name: 校验 wheel 标签（缺预期解释器即失败，防静默减产）
         shell: bash
@@ -197,7 +237,17 @@ jobs:
           import glob, os, sys
           expect = sys.argv[1].split()
           tags = [os.path.basename(p) for p in glob.glob('core-py/dist/*.whl')]
-          missing = [e for e in expect if not any(t.startswith('rust_store_py-') and f'-{e}-' in t for t in tags)]
+          missing = []
+          for e in expect:
+              pytag, platag = e.split('-', 1)
+              hit = any(
+                  len(t.split('-')) >= 5
+                  and t.split('-')[2] == pytag
+                  and t[:-4].split('-')[-1].startswith(platag)
+                  for t in tags
+              )
+              if not hit:
+                  missing.append(e)
           if missing:
               print(f'缺少预期 wheel: {missing}\n实际产物: {tags}', file=sys.stderr)
               sys.exit(1)
@@ -205,14 +255,65 @@ jobs:
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-${{ matrix.target }}-py${{ matrix.python }}
+          name: wheels-macos-x86_64-py${{ matrix.python }}
           path: core-py/dist/*.whl
 
-  # ── 发布（仅 tag 触发）─────────────────────────────────────────────
+  macos-arm:
+    name: macos (arm64, py${{ matrix.python }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: core-py
+          target: aarch64
+          args: --release --out dist
+      - name: 校验 wheel 标签（缺预期解释器即失败，防静默减产）
+        shell: bash
+        env:
+          EXPECT: cp${{ matrix.python == '3.10' && '310' || matrix.python == '3.11' && '311' || matrix.python == '3.12' && '312' || '313' }}-macosx
+        run: |
+          set -e
+          ls -1 core-py/dist
+          python - "$EXPECT" <<'PY'
+          import glob, os, sys
+          expect = sys.argv[1].split()
+          tags = [os.path.basename(p) for p in glob.glob('core-py/dist/*.whl')]
+          missing = []
+          for e in expect:
+              pytag, platag = e.split('-', 1)
+              hit = any(
+                  len(t.split('-')) >= 5
+                  and t.split('-')[2] == pytag
+                  and t[:-4].split('-')[-1].startswith(platag)
+                  for t in tags
+              )
+              if not hit:
+                  missing.append(e)
+          if missing:
+              print(f'缺少预期 wheel: {missing}\n实际产物: {tags}', file=sys.stderr)
+              sys.exit(1)
+          print(f'wheel 标签校验通过（{len(expect)} 项）: {expect}')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-aarch64-py${{ matrix.python }}
+          path: core-py/dist/*.whl
+
+  # ── 发布（tag 推送，或 dispatch 显式指定 publish）─────────────────
   publish:
     name: PyPI publish (Trusted Publishing)
-    needs: [linux, musllinux, windows, macos]
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, musllinux, windows, macos-intel, macos-arm]
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -222,6 +323,16 @@ jobs:
           pattern: wheels-*
           merge-multiple: true
           path: dist
+      - name: 校验产物集（发布前最后一道防静默减产门）
+        run: |
+          set -e
+          ls -1 dist
+          # manylinux x86_64/aarch64 ×4 + musllinux ×4 + win ×4 + macos x86_64/arm64 ×4 = 24
+          n=$(ls -1 dist/*.whl | wc -l)
+          if [ "$n" -ne 24 ]; then
+            echo "wheel 数量 $n ≠ 24，发布中止（缺产物或混入多余文件）" >&2
+            exit 1
+          fi
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist

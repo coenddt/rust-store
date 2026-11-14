@@ -8,21 +8,30 @@
 
 ### Fixed
 
-- **PyPI 发布恢复全量 CPython 覆盖**（同日早发的 `6.0.2` PyPI 侧只有 cp310/cp311，
-  缺 cp312——目标镜像 python:3.12.8 装不上；crate / npm 侧 6.0.2 完好）：
-  根因是 `release-pypi.yml` 用 maturin `--find-interpreter`「发现多少出多少」，
-  上游 manylinux 镜像 / runner 解释器集合漂移时**静默减产且全 job 依然 success**。
+- **PyPI 发布流水线加固 + 补齐 `6.0.2` 的 cp310 平台缺口**。`release-pypi.yml`
+  此前用 maturin `--find-interpreter`「发现多少出多少」，构建环境（maturin-action
+  容器镜像 / runner 自带解释器）漂移时产物跟着漂移且全 job 依然 success。
   修复：解释器集合改为由 workflow 显式固定——manylinux（钉 `2014` 镜像）与
   musllinux 容器内显式 `-i python3.10..3.13`；Windows / macOS 改为解释器 × 目标
-  矩阵逐个构建；每个构建 job 增加产物 wheel 标签校验 step，缺预期解释器直接失败。
+  矩阵逐个构建；每个构建 job 增加产物 wheel 标签校验 step、publish 前再校验
+  产物总数（24 = manylinux×2 + musllinux + win + macos×2，各 ×4 解释器），
+  缺哪个直接红，发布侧也过不了。另修两处首发过程中暴露的 workflow 缺陷：
+  ① macos 矩阵的 include 条目不含 python 键时 GitHub 丢弃该组合（macos x86_64
+  四个 job 未生成），拆为两个显式 job；② 产物校验不能按整段子串匹配 wheel 名
+  （pytag 与 abitag 重复出现，如 `-cp312-cp312-win_amd64`），改为按下标解析。
+  发布入口新增手动 dispatch（`publish: true`）用于流水线自身修复后补发当前版本。
   覆盖 CPython 3.10–3.13 ×（manylinux x86_64/aarch64 + musllinux x86_64 +
-  win_amd64 + macos x86_64/arm64）；free-threaded（cp314t+）与 PyPy 暂不覆盖，
-  宿主侧有需要再扩。
+  win_amd64 + macos x86_64/arm64）；free-threaded（cp314t+）与 PyPy 暂不覆盖
+  （`6.0.2` 的 cp314/cp315/PyPy wheel 是当时构建环境解释器集合的副产物，非承诺
+  范围），宿主侧有需要再扩。
 
 ## 6.0.2 (2026-11-14)
 
-> **PyPI 侧残缺批次**：因 `--find-interpreter` 静默减产（详见 6.0.3），PyPI 上仅
-> cp310/cp311，缺 cp312+；请直接用 `6.0.3`。crate / npm 侧 6.0.2 完好无损。
+> **PyPI 侧缺 cp310 的 win / macOS wheel**（发布日复核修正：此前误记为
+> 「只剩 cp310/cp311 缺 cp312」——实际 cp311–cp315 与 PyPy 齐全，缺口是
+> `cp310-win_amd64`、`cp310-macosx_10_12_x86_64`、`cp310-macosx_11_0_arm64`
+> 三个 wheel，见 6.0.3；目标镜像 python:3.12.8 的 cp312 wheel 不受影响）。
+> crate / npm 侧 6.0.2 完好无损。
 
 ### Fixed
 
