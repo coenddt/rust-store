@@ -18,7 +18,9 @@
   缺哪个直接红，发布侧也过不了。另修两处首发过程中暴露的 workflow 缺陷：
   ① macos 矩阵的 include 条目不含 python 键时 GitHub 丢弃该组合（macos x86_64
   四个 job 未生成），拆为两个显式 job；② 产物校验不能按整段子串匹配 wheel 名
-  （pytag 与 abitag 重复出现，如 `-cp312-cp312-win_amd64`），改为按下标解析。
+  （pytag 与 abitag 重复出现，如 `-cp312-cp312-win_amd64`），改为按下标解析；
+  ③ 校验脚本输出强制 UTF-8——Windows runner 的 Python stdout 默认 cp1252，
+  校验通过后的中文文案打印即 `UnicodeEncodeError`（产物本身完全正确，纯误伤）。
   发布入口新增手动 dispatch（`publish: true`）用于流水线自身修复后补发当前版本。
   覆盖 CPython 3.10–3.13 ×（manylinux x86_64/aarch64 + musllinux x86_64 +
   win_amd64 + macos x86_64/arm64）；free-threaded（cp314t+）与 PyPy 暂不覆盖
