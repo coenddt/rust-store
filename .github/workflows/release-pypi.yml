@@ -12,9 +12,15 @@ name: release-pypi
 #
 # 触发：推 v* tag，或手动 dispatch（手动触发只构建，不发布）。
 #
-# 注：PyO3 未开启 abi3，wheel 与 CPython 版本一一对应，故用 --find-interpreter
-#     对容器/环境内可见的解释器逐个出 wheel；本包不产出 sdist——core-py 依赖
-#     仓库外的 path 依赖 ../core，单包 sdist 无法自举构建。
+# 注 1：PyO3 未开启 abi3，wheel 与 CPython 版本一一对应。
+# 注 2：解释器集合由本文件显式固定，**不用** --find-interpreter——它是「发现
+#       多少出多少」，构建环境（maturin-action 容器镜像 / runner 自带解释器）
+#       漂移时会静默减产且全 job 依然 success（6.0.2 实测只剩 cp310/cp311）。
+#       现在每个 job 构建完都校验产物 wheel 标签，缺哪个直接红。
+# 注 3：覆盖 CPython 3.10–3.13；free-threaded（cp314t+）与 PyPy 暂不覆盖，
+#       宿主侧有需要再扩矩阵。
+# 注 4：本包不产出 sdist——core-py 依赖仓库外的 path 依赖 ../core，
+#       单包 sdist 无法自举构建。
 
 on:
   push:
@@ -43,8 +49,31 @@ jobs:
         with:
           working-directory: core-py
           target: ${{ matrix.target }}
-          manylinux: auto
-          args: --release --out dist --find-interpreter
+          # 钉 manylinux2014：与既有 wheel 标签一致（兼容性最广），不随
+          # manylinux: auto 的镜像选择漂移
+          manylinux: 2014
+          args: --release --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
+      - name: 校验 wheel 标签（缺预期解释器即失败，防静默减产）
+        shell: bash
+        env:
+          EXPECT: >-
+            cp310-manylinux2014_${{ matrix.target }}
+            cp311-manylinux2014_${{ matrix.target }}
+            cp312-manylinux2014_${{ matrix.target }}
+            cp313-manylinux2014_${{ matrix.target }}
+        run: |
+          set -e
+          ls -1 core-py/dist
+          python - "$EXPECT" <<'PY'
+          import glob, os, sys
+          expect = sys.argv[1].split()
+          tags = [os.path.basename(p) for p in glob.glob('core-py/dist/*.whl')]
+          missing = [e for e in expect if not any(t.startswith('rust_store_py-') and f'-{e}-' in t for t in tags)]
+          if missing:
+              print(f'缺少预期 wheel: {missing}\n实际产物: {tags}', file=sys.stderr)
+              sys.exit(1)
+          print(f'wheel 标签校验通过（{len(expect)} 项）: {expect}')
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-${{ matrix.target }}
@@ -64,7 +93,28 @@ jobs:
           working-directory: core-py
           target: x86_64
           manylinux: musllinux_1_2
-          args: --release --out dist --find-interpreter
+          args: --release --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
+      - name: 校验 wheel 标签（缺预期解释器即失败，防静默减产）
+        shell: bash
+        env:
+          EXPECT: >-
+            cp310-musllinux_1_2_x86_64
+            cp311-musllinux_1_2_x86_64
+            cp312-musllinux_1_2_x86_64
+            cp313-musllinux_1_2_x86_64
+        run: |
+          set -e
+          ls -1 core-py/dist
+          python - "$EXPECT" <<'PY'
+          import glob, os, sys
+          expect = sys.argv[1].split()
+          tags = [os.path.basename(p) for p in glob.glob('core-py/dist/*.whl')]
+          missing = [e for e in expect if not any(t.startswith('rust_store_py-') and f'-{e}-' in t for t in tags)]
+          if missing:
+              print(f'缺少预期 wheel: {missing}\n实际产物: {tags}', file=sys.stderr)
+              sys.exit(1)
+          print(f'wheel 标签校验通过（{len(expect)} 项）: {expect}')
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-musllinux-x86_64
@@ -72,31 +122,55 @@ jobs:
 
   # ── Windows（x64）─────────────────────────────────────────────────
   windows:
-    name: windows (x64)
+    name: windows (x64, py${{ matrix.python }})
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python }}
           architecture: x64
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: core-py
           target: x64
-          args: --release --out dist --find-interpreter
+          # 不带 --find-interpreter：直接用 PATH 首位的 setup-python 解释器构建
+          args: --release --out dist
+      - name: 校验 wheel 标签（缺预期解释器即失败，防静默减产）
+        shell: bash
+        env:
+          # 3.10/3.11/3.12/3.13 → cp310/cp311/cp312/cp313
+          EXPECT: cp${{ matrix.python == '3.10' && '310' || matrix.python == '3.11' && '311' || matrix.python == '3.12' && '312' || '313' }}-win_amd64
+        run: |
+          set -e
+          ls -1 core-py/dist
+          python - "$EXPECT" <<'PY'
+          import glob, os, sys
+          expect = sys.argv[1].split()
+          tags = [os.path.basename(p) for p in glob.glob('core-py/dist/*.whl')]
+          missing = [e for e in expect if not any(t.startswith('rust_store_py-') and f'-{e}-' in t for t in tags)]
+          if missing:
+              print(f'缺少预期 wheel: {missing}\n实际产物: {tags}', file=sys.stderr)
+              sys.exit(1)
+          print(f'wheel 标签校验通过（{len(expect)} 项）: {expect}')
+          PY
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-windows-x64
+          name: wheels-windows-x64-py${{ matrix.python }}
           path: core-py/dist/*.whl
 
   # ── macOS（x86_64 / arm64）────────────────────────────────────────
   macos:
-    name: macos (${{ matrix.target }})
+    name: macos (${{ matrix.target }}, py${{ matrix.python }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
+        python: ['3.10', '3.11', '3.12', '3.13']
         include:
           - runner: macos-15-intel
             target: x86_64
@@ -106,15 +180,32 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python }}
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: core-py
           target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter
+          args: --release --out dist
+      - name: 校验 wheel 标签（缺预期解释器即失败，防静默减产）
+        shell: bash
+        env:
+          EXPECT: cp${{ matrix.python == '3.10' && '310' || matrix.python == '3.11' && '311' || matrix.python == '3.12' && '312' || '313' }}-macosx
+        run: |
+          set -e
+          ls -1 core-py/dist
+          python - "$EXPECT" <<'PY'
+          import glob, os, sys
+          expect = sys.argv[1].split()
+          tags = [os.path.basename(p) for p in glob.glob('core-py/dist/*.whl')]
+          missing = [e for e in expect if not any(t.startswith('rust_store_py-') and f'-{e}-' in t for t in tags)]
+          if missing:
+              print(f'缺少预期 wheel: {missing}\n实际产物: {tags}', file=sys.stderr)
+              sys.exit(1)
+          print(f'wheel 标签校验通过（{len(expect)} 项）: {expect}')
+          PY
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-${{ matrix.target }}
+          name: wheels-macos-${{ matrix.target }}-py${{ matrix.python }}
           path: core-py/dist/*.whl
 
   # ── 发布（仅 tag 触发）─────────────────────────────────────────────

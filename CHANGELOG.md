@@ -4,7 +4,25 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
+## 6.0.3 (2026-11-14)
+
+### Fixed
+
+- **PyPI 发布恢复全量 CPython 覆盖**（同日早发的 `6.0.2` PyPI 侧只有 cp310/cp311，
+  缺 cp312——目标镜像 python:3.12.8 装不上；crate / npm 侧 6.0.2 完好）：
+  根因是 `release-pypi.yml` 用 maturin `--find-interpreter`「发现多少出多少」，
+  上游 manylinux 镜像 / runner 解释器集合漂移时**静默减产且全 job 依然 success**。
+  修复：解释器集合改为由 workflow 显式固定——manylinux（钉 `2014` 镜像）与
+  musllinux 容器内显式 `-i python3.10..3.13`；Windows / macOS 改为解释器 × 目标
+  矩阵逐个构建；每个构建 job 增加产物 wheel 标签校验 step，缺预期解释器直接失败。
+  覆盖 CPython 3.10–3.13 ×（manylinux x86_64/aarch64 + musllinux x86_64 +
+  win_amd64 + macos x86_64/arm64）；free-threaded（cp314t+）与 PyPy 暂不覆盖，
+  宿主侧有需要再扩。
+
 ## 6.0.2 (2026-11-14)
+
+> **PyPI 侧残缺批次**：因 `--find-interpreter` 静默减产（详见 6.0.3），PyPI 上仅
+> cp310/cp311，缺 cp312+；请直接用 `6.0.3`。crate / npm 侧 6.0.2 完好无损。
 
 ### Fixed
 
