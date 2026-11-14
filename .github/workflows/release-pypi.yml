@@ -100,6 +100,7 @@ jobs:
           print(f'wheel 标签校验通过（{len(expect)} 项）: {expect}')
           PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: wheels-linux-${{ matrix.target }}
           path: core-py/dist/*.whl
@@ -151,6 +152,7 @@ jobs:
           print(f'wheel 标签校验通过（{len(expect)} 项）: {expect}')
           PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: wheels-musllinux-x86_64
           path: core-py/dist/*.whl
@@ -204,6 +206,7 @@ jobs:
           print(f'wheel 标签校验通过（{len(expect)} 项）: {expect}')
           PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: wheels-windows-x64-py${{ matrix.python }}
           path: core-py/dist/*.whl
@@ -254,6 +257,7 @@ jobs:
           print(f'wheel 标签校验通过（{len(expect)} 项）: {expect}')
           PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: wheels-macos-x86_64-py${{ matrix.python }}
           path: core-py/dist/*.whl
@@ -303,6 +307,7 @@ jobs:
           print(f'wheel 标签校验通过（{len(expect)} 项）: {expect}')
           PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: wheels-macos-aarch64-py${{ matrix.python }}
           path: core-py/dist/*.whl
