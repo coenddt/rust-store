@@ -78,6 +78,10 @@ jobs:
           ls -1 core-py/dist
           python - "$EXPECT" <<'PY'
           import glob, os, sys
+          # Windows runner 的 Python stdout 默认 cp1252，中文文案会
+          # UnicodeEncodeError（v6.0.3 实测校验通过却死在打印）——强制 UTF-8
+          sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+          sys.stderr.reconfigure(encoding='utf-8', errors='replace')
           expect = sys.argv[1].split()
           # wheel 名 = {name}-{ver}-{pytag}-{abitag}-{platag}.whl，pytag 与
           # abitag 重复出现（如 -cp312-cp312-win_amd64），不能整段子串匹配，
@@ -133,6 +137,10 @@ jobs:
           ls -1 core-py/dist
           python - "$EXPECT" <<'PY'
           import glob, os, sys
+          # Windows runner 的 Python stdout 默认 cp1252，中文文案会
+          # UnicodeEncodeError（v6.0.3 实测校验通过却死在打印）——强制 UTF-8
+          sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+          sys.stderr.reconfigure(encoding='utf-8', errors='replace')
           expect = sys.argv[1].split()
           tags = [os.path.basename(p) for p in glob.glob('core-py/dist/*.whl')]
           missing = []
@@ -187,6 +195,10 @@ jobs:
           ls -1 core-py/dist
           python - "$EXPECT" <<'PY'
           import glob, os, sys
+          # Windows runner 的 Python stdout 默认 cp1252，中文文案会
+          # UnicodeEncodeError（v6.0.3 实测校验通过却死在打印）——强制 UTF-8
+          sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+          sys.stderr.reconfigure(encoding='utf-8', errors='replace')
           expect = sys.argv[1].split()
           tags = [os.path.basename(p) for p in glob.glob('core-py/dist/*.whl')]
           missing = []
@@ -238,6 +250,10 @@ jobs:
           ls -1 core-py/dist
           python - "$EXPECT" <<'PY'
           import glob, os, sys
+          # Windows runner 的 Python stdout 默认 cp1252，中文文案会
+          # UnicodeEncodeError（v6.0.3 实测校验通过却死在打印）——强制 UTF-8
+          sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+          sys.stderr.reconfigure(encoding='utf-8', errors='replace')
           expect = sys.argv[1].split()
           tags = [os.path.basename(p) for p in glob.glob('core-py/dist/*.whl')]
           missing = []
@@ -288,6 +304,10 @@ jobs:
           ls -1 core-py/dist
           python - "$EXPECT" <<'PY'
           import glob, os, sys
+          # Windows runner 的 Python stdout 默认 cp1252，中文文案会
+          # UnicodeEncodeError（v6.0.3 实测校验通过却死在打印）——强制 UTF-8
+          sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+          sys.stderr.reconfigure(encoding='utf-8', errors='replace')
           expect = sys.argv[1].split()
           tags = [os.path.basename(p) for p in glob.glob('core-py/dist/*.whl')]
           missing = []
