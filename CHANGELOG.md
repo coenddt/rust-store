@@ -4,7 +4,7 @@
 双绑定）。引擎侧的能力与破坏性变更在此记录；宿主侧（Python / Node）的用户可见变更见各自仓库
 `CHANGELOG.md`。
 
-## 6.0.2（未发布）
+## 6.0.2 (2026-11-14)
 
 ### Fixed
 
@@ -28,6 +28,10 @@
 - **CI 门禁补齐测试覆盖面**：`core-node` 的 `npm test` 补登 `test/async_fn_refs.bindings.test.js`
   （此前为新文件但不在硬编码清单里，等于未执行）；`py-binding` job 由只跑 `parity_test.py`
   改为跑整个 `core-py/test/` 目录，避免新增测试文件静默漏跑。
+- **三端版本统一为 `6.0.2`**（crate / PyPI / npm）。修复：5.x 线合入 main 时
+  `core/Cargo.toml`（及根 `Cargo.lock`）的版本号被覆盖回 `5.3.1`，crates.io 上
+  `5.3.1` 已发布，若不修正直接推 tag 会使 release-crates 因版本已存在而失败；
+  本次随 6.0.2 一并收口。
 
 ## 6.0.1 (2026-11-10)
 
