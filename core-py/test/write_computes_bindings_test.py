@@ -21,7 +21,7 @@ import pytest
 # 直接指向 cargo 产物目录（`rust_store_py.pyd`），免装 wheel（同 parity_test.py）
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "dist"))
 
-from rust_store_py import Registry  # noqa: E402
+from rust_store_py import Registry
 
 PLAIN_SCHEMA = {
     "name": "Plain",

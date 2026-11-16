@@ -23,7 +23,7 @@ import pytest
 # 直接指向 cargo 产物目录（`rust_store_py.pyd`），免装 wheel
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "dist"))
 
-from rust_store_py import Registry  # noqa: E402
+from rust_store_py import Registry
 
 FIXTURES = pathlib.Path(__file__).resolve().parent.parent.parent / "fixtures"
 
@@ -138,7 +138,7 @@ def deep_equal(a, b):
     if isinstance(a, str) and isinstance(b, str):
         return a == b
     if isinstance(a, list) and isinstance(b, list):
-        return len(a) == len(b) and all(deep_equal(x, y) for x, y in zip(a, b))
+        return len(a) == len(b) and all(deep_equal(x, y) for x, y in zip(a, b, strict=False))
     if isinstance(a, dict) and isinstance(b, dict):
         if set(a.keys()) != set(b.keys()):
             return False
@@ -168,7 +168,7 @@ def test_pipeline():
     assert len(cases) == len(goldens), "输入与黄金基准用例数不一致"
 
     failures = []
-    for fx, g in zip(cases, goldens):
+    for fx, g in zip(cases, goldens, strict=False):
         assert fx["name"] == g["name"], "用例顺序不一致"
 
         out = None
@@ -177,7 +177,7 @@ def test_pipeline():
             out = make_registry(fx).build_pipeline(
                 fx.get("gql") or "", fx.get("params") or {}, fx.get("context")
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             caught = e
 
         if fx.get("expect_error"):
@@ -368,14 +368,14 @@ def test_commands():
     assert len(cases) == len(goldens), "输入与黄金基准用例数不一致"
 
     failures = []
-    for fx, g in zip(cases, goldens):
+    for fx, g in zip(cases, goldens, strict=False):
         assert fx["name"] == g["name"], "用例顺序不一致"
 
         actual = None
         caught = None
         try:
             actual = run_command_case(make_registry(fx), fx)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             caught = e
 
         if fx.get("expect_error"):
@@ -444,12 +444,12 @@ def test_computes():
     assert len(cases) == len(goldens), "输入与黄金基准用例数不一致"
 
     failures = []
-    for fx, g in zip(cases, goldens):
+    for fx, g in zip(cases, goldens, strict=False):
         assert fx["name"] == g["name"], "用例顺序不一致"
 
         try:
             actual = run_computes_case(make_registry(fx), fx)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             failures.append(f"[{fx['name']}] 绑定报错: {e}")
             continue
         expect_deep_equal(failures, fx["name"], actual, strip_meta(g))
@@ -506,12 +506,12 @@ def test_fnfns():
     assert len(cases) == len(goldens), "输入与黄金基准用例数不一致"
 
     failures = []
-    for fx, g in zip(cases, goldens):
+    for fx, g in zip(cases, goldens, strict=False):
         assert fx["name"] == g["name"], "用例顺序不一致"
 
         try:
             actual = run_fnfns_case(make_registry(fx), fx)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             failures.append(f"[{fx['name']}] 绑定报错: {e}")
             continue
         want = {"error": True} if g.get("error") is True else (g.get("result") if has(g, "result") else None)
@@ -576,7 +576,7 @@ def test_federation():
     assert len(cases) == len(goldens), "输入与黄金基准用例数不一致"
 
     failures = []
-    for fx, g in zip(cases, goldens):
+    for fx, g in zip(cases, goldens, strict=False):
         assert fx["name"] == g["name"], "用例顺序不一致"
 
         actual = None
@@ -587,7 +587,7 @@ def test_federation():
                 actual = run_federation_plan(reg, fx)
             else:
                 actual = reg.merge_federated(fx.get("plan"), fx.get("results") or [])
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             caught = e
 
         if fx.get("expect_error"):
@@ -800,7 +800,7 @@ def test_missing_fn_raises():
     )
     try:
         reg.process_node("Post{total}", {"_id": "1", "a": 1}, None)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         assert "missing_fn" in str(e), f"异常信息不含 missing_fn: {e}"
         return
     raise AssertionError("期望抛出异常但成功返回")
@@ -833,7 +833,7 @@ def test_local():
     reg = Registry()
     failures = []
 
-    for fx, g in zip(cases, goldens):
+    for fx, g in zip(cases, goldens, strict=False):
         assert fx["name"] == g["name"], "用例顺序不一致"
 
         if fx.get("expect_error"):
@@ -843,7 +843,7 @@ def test_local():
 
         try:
             actual = reg.local_eval(fx["collections"], fx["command"])
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             failures.append(f"[{fx['name']}] 绑定报错: {e}")
             continue
 

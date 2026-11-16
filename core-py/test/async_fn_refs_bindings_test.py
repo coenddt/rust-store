@@ -15,7 +15,7 @@ import sys
 # 与其它绑定测试一致：优先 cargo 产物目录，未构建则回退已安装 wheel
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "dist"))
 
-from rust_store_py import Registry  # noqa: E402
+from rust_store_py import Registry
 
 
 def registry():

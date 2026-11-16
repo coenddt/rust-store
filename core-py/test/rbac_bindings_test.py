@@ -20,7 +20,7 @@ import sys
 # 直接指向 cargo 产物目录（`rust_store_py.pyd`），免装 wheel（同 parity_test.py）
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "dist"))
 
-from rust_store_py import Registry  # noqa: E402
+from rust_store_py import Registry
 
 _POLICY = {
     "mode": "enforce",
@@ -136,7 +136,7 @@ def test_invalid_action_rejected():
     try:
         reg.rbac_can("Post", "drop", _CTX_EDITOR)
         raise AssertionError("非法 action 应显式报错")
-    except Exception as e:  # noqa: BLE001 —— PyO3 抛 RuntimeError/ValueError
+    except Exception as e:
         assert "drop" in str(e), f"错误信息应指名非法 action: {e}"
 
 
@@ -157,7 +157,7 @@ def test_exempt_roles_configurable():
     try:
         reg.plan_query("Post{ title }", {}, ctx=ctx_admin)
         raise AssertionError("豁免清单空时 admin 应 default deny")
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     # set_exempt_roles 注入 → 直通（静态白名单与 RBAC 判决双直通）
     reg.set_exempt_roles(["admin"])
@@ -187,7 +187,7 @@ def test_deny_write_and_unconfigured_policy():
     try:
         reg.plan_query("User{ name }", {}, ctx=ctx_stranger)
         raise AssertionError("closed 姿态下未配置 model 应拒绝")
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     # 豁免直通先于姿态（设计 §11.3「一切判决环节直通」）：豁免 ctx 在 closed 下仍放行
     reg.set_exempt_roles(["stranger"])

@@ -18,7 +18,7 @@ import sys
 # 直接指向 cargo 产物目录（`rust_store_py.pyd`），免装 wheel（同 parity_test.py）
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "dist"))
 
-from rust_store_py import Registry  # noqa: E402
+from rust_store_py import Registry
 
 _CTX_ADMIN = {"userId": "u1", "roles": ["admin"]}
 _CTX_USER = {"userId": "u2", "roles": ["user"]}
@@ -120,7 +120,7 @@ def test_plan_exists_with_ctx_obeys_read_permission():
     )
     try:
         reg.plan_exists_with_ctx("BlockedDoc", {"title": "x"}, _CTX_ADMIN)
-    except Exception as e:  # noqa: BLE001 — 断言 machine code 前缀
+    except Exception as e:
         assert "ERR_PERMISSION" in str(e), str(e)
     else:
         raise AssertionError("denyRead: true 必须拒绝 exists")
