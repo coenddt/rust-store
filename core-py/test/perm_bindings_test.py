@@ -35,7 +35,11 @@ def _registry():
             "relations": {},
             "computes": {
                 "adminOnly": {"type": "string", "read": ["admin"], "fnRef": "sumAb"},
-                "staff": {"type": "string", "read": ["admin", "user"], "fnRef": "mulQp"},
+                "staff": {
+                    "type": "string",
+                    "read": ["admin", "user"],
+                    "fnRef": "mulQp",
+                },
                 "open": {"type": "string", "fnRef": "sumAb"},
             },
         }
@@ -106,7 +110,10 @@ def test_plan_exists_with_ctx_obeys_read_permission():
         }
     )
     # read: [] 恢复 5.x 旧义：空名单 = 未配置，不限制（放行）
-    assert reg.plan_exists_with_ctx("DenyDoc", {"title": "x"}, _CTX_ADMIN)["kind"] == "findOne"
+    assert (
+        reg.plan_exists_with_ctx("DenyDoc", {"title": "x"}, _CTX_ADMIN)["kind"]
+        == "findOne"
+    )
 
     reg.register(
         {

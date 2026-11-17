@@ -26,7 +26,12 @@ _POLICY = {
     "mode": "enforce",
     "roles": {"viewer": {}, "editor": {}},
     "grants": [
-        {"role": "viewer", "model": "Post", "actions": ["read"], "readFields": ["title"]},
+        {
+            "role": "viewer",
+            "model": "Post",
+            "actions": ["read"],
+            "readFields": ["title"],
+        },
         {"role": "editor", "model": "Post", "actions": ["read", "insert"]},
         {"role": "editor", "model": "Comment", "actions": ["read"], "ownerOnly": True},
     ],
@@ -86,7 +91,11 @@ def test_rbac_readable_fields_intersect():
     # build_projection 的独立行为）
     assert fields is not None and sorted(fields) == ["title"], fields
     # editor 无 readFields 声明 → 字段维度不收紧（base 集合原样；None 仅在 ctx=None）
-    assert sorted(reg.rbac_readable_fields("Post", _CTX_EDITOR)) == ["body", "secret", "title"]
+    assert sorted(reg.rbac_readable_fields("Post", _CTX_EDITOR)) == [
+        "body",
+        "secret",
+        "title",
+    ]
     assert reg.rbac_readable_fields("Post", None) is None
 
 
@@ -169,6 +178,7 @@ def test_exempt_roles_configurable():
 
 
 # ─── 8. 拒写清单 / 未配置姿态透传组 ─────────────────────────────────
+
 
 def test_deny_write_and_unconfigured_policy():
     reg = _registry(_POLICY)  # 复用文件头既有 enforce 策略（viewer/editor 受管）

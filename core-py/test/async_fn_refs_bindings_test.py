@@ -28,7 +28,11 @@ def registry():
             "fields": {"_id": "string", "title": "string"},
             "relations": {},
             "computes": {
-                "favoriteCount": {"type": "int", "asyncFn": True, "fnRef": "live_favorite"},
+                "favoriteCount": {
+                    "type": "int",
+                    "asyncFn": True,
+                    "fnRef": "live_favorite",
+                },
                 "views": {"type": "int", "asyncFn": True, "fnRef": "live_views"},
             },
         }

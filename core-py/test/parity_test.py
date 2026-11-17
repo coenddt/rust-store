@@ -138,7 +138,9 @@ def deep_equal(a, b):
     if isinstance(a, str) and isinstance(b, str):
         return a == b
     if isinstance(a, list) and isinstance(b, list):
-        return len(a) == len(b) and all(deep_equal(x, y) for x, y in zip(a, b, strict=False))
+        return len(a) == len(b) and all(
+            deep_equal(x, y) for x, y in zip(a, b, strict=False)
+        )
     if isinstance(a, dict) and isinstance(b, dict):
         if set(a.keys()) != set(b.keys()):
             return False
@@ -194,7 +196,9 @@ def test_pipeline():
         if lines:
             failures.append(f"[{fx['name']}] 结果不一致\n" + "\n".join(lines))
 
-    assert not failures, f"pipeline 对拍失败 {len(failures)} 项:\n" + "\n".join(failures)
+    assert not failures, f"pipeline 对拍失败 {len(failures)} 项:\n" + "\n".join(
+        failures
+    )
 
 
 # ─── commands ───────────────────────────────────────────────
@@ -220,95 +224,132 @@ def substitute_step_placeholders(value, resolved):
     return value
 
 
-def replay_write_case(reg, fx):
-    """写路径统一回放：Host 模拟执行命令并回喂结果（对齐 parity_write.rs）"""
-    ctx = fx.get("context")
-    now = int(fx.get("now") or 0)
+def _write_returns(reg, fx, updated):
+    """宿主回喂的更新后文档 → 绑定侧补默认值（updated 为 None = 无回喂）"""
+    return None if updated is None else reg.apply_write_defaults(fx["model"], updated)
+
+
+def _write_insert_many(reg, fx, now, ctx):
+    return reg.plan_insert_many(
+        fx.get("model") or "",
+        fx.get("docs") or [],
+        now,
+        fx.get("newIds") or [],
+        ctx,
+    )
+
+
+def _write_update(reg, fx, now, ctx):
+    out = reg.plan_update(
+        fx.get("model") or "",
+        fx.get("condition"),
+        fx.get("data"),
+        fx.get("options"),
+        now,
+        ctx,
+    )
+    # creator 受限写入 ⇒ core 先返回探针（宿主回喂后二次规划），黄金基准即 needsProbe 信封
+    if "needsProbe" in out:
+        return out
+    return {
+        "commands": [out["command"]],
+        "returns": _write_returns(reg, fx, fx.get("updatedDoc")),
+    }
+
+
+def _write_update_many(reg, fx, now, ctx):
+    out = reg.plan_update_many(
+        fx.get("model") or "", fx.get("condition"), fx.get("data"), now, ctx
+    )
+    return {
+        "command": out["command"],
+        "returns": {"modifiedCount": fx.get("modifiedCount") or 0},
+    }
+
+
+def _write_remove(reg, fx, now, ctx):
+    plan = reg.plan_remove(fx.get("model") or "", fx.get("condition"), ctx)
+    # creator 受限删除 ⇒ 先返回探针（同上）
+    if "needsProbe" in plan:
+        return plan
+    docs = fx.get("docs") or []
+    commands = []
+    archived_count = 0
+    if plan.get("findCommand") is not None:
+        commands.append(plan["findCommand"])
+        if docs:
+            commands.append(reg.plan_archive_docs(fx["model"], docs, now)["command"])
+            archived_count = len(docs)
+    commands.append(plan["deleteCommand"])
+    return {
+        "commands": commands,
+        "returns": {
+            "deletedCount": fx.get("deletedCount") or 0,
+            "archivedCount": archived_count,
+        },
+    }
+
+
+def _write_upsert(reg, fx, now, ctx):
+    out = reg.plan_upsert(
+        fx.get("model") or "",
+        fx.get("condition"),
+        fx.get("data"),
+        fx.get("options"),
+        now,
+        (fx.get("newIds") or [""])[0] or "",
+        ctx,
+    )
+    return {
+        "command": out["command"],
+        "returns": _write_returns(reg, fx, fx.get("updatedDoc")),
+    }
+
+
+def _write_mutation(reg, fx, now, ctx):
+    plan = reg.plan_mutation(
+        fx.get("model") or "", fx.get("data"), now, fx.get("newIds") or [], ctx
+    )
     updated = fx.get("updatedDoc")
+    resolved = []
+    commands = []
+    root_result = None
+    for step in plan["steps"]:
+        command = substitute_step_placeholders(step["command"], resolved)
+        if command.get("kind") == "insertOne":
+            result = command.get("doc")
+        elif command.get("kind") == "findOneAndUpdate":
+            result = updated
+        else:
+            raise RuntimeError(f"未支持的 mutation 步骤命令: {command.get('kind')}")
+        if root_result is None:
+            root_result = result
+        resolved.append(result.get("_id") if result else None)
+        commands.append(command)
+    returns = (
+        None
+        if root_result is None
+        else reg.apply_write_defaults(fx["model"], root_result)
+    )
+    return {"commands": commands, "returns": returns}
 
-    def returns_of():
-        return None if updated is None else reg.apply_write_defaults(fx["model"], updated)
 
-    kind = fx["kind"]
-    if kind == "insert_many":
-        return reg.plan_insert_many(
-            fx.get("model") or "", fx.get("docs") or [], now, fx.get("newIds") or [], ctx
-        )
+_WRITE_HANDLERS = {
+    "insert_many": _write_insert_many,
+    "update": _write_update,
+    "update_many": _write_update_many,
+    "remove": _write_remove,
+    "upsert": _write_upsert,
+    "mutation": _write_mutation,
+}
 
-    if kind == "update":
-        out = reg.plan_update(
-            fx.get("model") or "",
-            fx.get("condition"),
-            fx.get("data"),
-            fx.get("options"),
-            now,
-            ctx,
-        )
-        # creator 受限写入 ⇒ core 先返回探针（宿主回喂后二次规划），黄金基准即 needsProbe 信封
-        if "needsProbe" in out:
-            return out
-        return {"commands": [out["command"]], "returns": returns_of()}
 
-    if kind == "update_many":
-        out = reg.plan_update_many(
-            fx.get("model") or "", fx.get("condition"), fx.get("data"), now, ctx
-        )
-        return {"command": out["command"], "returns": {"modifiedCount": fx.get("modifiedCount") or 0}}
-
-    if kind == "remove":
-        plan = reg.plan_remove(fx.get("model") or "", fx.get("condition"), ctx)
-        # creator 受限删除 ⇒ 先返回探针（同上）
-        if "needsProbe" in plan:
-            return plan
-        docs = fx.get("docs") or []
-        commands = []
-        archived_count = 0
-        if plan.get("findCommand") is not None:
-            commands.append(plan["findCommand"])
-            if docs:
-                commands.append(reg.plan_archive_docs(fx["model"], docs, now)["command"])
-                archived_count = len(docs)
-        commands.append(plan["deleteCommand"])
-        return {
-            "commands": commands,
-            "returns": {"deletedCount": fx.get("deletedCount") or 0, "archivedCount": archived_count},
-        }
-
-    if kind == "upsert":
-        out = reg.plan_upsert(
-            fx.get("model") or "",
-            fx.get("condition"),
-            fx.get("data"),
-            fx.get("options"),
-            now,
-            (fx.get("newIds") or [""])[0] or "",
-            ctx,
-        )
-        return {"command": out["command"], "returns": returns_of()}
-
-    if kind == "mutation":
-        plan = reg.plan_mutation(
-            fx.get("model") or "", fx.get("data"), now, fx.get("newIds") or [], ctx
-        )
-        resolved = []
-        commands = []
-        root_result = None
-        for step in plan["steps"]:
-            command = substitute_step_placeholders(step["command"], resolved)
-            if command.get("kind") == "insertOne":
-                result = command.get("doc")
-            elif command.get("kind") == "findOneAndUpdate":
-                result = updated
-            else:
-                raise RuntimeError(f"未支持的 mutation 步骤命令: {command.get('kind')}")
-            if root_result is None:
-                root_result = result
-            resolved.append(result.get("_id") if result else None)
-            commands.append(command)
-        returns = None if root_result is None else reg.apply_write_defaults(fx["model"], root_result)
-        return {"commands": commands, "returns": returns}
-
-    raise ValueError(f"未知用例类型: {kind}")
+def replay_write_case(reg, fx):
+    """写路径统一回放：Host 模拟执行命令并回喂结果（对齐 parity_write.rs）；按 kind 分派"""
+    handler = _WRITE_HANDLERS.get(fx["kind"])
+    if handler is None:
+        raise ValueError(f"未知用例类型: {fx['kind']}")
+    return handler(reg, fx, int(fx.get("now") or 0), fx.get("context"))
 
 
 def run_command_case(reg, fx):
@@ -321,7 +362,10 @@ def run_command_case(reg, fx):
 
     if kind == "query_with_count":
         return reg.plan_query_with_count(
-            fx.get("gql") or "", fx.get("params") or {}, ctx, float(fx.get("total") or 0)
+            fx.get("gql") or "",
+            fx.get("params") or {},
+            ctx,
+            float(fx.get("total") or 0),
         )
 
     if kind == "resolve_page":
@@ -386,10 +430,16 @@ def test_commands():
             failures.append(f"[{fx['name']}] 绑定报错: {caught}")
             continue
 
-        want = {"error": True} if g.get("error") is True else (g.get("result") if has(g, "result") else None)
+        want = (
+            {"error": True}
+            if g.get("error") is True
+            else (g.get("result") if has(g, "result") else None)
+        )
         expect_deep_equal(failures, fx["name"], actual, want)
 
-    assert not failures, f"commands 对拍失败 {len(failures)} 项:\n" + "\n".join(failures)
+    assert not failures, f"commands 对拍失败 {len(failures)} 项:\n" + "\n".join(
+        failures
+    )
 
 
 # ─── computes ───────────────────────────────────────────────
@@ -454,7 +504,9 @@ def test_computes():
             continue
         expect_deep_equal(failures, fx["name"], actual, strip_meta(g))
 
-    assert not failures, f"computes 对拍失败 {len(failures)} 项:\n" + "\n".join(failures)
+    assert not failures, f"computes 对拍失败 {len(failures)} 项:\n" + "\n".join(
+        failures
+    )
 
 
 # ─── fnfns（fnRef 回调桥） ──────────────────────────────────
@@ -514,7 +566,11 @@ def test_fnfns():
         except Exception as e:
             failures.append(f"[{fx['name']}] 绑定报错: {e}")
             continue
-        want = {"error": True} if g.get("error") is True else (g.get("result") if has(g, "result") else None)
+        want = (
+            {"error": True}
+            if g.get("error") is True
+            else (g.get("result") if has(g, "result") else None)
+        )
         expect_deep_equal(failures, fx["name"], actual, want)
 
     assert not failures, f"fnfns 对拍失败 {len(failures)} 项:\n" + "\n".join(failures)
@@ -559,7 +615,9 @@ def run_federation_plan(reg, fx):
 
     # 契约：postprocess 必须与单库 plan_query 同形状
     if fx.get("parity_with_query"):
-        single = reg.plan_query(fx.get("gql") or "", fx.get("params") or {}, fx.get("context"))
+        single = reg.plan_query(
+            fx.get("gql") or "", fx.get("params") or {}, fx.get("context")
+        )
         want = single.get("postprocess")
         got = plan.get("postprocess")
         if not deep_equal(want, got):
@@ -598,10 +656,16 @@ def test_federation():
             failures.append(f"[{fx['name']}] 绑定报错: {caught}")
             continue
 
-        want = {"error": True} if g.get("error") is True else (g.get("result") if has(g, "result") else None)
+        want = (
+            {"error": True}
+            if g.get("error") is True
+            else (g.get("result") if has(g, "result") else None)
+        )
         expect_deep_equal(failures, fx["name"], actual, want)
 
-    assert not failures, f"federation 对拍失败 {len(failures)} 项:\n" + "\n".join(failures)
+    assert not failures, f"federation 对拍失败 {len(failures)} 项:\n" + "\n".join(
+        failures
+    )
 
 
 # ─── dialect（Mongo 命令 → 关系型 SQL） ─────────────────────
@@ -613,16 +677,42 @@ def test_federation():
 # 的绑定输出，与 Rust 侧语义一致（仅差标识符引号与占位符风格）。
 
 _DIALECT_SCHEMAS = [
-    {"name": "Post", "collection": "posts", "timestamps": False,
-     "fields": {"title": {"type": "string"}, "status": {"type": "string"}, "views": {"type": "int"}},
-     "relations": {}},
-    {"name": "Order", "collection": "orders", "timestamps": False,
-     "fields": {"code": {"type": "string"}, "amount": {"type": "float"}},
-     "relations": {"items": {"model": "OrderItem", "type": "many",
-                             "localField": "_id", "foreignField": "orderId"}}},
-    {"name": "OrderItem", "collection": "order_items", "timestamps": False,
-     "fields": {"orderId": {"type": "string"}, "sku": {"type": "string"}, "qty": {"type": "int"}},
-     "relations": {}},
+    {
+        "name": "Post",
+        "collection": "posts",
+        "timestamps": False,
+        "fields": {
+            "title": {"type": "string"},
+            "status": {"type": "string"},
+            "views": {"type": "int"},
+        },
+        "relations": {},
+    },
+    {
+        "name": "Order",
+        "collection": "orders",
+        "timestamps": False,
+        "fields": {"code": {"type": "string"}, "amount": {"type": "float"}},
+        "relations": {
+            "items": {
+                "model": "OrderItem",
+                "type": "many",
+                "localField": "_id",
+                "foreignField": "orderId",
+            }
+        },
+    },
+    {
+        "name": "OrderItem",
+        "collection": "order_items",
+        "timestamps": False,
+        "fields": {
+            "orderId": {"type": "string"},
+            "sku": {"type": "string"},
+            "qty": {"type": "int"},
+        },
+        "relations": {},
+    },
 ]
 
 _DIALECT_BACKENDS = ("mysql", "postgres", "sqlite")
@@ -651,35 +741,82 @@ def normalize_sql(sql):
     return " ".join("".join(out).split()).lower()
 
 
-def test_dialect():
-    reg = dialect_registry()
-    failures = []
-
-    # 1) 跨后端归一化 SQL 一致（对应 parity_dialect.rs 的 assert_sql_parity 用例）
+def _dialect_check_cross_backend(reg, failures):
+    """1) 跨后端归一化 SQL 一致（对应 parity_dialect.rs 的 assert_sql_parity 用例）"""
     cases = [
-        ("find-simple", {"kind": "find", "collection": "posts",
-                         "filter": {"status": "draft"}, "projection": {"title": 1, "status": 1}}),
-        ("find-comparison", {"kind": "find", "collection": "posts",
-                             "filter": {"views": {"$gte": 10}, "status": "draft"}, "projection": None}),
-        ("count", {"kind": "countDocuments", "collection": "posts", "filter": {"status": "draft"}}),
-        ("insert-one", {"kind": "insertOne", "collection": "posts",
-                        "doc": {"title": "hello", "status": "draft", "views": 5}}),
-        ("insert-many", {"kind": "insertMany", "collection": "posts",
-                         "docs": [{"title": "a", "status": "draft", "views": 1},
-                                  {"title": "b", "status": "draft", "views": 2}]}),
-        ("aggregate-lookup", {"kind": "aggregate", "collection": "orders", "pipeline": [
-            {"$match": {"amount": {"$gt": 0}}},
-            {"$lookup": {"from": "order_items", "localField": "_id",
-                         "foreignField": "orderId", "as": "items"}},
-            {"$sort": {"code": 1}},
-        ]}),
+        (
+            "find-simple",
+            {
+                "kind": "find",
+                "collection": "posts",
+                "filter": {"status": "draft"},
+                "projection": {"title": 1, "status": 1},
+            },
+        ),
+        (
+            "find-comparison",
+            {
+                "kind": "find",
+                "collection": "posts",
+                "filter": {"views": {"$gte": 10}, "status": "draft"},
+                "projection": None,
+            },
+        ),
+        (
+            "count",
+            {
+                "kind": "countDocuments",
+                "collection": "posts",
+                "filter": {"status": "draft"},
+            },
+        ),
+        (
+            "insert-one",
+            {
+                "kind": "insertOne",
+                "collection": "posts",
+                "doc": {"title": "hello", "status": "draft", "views": 5},
+            },
+        ),
+        (
+            "insert-many",
+            {
+                "kind": "insertMany",
+                "collection": "posts",
+                "docs": [
+                    {"title": "a", "status": "draft", "views": 1},
+                    {"title": "b", "status": "draft", "views": 2},
+                ],
+            },
+        ),
+        (
+            "aggregate-lookup",
+            {
+                "kind": "aggregate",
+                "collection": "orders",
+                "pipeline": [
+                    {"$match": {"amount": {"$gt": 0}}},
+                    {
+                        "$lookup": {
+                            "from": "order_items",
+                            "localField": "_id",
+                            "foreignField": "orderId",
+                            "as": "items",
+                        }
+                    },
+                    {"$sort": {"code": 1}},
+                ],
+            },
+        ),
     ]
     for name, cmd in cases:
         base = None
         for backend in _DIALECT_BACKENDS:
             out = reg.dialect_translate(backend, cmd)
             if out.get("backend") != backend:
-                failures.append(f"[{name}/{backend}] backend 字段回显错误: {out.get('backend')}")
+                failures.append(
+                    f"[{name}/{backend}] backend 字段回显错误: {out.get('backend')}"
+                )
             stmts = out.get("stmts") or []
             if len(stmts) != 1:
                 failures.append(f"[{name}/{backend}] 应恰 1 条语句, got {len(stmts)}")
@@ -688,27 +825,64 @@ def test_dialect():
             if base is None:
                 base = norm
             elif norm != base:
-                failures.append(f"[{name}] 跨后端 SQL 不一致\n    base: {base}\n    {backend}: {norm}")
+                failures.append(
+                    f"[{name}] 跨后端 SQL 不一致\n    base: {base}\n    {backend}: {norm}"
+                )
 
-    # 2) find：值参数化 + rowShape 投影列（对应 dialect.smoke.test.js find 用例）
-    out = reg.dialect_translate("sqlite", {
-        "kind": "find", "collection": "posts", "filter": {"status": "draft"},
-        "projection": {"_id": 1, "title": 1, "status": 1, "views": 1}})
+
+def _dialect_check_find_rowshape(reg, failures):
+    """2) find：值参数化 + rowShape 投影列（对应 dialect.smoke.test.js find 用例）"""
+    out = reg.dialect_translate(
+        "sqlite",
+        {
+            "kind": "find",
+            "collection": "posts",
+            "filter": {"status": "draft"},
+            "projection": {"_id": 1, "title": 1, "status": 1, "views": 1},
+        },
+    )
     st = out["stmts"][0]
     expect_deep_equal(failures, "find.params", st.get("params"), ["draft"])
-    expect_deep_equal(failures, "find.rowShape.aliases",
-                      sorted(c["alias"] for c in (st.get("rowShape") or {}).get("columns") or []),
-                      ["_id", "status", "title", "views"])
+    expect_deep_equal(
+        failures,
+        "find.rowShape.aliases",
+        sorted(c["alias"] for c in (st.get("rowShape") or {}).get("columns") or []),
+        ["_id", "status", "title", "views"],
+    )
 
-    # 3) count：值参数化（对应 smoke test count 用例）
-    out = reg.dialect_translate("sqlite", {
-        "kind": "countDocuments", "collection": "posts", "filter": {"views": {"$gte": 2}}})
+
+def _dialect_check_count_params(reg, failures):
+    """3) count：值参数化（对应 smoke test count 用例）"""
+    out = reg.dialect_translate(
+        "sqlite",
+        {
+            "kind": "countDocuments",
+            "collection": "posts",
+            "filter": {"views": {"$gte": 2}},
+        },
+    )
     expect_deep_equal(failures, "count.params", out["stmts"][0].get("params"), [2])
 
-    # 4) restore_rows：平铺 JOIN 行 → 嵌套文档（对应 parity_dialect.rs 同名用例）
-    agg = reg.dialect_translate("sqlite", {"kind": "aggregate", "collection": "orders", "pipeline": [
-        {"$lookup": {"from": "order_items", "localField": "_id",
-                     "foreignField": "orderId", "as": "items"}}]})
+
+def _dialect_check_restore_rows(reg, failures):
+    """4) restore_rows：平铺 JOIN 行 → 嵌套文档（对应 parity_dialect.rs 同名用例）"""
+    agg = reg.dialect_translate(
+        "sqlite",
+        {
+            "kind": "aggregate",
+            "collection": "orders",
+            "pipeline": [
+                {
+                    "$lookup": {
+                        "from": "order_items",
+                        "localField": "_id",
+                        "foreignField": "orderId",
+                        "as": "items",
+                    }
+                }
+            ],
+        },
+    )
     shape = agg["stmts"][0]["rowShape"]
     rows = [
         {"_id": "A", "code": "A-1", "items_0_sku": "sku-a", "items_0_qty": 2},
@@ -718,68 +892,168 @@ def test_dialect():
     restored = reg.restore_rows(shape, rows)
     expect_deep_equal(failures, "restore.len", len(restored), 2)
     a1 = next((d for d in restored if d.get("code") == "A-1"), None)
-    expect_deep_equal(failures, "restore.A-1.items",
-                      len(((a1 or {}).get("items") or [])), 2)
-    expect_deep_equal(failures, "restore.A-1.skus",
-                      sorted(i.get("sku") for i in ((a1 or {}).get("items") or [])), ["sku-a", "sku-b"])
+    expect_deep_equal(
+        failures, "restore.A-1.items", len(((a1 or {}).get("items") or [])), 2
+    )
+    expect_deep_equal(
+        failures,
+        "restore.A-1.skus",
+        sorted(i.get("sku") for i in ((a1 or {}).get("items") or [])),
+        ["sku-a", "sku-b"],
+    )
 
-    # 5) restore_rows：is_array 聚合路径（对应 parity_dialect.rs 同名用例）
-    shape2 = {"columns": [
-        {"alias": "_id", "path": ["_id"], "isArray": False, "subShape": None},
-        {"alias": "code", "path": ["code"], "isArray": False, "subShape": None},
-        {"alias": "it_0_sku", "path": ["items", "sku"], "isArray": True, "subShape": None},
-    ]}
-    rows2 = [{"_id": "1", "code": "A", "it_0_sku": "x"},
-             {"_id": "1", "code": "A", "it_0_sku": "y"}]
+
+def _dialect_check_restore_is_array(reg, failures):
+    """5) restore_rows：is_array 聚合路径（对应 parity_dialect.rs 同名用例）"""
+    shape2 = {
+        "columns": [
+            {"alias": "_id", "path": ["_id"], "isArray": False, "subShape": None},
+            {"alias": "code", "path": ["code"], "isArray": False, "subShape": None},
+            {
+                "alias": "it_0_sku",
+                "path": ["items", "sku"],
+                "isArray": True,
+                "subShape": None,
+            },
+        ]
+    }
+    rows2 = [
+        {"_id": "1", "code": "A", "it_0_sku": "x"},
+        {"_id": "1", "code": "A", "it_0_sku": "y"},
+    ]
     r2 = reg.restore_rows(shape2, rows2)
     expect_deep_equal(failures, "restore.is_array.len", len(r2), 1)
-    expect_deep_equal(failures, "restore.is_array.skus",
-                      [i.get("sku") for i in (r2[0].get("items") or [])], ["x", "y"])
+    expect_deep_equal(
+        failures,
+        "restore.is_array.skus",
+        [i.get("sku") for i in (r2[0].get("items") or [])],
+        ["x", "y"],
+    )
 
-    # 6) schema_from_rows：introspection 行 → schemaJSON（对应 parity_dialect.rs 同名用例）
+
+def _dialect_check_schema_from_rows(reg, failures):
+    """6) schema_from_rows：introspection 行 → schemaJSON（对应 parity_dialect.rs 同名用例）"""
     introspect_rows = {
         "tables": [{"name": "posts"}, {"name": "order_items"}],
         "columns": [
             {"table": "posts", "name": "_id", "type": "TEXT", "notnull": 1, "pk": 1},
             {"table": "posts", "name": "title", "type": "TEXT", "notnull": 0, "pk": 0},
-            {"table": "posts", "name": "views", "type": "INTEGER", "notnull": 0, "pk": 0},
-            {"table": "order_items", "name": "_id", "type": "TEXT", "notnull": 1, "pk": 1},
-            {"table": "order_items", "name": "order_id", "type": "TEXT", "notnull": 1, "pk": 0},
-            {"table": "order_items", "name": "sku", "type": "TEXT", "notnull": 0, "pk": 0},
+            {
+                "table": "posts",
+                "name": "views",
+                "type": "INTEGER",
+                "notnull": 0,
+                "pk": 0,
+            },
+            {
+                "table": "order_items",
+                "name": "_id",
+                "type": "TEXT",
+                "notnull": 1,
+                "pk": 1,
+            },
+            {
+                "table": "order_items",
+                "name": "order_id",
+                "type": "TEXT",
+                "notnull": 1,
+                "pk": 0,
+            },
+            {
+                "table": "order_items",
+                "name": "sku",
+                "type": "TEXT",
+                "notnull": 0,
+                "pk": 0,
+            },
         ],
-        "fks": [{"table": "order_items", "column": "order_id",
-                 "refTable": "posts", "refColumn": "_id"}],
+        "fks": [
+            {
+                "table": "order_items",
+                "column": "order_id",
+                "refTable": "posts",
+                "refColumn": "_id",
+            }
+        ],
         "indexes": [],
     }
     sch = reg.schema_from_rows(introspect_rows, "sqlite")
     posts = next((d for d in sch if d.get("name") == "posts"), None)
     oi = next((d for d in sch if d.get("name") == "order_items"), None)
-    expect_deep_equal(failures, "introspect.views.type",
-                      ((posts or {}).get("fields") or {}).get("views", {}).get("type"), "number")
-    expect_deep_equal(failures, "introspect.order_items.rel.type",
-                      ((oi or {}).get("relations") or {}).get("posts", {}).get("type"), "one")
-    expect_deep_equal(failures, "introspect.posts.reverse.rel",
-                      "order_items" in ((posts or {}).get("relations") or {}), True)
+    expect_deep_equal(
+        failures,
+        "introspect.views.type",
+        ((posts or {}).get("fields") or {}).get("views", {}).get("type"),
+        "number",
+    )
+    expect_deep_equal(
+        failures,
+        "introspect.order_items.rel.type",
+        ((oi or {}).get("relations") or {}).get("posts", {}).get("type"),
+        "one",
+    )
+    expect_deep_equal(
+        failures,
+        "introspect.posts.reverse.rel",
+        "order_items" in ((posts or {}).get("relations") or {}),
+        True,
+    )
 
-    # 7) merge_schema：字段并集 / 计算列注入 / 权限覆盖（对应 parity_dialect.rs 同名用例）
-    base = [{"name": "posts", "collection": "posts",
-             "fields": {"title": {"type": "string"}}, "relations": {}}]
-    overlay = [{"name": "posts",
-                "fields": {"views": {"type": "int", "default": 0}},
-                "computes": {"slug": {"fn": True, "depends": ["title"]}},
-                "read": {"roles": ["admin", "editor"]}}]
+
+def _dialect_check_merge_schema(reg, failures):
+    """7) merge_schema：字段并集 / 计算列注入 / 权限覆盖（对应 parity_dialect.rs 同名用例）"""
+    base = [
+        {
+            "name": "posts",
+            "collection": "posts",
+            "fields": {"title": {"type": "string"}},
+            "relations": {},
+        }
+    ]
+    overlay = [
+        {
+            "name": "posts",
+            "fields": {"views": {"type": "int", "default": 0}},
+            "computes": {"slug": {"fn": True, "depends": ["title"]}},
+            "read": {"roles": ["admin", "editor"]},
+        }
+    ]
     merged = reg.merge_schema(base, overlay)
     d = merged[0]
-    expect_deep_equal(failures, "merge.computes", "slug" in (d.get("computes") or {}), True)
-    expect_deep_equal(failures, "merge.fields",
-                      sorted((d.get("fields") or {}).keys()), ["title", "views"])
-    expect_deep_equal(failures, "merge.read.roles", (d.get("read") or {}).get("roles"),
-                      ["admin", "editor"])
+    expect_deep_equal(
+        failures, "merge.computes", "slug" in (d.get("computes") or {}), True
+    )
+    expect_deep_equal(
+        failures,
+        "merge.fields",
+        sorted((d.get("fields") or {}).keys()),
+        ["title", "views"],
+    )
+    expect_deep_equal(
+        failures,
+        "merge.read.roles",
+        (d.get("read") or {}).get("roles"),
+        ["admin", "editor"],
+    )
 
-    # 8) 错误路径：未知后端 → 抛出异常（不得返回错误值）
+
+def _dialect_check_error_path(reg):
+    """8) 错误路径：未知后端 → 抛出异常（不得返回错误值）"""
     with pytest.raises(RuntimeError):
         reg.dialect_translate("oracle", {"kind": "find", "collection": "posts"})
 
+
+def test_dialect():
+    reg = dialect_registry()
+    failures = []
+    _dialect_check_cross_backend(reg, failures)
+    _dialect_check_find_rowshape(reg, failures)
+    _dialect_check_count_params(reg, failures)
+    _dialect_check_restore_rows(reg, failures)
+    _dialect_check_restore_is_array(reg, failures)
+    _dialect_check_schema_from_rows(reg, failures)
+    _dialect_check_merge_schema(reg, failures)
+    _dialect_check_error_path(reg)
     assert not failures, f"dialect 对拍失败 {len(failures)} 项:\n" + "\n".join(failures)
 
 
