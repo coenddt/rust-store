@@ -8,30 +8,53 @@
  * 验证 skill 产出的 GQL+params 真实可落地到 SQLite 并还原出嵌套文档。
  */
 const initSqlJs = require('sql.js');
-const path = require('node:path');
 const { Registry } = require('./_binding');
-
-const SQLITE_WASM = path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
+const { SQLITE_WASM, registerOrderFamily, toObjectRows } = require('./helpers/smoke-fixtures');
 
 /** 执行 translate 产出，返回 { rows, shape } */
 function execute(db, reg, out) {
   const stmt = out.stmts[0];
   const res = db.exec(stmt.text, stmt.params);
-  const { columns, values } = res[0];
-  const rows = values.map((v) => { const o = {}; columns.forEach((c, i) => (o[c] = v[i])); return o; });
+  const rows = toObjectRows(res);
   return { rows, shape: stmt.rowShape };
+}
+
+/** phase1 顺序断言（amount 降序且 >10） */
+function assertPhase1Order(ids) {
+  if (ids.join(',') !== 'o3,o4,o1') throw new Error(`phase1 顺序应 o3,o4,o1（amount 降序且 >10），实得 ${ids}`);
+}
+
+/** phase2 占位符断言 */
+function assertPhase2Placeholder(mIn) {
+  if (mIn !== '{{phase1.ids}}') throw new Error(`phase2 占位符异常: ${mIn}`);
+}
+
+/** 命中集断言：应含 A/C/D、不应含 B */
+function assertHitSet(byCode) {
+  if (!byCode.A || !byCode.C || !byCode.D) throw new Error('应含 A/C/D');
+  if (byCode.B) throw new Error('B amount=3 不应命中');
+}
+
+/** 明细断言：A 两条、C 一条、D 空数组 */
+function assertDetailSkus(byCode) {
+  if (byCode.A.items.map((i) => i.sku).sort().join(',') !== 's-x,s-y') throw new Error('A 明细 sku 错');
+  if (byCode.C.items[0].sku !== 's-z') throw new Error('C 明细 sku 错');
+  if (byCode.D.items.length !== 0) throw new Error('D 无明细应为空数组');
+}
+
+/** 还原结果断言（命中集 / 明细 / 降序首条） */
+function assertRestored(byCode, ordered) {
+  assertHitSet(byCode);
+  assertDetailSkus(byCode);
+  if (ordered[0].code !== 'C') throw new Error('按 amount 降序首条应为 C');
 }
 
 (async () => {
   const SQL = await initSqlJs({ locateFile: () => SQLITE_WASM });
   const reg = new Registry();
 
-  reg.register({ name: 'Order', collection: 'orders', timestamps: false,
-    fields: { code: { type: 'string' }, amount: { type: 'float' } },
-    relations: { items: { model: 'OrderItem', type: 'many', localField: '_id', foreignField: 'orderId' } } });
-  reg.register({ name: 'OrderItem', collection: 'order_items', timestamps: false,
-    fields: { orderId: { type: 'string' }, sku: { type: 'string' } },
-    relations: {} });
+  // Order + OrderItem（共用冒烟夹具；t2q 链路不含 qty 列）
+  registerOrderFamily(reg, { withQty: false });
 
   // ── skill 产出 ────────────────────────────────────────
   const gql = 'Order($condition:@c0,$sort:@s0,$limit:@l){ code, amount, items{ sku } }';
@@ -55,12 +78,12 @@ function execute(db, reg, out) {
   const first = execute(db, reg, p1);
   const ids = first.rows.map((r) => r._id);
   console.log('[phase1] _ids:', JSON.stringify(ids));
-  if (ids.join(',') !== 'o3,o4,o1') throw new Error(`phase1 顺序应 o3,o4,o1（amount 降序且 >10），实得 ${ids}`);
+  assertPhase1Order(ids);
 
   // ── 替换 {{phase1.ids}} 进 phase2 ─────────────────────
   const phase2 = JSON.parse(JSON.stringify(plan.commands[1]));
   const mIn = phase2.pipeline[0].$match._id.$in;
-  if (mIn !== '{{phase1.ids}}') throw new Error(`phase2 占位符异常: ${mIn}`);
+  assertPhase2Placeholder(mIn);
   phase2.pipeline[0].$match._id.$in = ids;
 
   const p2 = reg.dialectTranslate('sqlite', phase2);
@@ -75,11 +98,6 @@ function execute(db, reg, out) {
   console.log('\nrestored(按 phase1 排序):', JSON.stringify(ordered, null, 1));
 
   const byCode = Object.fromEntries(ordered.map((d) => [d.code, d]));
-  if (!byCode.A || !byCode.C || !byCode.D) throw new Error('应含 A/C/D');
-  if (byCode.B) throw new Error('B amount=3 不应命中');
-  if (byCode.A.items.map((i) => i.sku).sort().join(',') !== 's-x,s-y') throw new Error('A 明细 sku 错');
-  if (byCode.C.items[0].sku !== 's-z') throw new Error('C 明细 sku 错');
-  if (byCode.D.items.length !== 0) throw new Error('D 无明细应为空数组');
-  if (ordered[0].code !== 'C') throw new Error('按 amount 降序首条应为 C');
+  assertRestored(byCode, ordered);
   console.log('\n✅ text-to-query 产出在 SQLite 端到端跑通：filter+sort+limit + $lookup(many) → 嵌套文档还原');
 })();

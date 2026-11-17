@@ -39,18 +39,28 @@ const parseSemver = (v) => {
   return { core: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] || '' }
 }
 
+// core 三段逐位比较；全等返回 0（交给 prerelease 段）
+const compareCore = (x, y) => {
+  for (let i = 0; i < 3; i++) {
+    if (x.core[i] !== y.core[i]) return x.core[i] > y.core[i] ? 1 : -1
+  }
+  return 0
+}
+
+// prerelease 段比较：无 pre 视为更高；都有则字符串比较
+const comparePre = (x, y) => {
+  if (!x.pre && y.pre) return 1
+  if (x.pre && !y.pre) return -1
+  if (x.pre === y.pre) return 0
+  return x.pre > y.pre ? 1 : -1
+}
+
 // 返回 1 / 0 / -1；任一版本不合法返回 null。
 const compareSemver = (a, b) => {
   const x = parseSemver(a)
   const y = parseSemver(b)
   if (!x || !y) return null
-  for (let i = 0; i < 3; i++) {
-    if (x.core[i] !== y.core[i]) return x.core[i] > y.core[i] ? 1 : -1
-  }
-  if (!x.pre && y.pre) return 1
-  if (x.pre && !y.pre) return -1
-  if (x.pre === y.pre) return 0
-  return x.pre > y.pre ? 1 : -1
+  return compareCore(x, y) || comparePre(x, y)
 }
 
 const currentLatest = (pkg) => npm(['view', pkg, 'dist-tags.latest'])

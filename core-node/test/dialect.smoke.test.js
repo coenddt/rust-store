@@ -15,34 +15,20 @@
 const { test, before } = require('node:test');
 const assert = require('node:assert/strict');
 const initSqlJs = require('sql.js');
-const path = require('node:path');
 
 const { Registry } = require('./_binding');
-
-const SQLITE_WASM = path.join(
-  __dirname,
-  '..',
-  'node_modules',
-  'sql.js',
-  'dist',
-  'sql-wasm.wasm',
-);
+const { SQLITE_WASM, registerOrderFamily, toObjectRows } = require('./helpers/smoke-fixtures');
 
 let SQL;
 let reg = new Registry();
 
 before(async () => {
   SQL = await initSqlJs({ locateFile: () => SQLITE_WASM });
-  // 注册 schema：posts 标量表 + orders/order_items 一对多关系
+  // 注册 schema：posts 标量表 + orders/order_items 一对多关系（共用冒烟夹具）
   reg.register({ name: 'Post', collection: 'posts', timestamps: false,
     fields: { title: { type: 'string' }, status: { type: 'string' }, views: { type: 'int' } },
     relations: {} });
-  reg.register({ name: 'Order', collection: 'orders', timestamps: false,
-    fields: { code: { type: 'string' }, amount: { type: 'float' } },
-    relations: { items: { model: 'OrderItem', type: 'many', localField: '_id', foreignField: 'orderId' } } });
-  reg.register({ name: 'OrderItem', collection: 'order_items', timestamps: false,
-    fields: { orderId: { type: 'string' }, sku: { type: 'string' }, qty: { type: 'int' } },
-    relations: {} });
+  registerOrderFamily(reg);
 });
 
 function db() {
@@ -60,13 +46,7 @@ function runAll(sqlDb, out) {
   }
   if (!lastShape || !lastRows || lastRows.length === 0) return [];
   // 把 columns/values 展开成 [{col:value}] 对象行，再交给 restoreRows
-  const { columns, values } = lastRows[0];
-  const rows = values.map((v) => {
-    const o = {};
-    columns.forEach((c, i) => (o[c] = v[i]));
-    return o;
-  });
-  return reg.restoreRows(lastShape, rows);
+  return reg.restoreRows(lastShape, toObjectRows(lastRows));
 }
 
 test('dialect smoke: insert + find roundtrip on sqlite', () => {
