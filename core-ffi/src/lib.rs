@@ -25,7 +25,7 @@ use rust_store_core::command::{
     finalize_query, plan_archive_docs, plan_insert, plan_query, plan_query_one, plan_remove,
     plan_update, restore_sort_order, Probe, PHASE1_IDS,
 };
-use rust_store_core::computes::FnRegistry;
+use rust_store_core::computes::{apply_computes, FnRegistry};
 use rust_store_core::dialect::{restore_rows_json, translate, Backend};
 use rust_store_core::permission::Context;
 use rust_store_core::schema::Registry;
@@ -401,6 +401,106 @@ pub unsafe extern "C" fn rcore_registry_set_rbac(
             reg.set_rbac(policy_opt)
         })?;
         Ok(json!(null))
+    })
+}
+
+/// 注销 schema（与 core [`Registry::unregister`] 一致：未知 name **幂等成功**，
+/// 派生归档项一并清理、同名重注册版本号从 1 重新计数）。
+///
+/// # Safety
+/// `name` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
+#[no_mangle]
+pub unsafe extern "C" fn rcore_registry_unregister(handle: u64, name: *const c_char) -> *mut c_char {
+    guard(|| {
+        let name = unsafe { cstr(name) }?;
+        with_registries(|map| {
+            let reg = map
+                .get_mut(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            reg.unregister(name)
+        })?;
+        Ok(json!(null))
+    })
+}
+
+/// 开关「上下文强制」（core [`Registry::set_require_context`]；默认关闭 = fail-open）。
+/// 开启后 plan 入口遇 ctx 缺失报 `ERR_NO_CONTEXT`（fail-secure）；`require` 非 0 = 开启。
+///
+/// # Safety
+/// `handle` 必须是本 crate 先前经 `rcore_registry_new` 返回且未释放的句柄。
+#[no_mangle]
+pub unsafe extern "C" fn rcore_registry_set_require_context(handle: u64, require: c_int) -> *mut c_char {
+    guard(|| {
+        with_registries(|map| {
+            let reg = map
+                .get_mut(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            reg.set_require_context(require != 0);
+            Ok(())
+        })?;
+        Ok(json!(null))
+    })
+}
+
+/// 「上下文强制」开关当前值（data: true/false）。
+///
+/// # Safety
+/// `handle` 必须是本 crate 先前经 `rcore_registry_new` 返回且未释放的句柄。
+#[no_mangle]
+pub unsafe extern "C" fn rcore_registry_require_context(handle: u64) -> *mut c_char {
+    guard(|| {
+        let need = with_registries(|map| {
+            let reg = map
+                .get(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            Ok(reg.require_context())
+        })?;
+        Ok(json!(need))
+    })
+}
+
+/// schema 定义只读导出（core [`Registry::schema_definition`]：`name` / `collection` /
+/// `fields`（按声明序，值为 type/required/default/read/write/fields/strategy/dim/metric））。
+///
+/// # Safety
+/// `name` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
+#[no_mangle]
+pub unsafe extern "C" fn rcore_registry_definition(handle: u64, name: *const c_char) -> *mut c_char {
+    guard(|| {
+        let name = unsafe { cstr(name) }?;
+        let defn = with_registries(|map| {
+            let reg = map
+                .get(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            reg.schema_definition(name)
+        })?;
+        Ok(defn)
+    })
+}
+
+/// 写路径结果回喂（core `apply_computes`，**仅同步计算列**、不补默认值）：
+/// 入参须为 `returnDocument: AFTER` 取回的完整落库文档；`fn_registry` 传 None
+/// 与 Rust host 同规——schema 声明 `fn: true` 时显式报错、不静默跳过。
+///
+/// # Safety
+/// `schema_name` / `doc` 必须是合法 NUL 结尾 UTF-8 字符串指针（或 null）。
+#[no_mangle]
+pub unsafe extern "C" fn rcore_apply_write_computes(
+    handle: u64,
+    schema_name: *const c_char,
+    doc: *const c_char,
+) -> *mut c_char {
+    guard(|| {
+        let schema_name = unsafe { cstr(schema_name) }?;
+        let doc = unsafe { json_arg(doc) }?;
+        let out = with_registries(|map| {
+            let reg = map
+                .get(&(handle as usize))
+                .ok_or_else(|| format!("registry 句柄 {handle} 不存在"))?;
+            let schema = reg.get(schema_name)?;
+            apply_computes(&doc, schema, None)
+        })?;
+        Ok(out)
     })
 }
 

@@ -823,6 +823,44 @@ impl Registry {
         self.catalog.entries.contains_key(name)
     }
 
+    /// schema 定义（只读导出）：字段类型 + 嵌套 object 的 `fields` 原始定义。
+    ///
+    /// 与 `Schema` / [`FieldDef`] 同源，直接取自注册表，**不另建 schema 模型**；
+    /// 本方法只做信息暴露，白名单 / 点路径语义由协议皮自行判定。
+    /// `fields` 按 `field_order`（声明序）输出，键同 [`Self::list`] 命名，值为
+    /// 字段定义的直出：`type` / `required` / `default` / `read` / `write` /
+    /// `fields`（嵌套 object 的原始定义，未规范化）/ `strategy` / `dim` / `metric`。
+    ///
+    /// 判决唯一在 core：宿主（host / core-ffi 绑定方）只做薄透传。
+    pub fn schema_definition(&self, name: &str) -> Result<Value, String> {
+        let schema = self.get(name)?;
+        let mut fields = Map::new();
+        for key in &schema.field_order {
+            let Some(f) = schema.fields.get(key) else {
+                continue;
+            };
+            fields.insert(
+                key.clone(),
+                json!({
+                    "type": f.field_type.clone(),
+                    "required": f.required,
+                    "default": f.default.clone(),
+                    "read": f.read.clone(),
+                    "write": f.write.clone(),
+                    "fields": f.fields.clone(),
+                    "strategy": f.strategy.clone(),
+                    "dim": f.dim,
+                    "metric": f.metric.clone(),
+                }),
+            );
+        }
+        Ok(json!({
+            "name": schema.name.clone(),
+            "collection": schema.collection.clone(),
+            "fields": Value::Object(fields),
+        }))
+    }
+
     /// 清空 schema 注册表（`schemas` + `order`），对应绑定层的测试隔离 / 动态重建场景。
     ///
     /// 只清 schema，**不动**配置开关（`require_context` / `profile` / `rbac` /
