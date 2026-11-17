@@ -4,6 +4,15 @@
   "description": "Node.js binding (napi-rs) for the rust-store multi-backend data engine: GQL parsing, permissions, computed columns and SQL dialect translation for MongoDB, MySQL, SQLite and PostgreSQL",
   "main": "index.js",
   "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "require": "./index.js",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json",
+    "./*": "./*"
+  },
   "files": [
     "index.js",
     "index.d.ts",
