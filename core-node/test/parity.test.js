@@ -13,59 +13,24 @@
  *                  （`asyncFnRefs` 取标识，`prepareQuery` + `stripQuery` 两段式）
  *
  * 运行：node --test core-node/test/parity.test.js
+ *
+ * D4-4 零语义拆分：公共骨架（fixtures 装载 / makeRegistry / 深比较收集器 / 套件壳 /
+ * goldenWant / planInsertShape）下沉 test/helpers/parity-harness.js，commands 段的
+ * 命令回放器（占位符替换 / 写路径回放 / 分派表）下沉 test/helpers/parity-replay.js；
+ * 用例名、断言与注释逐字未改。
  */
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
 
 const { Registry } = require('./_binding');
-const { fns, asyncFns } = require('../../tools/test-fns.js');
-
-const FIXTURES = path.join(__dirname, '..', '..', 'fixtures');
-
-const load = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
-const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
-
-/** 建绑定实例并注册 schema / 全部同步 fn 回调（异步回调由 Host 侧直接调用） */
-function makeRegistry(fx) {
-  const reg = new Registry();
-  const schemas = fx.schemas || [];
-  if (schemas.length) {
-    // 定义文件零落点：用例内 schema 的 `datasource` 由本夹具读取，作为 Location 注入
-    reg.registerBatch(
-      schemas.map((s) => ({
-        defn: s,
-        location: { source: s.datasource || 'default', database: null, schema: null },
-      })),
-    );
-  }
-  // 档位：缺省 standard；用例可声明 `"profile": "text2query"` 覆盖（双门禁分离）
-  if (fx.profile) reg.setProfile(fx.profile);
-  for (const [ref, fn] of Object.entries(fns)) reg.setFn(ref, fn);
-  return reg;
-}
-
-/** 依次执行 Host 侧 asyncFn 回调（对齐 core 的 `run_async_fns`） */
-function runAsyncFns(refs, items, ctx) {
-  for (const ref of refs) {
-    const fn = asyncFns[ref];
-    if (!fn) throw new Error(`未注册的异步测试函数: ${ref}`);
-    fn(items, ctx);
-  }
-}
-
-function fmt(v) {
-  return JSON.stringify(v);
-}
-
-function expectDeepEqual(failures, label, actual, want) {
-  if (!isDeepStrictEqual(actual, want)) {
-    failures.push(`  ${label}\n    want: ${fmt(want)}\n    got : ${fmt(actual)}`);
-  }
-}
+const {
+  has, makeRegistry, runAsyncFns, fmt, expectDeepEqual,
+  runParitySuite, execGoldenCase, execGoldenCaseDirect, goldenWant, planInsertShape,
+} = require('./helpers/parity-harness');
+const { runCommandCase } = require('./helpers/parity-replay');
 
 // ─── pipeline ───────────────────────────────────────────────
 
@@ -103,233 +68,6 @@ test('core-node parity: pipeline', () => {
 });
 
 // ─── commands ───────────────────────────────────────────────
-
-/** 把命令里 `{{step.<N>._id}}` 占位符替换为第 N 步模拟执行的 `_id` */
-function substituteStepPlaceholders(value, resolved) {
-  if (typeof value === 'string') {
-    const m = value.match(/^\{\{step\.(\d+)\._id\}\}$/);
-    if (m && resolved[Number(m[1])] !== undefined) return resolved[Number(m[1])];
-    return value;
-  }
-  if (Array.isArray(value)) return value.map((v) => substituteStepPlaceholders(v, resolved));
-  if (value && typeof value === 'object') {
-    const out = {};
-    for (const [k, v] of Object.entries(value)) out[k] = substituteStepPlaceholders(v, resolved);
-    return out;
-  }
-  return value;
-}
-
-/** 写路径公共环境：ctx / now / 回喂后的 updatedDoc */
-function writeEnv(fx) {
-  return { ctx: fx.context ?? null, now: fx.now ?? 0, updated: fx.updatedDoc ?? null };
-}
-
-/** 宿主回喂结果（无 updatedDoc ⇒ null） */
-function returnsOf(reg, fx, env) {
-  return env.updated == null ? null : reg.applyWriteDefaults(fx.model, env.updated);
-}
-
-/** update：creator 受限写入 ⇒ core 先返回探针（宿主回喂后二次规划），黄金基准即 needsProbe 信封 */
-function replayUpdate(reg, fx, env) {
-  const out = reg.planUpdate(
-    fx.model || '', fx.condition ?? null, fx.data ?? null, fx.options ?? null, env.now, env.ctx,
-  );
-  if (out.needsProbe) return out;
-  return { commands: [out.command], returns: returnsOf(reg, fx, env) };
-}
-
-function replayUpdateMany(reg, fx, env) {
-  const out = reg.planUpdateMany(fx.model || '', fx.condition ?? null, fx.data ?? null, env.now, env.ctx);
-  return { command: out.command, returns: { modifiedCount: fx.modifiedCount ?? 0 } };
-}
-
-/** remove 的归档命令段：findCommand 存在才归档，docs 非空才追加 archive 命令并计 archivedCount */
-function archiveCommands(reg, fx, plan, env) {
-  const commands = [];
-  let archivedCount = 0;
-  if (plan.findCommand != null) {
-    commands.push(plan.findCommand);
-    const docs = fx.docs || [];
-    if (docs.length) {
-      commands.push(reg.planArchiveDocs(fx.model || '', docs, env.now).command);
-      archivedCount = docs.length;
-    }
-  }
-  return { commands, archivedCount };
-}
-
-/** remove：creator 受限删除 ⇒ 先返回探针（同上） */
-function replayRemove(reg, fx, env) {
-  const plan = reg.planRemove(fx.model || '', fx.condition ?? null, env.ctx);
-  if (plan.needsProbe) return plan;
-  const { commands, archivedCount } = archiveCommands(reg, fx, plan, env);
-  commands.push(plan.deleteCommand);
-  return { commands, returns: { deletedCount: fx.deletedCount ?? 0, archivedCount } };
-}
-
-function replayUpsert(reg, fx, env) {
-  const out = reg.planUpsert(
-    fx.model || '',
-    fx.condition ?? null,
-    fx.data ?? null,
-    fx.options ?? null,
-    env.now,
-    (fx.newIds || [''])[0] || '',
-    env.ctx,
-  );
-  return { command: out.command, returns: returnsOf(reg, fx, env) };
-}
-
-/** 单步 mutation 命令的模拟结果（insertOne → doc；findOneAndUpdate → 回喂文档） */
-function mutationStepResult(command, env) {
-  if (command.kind === 'insertOne') return command.doc ?? null;
-  if (command.kind === 'findOneAndUpdate') return env.updated;
-  throw new Error(`未支持的 mutation 步骤命令: ${command.kind}`);
-}
-
-function replayMutation(reg, fx, env) {
-  const plan = reg.planMutation(fx.model || '', fx.data ?? null, env.now, fx.newIds || [], env.ctx);
-  const resolved = [];
-  const commands = [];
-  let rootResult;
-  for (const step of plan.steps) {
-    const command = substituteStepPlaceholders(step.command, resolved);
-    const result = mutationStepResult(command, env);
-    if (rootResult === undefined) rootResult = result;
-    resolved.push(result ? result._id ?? null : null);
-    commands.push(command);
-  }
-  const returns = rootResult == null ? null : reg.applyWriteDefaults(fx.model, rootResult);
-  return { commands, returns };
-}
-
-/** 写路径分派表：kind → 比较结构（未知 kind 返回 null，表示非 write 用例） */
-const WRITE_REPLAYERS = {
-  insert_many: (reg, fx, env) => reg.planInsertMany(fx.model || '', fx.docs || [], env.now, fx.newIds || [], env.ctx),
-  update: replayUpdate,
-  update_many: replayUpdateMany,
-  remove: replayRemove,
-  upsert: replayUpsert,
-  mutation: replayMutation,
-};
-
-/** 写路径统一回放：Host 模拟执行命令并回喂结果（对齐 parity_write.rs） */
-function replayWriteCase(reg, fx) {
-  const replayer = WRITE_REPLAYERS[fx.kind];
-  return replayer ? replayer(reg, fx, writeEnv(fx)) : null;
-}
-
-/** commands / federation 共用的黄金基准期望口径：error 信封 or result or null */
-function goldenWant(g) {
-  return g.error === true ? { error: true } : has(g, 'result') ? g.result : null;
-}
-
-/** planInsert 的比较结构（commands / fnfns 两分派器同构段）：返回 {command, returns, newId} */
-function planInsertShape(reg, fx, ctx) {
-  const out = reg.planInsert(
-    fx.model || '',
-    fx.data ?? null,
-    fx.now ?? 0,
-    fx.newId || '',
-    ctx,
-  );
-  const command = out.command ?? null;
-  return {
-    command,
-    returns: out.returns ?? null,
-    newId: command && command.doc ? command.doc._id ?? null : null,
-  };
-}
-
-/**
- * parity 套件统一骨架（pipeline/commands/computes/fnfns/federation/local 六套件共用）：
- * 加载 cases/expected → 数量与顺序断言 → 逐条 execCase 收集 failures → 汇总断言。
- * 各套件错误消息文案（`${suite} 对拍失败 …`）经 suite 参数原样保留；
- * goldensRel 兼容 pipeline 的特殊路径（expected/cases.json，其余为 <suite>/expected.json）。
- */
-function runParitySuite(suite, goldensRel, execCase) {
-  const cases = load(path.join(FIXTURES, suite, 'cases.json'));
-  const goldens = load(path.join(FIXTURES, goldensRel));
-  assert.equal(cases.length, goldens.length, '输入与黄金基准用例数不一致');
-
-  const failures = [];
-
-  cases.forEach((fx, i) => {
-    const g = goldens[i];
-    assert.equal(fx.name, g.name, '用例顺序不一致');
-    execCase(g, fx, failures);
-  });
-
-  assert.equal(failures.length, 0, `${suite} 对拍失败 ${failures.length} 项:\n${failures.join('\n')}`);
-}
-
-/**
- * 单条 parity 用例的三态执行壳（commands / federation / local 同构）：
- * try 执行 → expect_error / err 分流 → 与黄金基准深比较。
- * pipeline（期望报错文案与 per-key 比较不同）不套本壳；computes / fnfns 无 expect_error 分支走 execGoldenCaseDirect。
- */
-function execGoldenCase(fx, g, failures, runCase, wantOf) {
-  let actual = null;
-  let err = null;
-  try {
-    actual = runCase(fx);
-  } catch (e) {
-    err = e;
-  }
-
-  if (fx.expect_error) {
-    if (!err) failures.push(`[${fx.name}] 期望报错，但绑定未报错: ${fmt(actual)}`);
-    return;
-  }
-  if (err) {
-    failures.push(`[${fx.name}] 绑定报错: ${err.message}`);
-    return;
-  }
-
-  expectDeepEqual(failures, `${fx.name}`, actual, wantOf(g));
-}
-
-/** 单条 parity 用例的两态执行壳（computes / fnfns 同构）：报错即记入，否则与黄金基准深比较 */
-function execGoldenCaseDirect(fx, g, failures, runCase, wantOf) {
-  let actual;
-  try {
-    actual = runCase(fx);
-  } catch (e) {
-    failures.push(`[${fx.name}] 绑定报错: ${e.message}`);
-    return;
-  }
-  expectDeepEqual(failures, `${fx.name}`, actual, wantOf(g));
-}
-
-/** exists 用例：命令 + 「命中/未命中」与单元素集合视图 */
-function planExistsCase(reg, fx) {
-  const command = reg.planExists(fx.model || '', fx.condition ?? {});
-  return {
-    command,
-    found: fx.foundDoc != null,
-    collections: [command.collection ?? null],
-  };
-}
-
-/** 只读/单命令分派表（写路径用例不在表内，由 replayWriteCase 兜住） */
-const COMMAND_PLANNERS = {
-  query: (reg, fx, ctx) => reg.planQuery(fx.gql || '', fx.params || {}, ctx),
-  query_with_count: (reg, fx, ctx) => reg.planQueryWithCount(fx.gql || '', fx.params || {}, ctx, fx.total ?? 0),
-  resolve_page: (reg, fx) => reg.resolvePage(fx.gql || '', fx.params || {}),
-  restore_sort_order: (reg, fx) => reg.restoreSortOrder(fx.items || [], fx.ids || [], fx.sort ?? null),
-  insert: (reg, fx, ctx) => planInsertShape(reg, fx, ctx),
-  exists: planExistsCase,
-  count: (reg, fx) => ({ command: reg.planCount(fx.model || '', fx.filter ?? null) }),
-};
-
-/** 按 `kind` 分派，产出与 parity_commands.rs 完全相同的比较结构 */
-function runCommandCase(reg, fx) {
-  const planner = COMMAND_PLANNERS[fx.kind];
-  if (planner) return planner(reg, fx, fx.context ?? null);
-  // 写路径用例走 replayWriteCase（对齐 parity_write.rs 的 Host 模拟执行）
-  return replayWriteCase(reg, fx);
-}
 
 test('core-node parity: commands', () => {
   runParitySuite('commands', path.join('commands', 'expected.json'), (g, fx, failures) => {
@@ -520,4 +258,3 @@ test('core-node parity: local', () => {
       : { result: has(g, 'result') ? g.result : null, changed: g.changed, collections: g.collections }));
   });
 });
-
