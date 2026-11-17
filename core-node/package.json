@@ -69,9 +69,22 @@
   },
   "optionalDependencies": {
     "rust-store-node-win32-x64-msvc": "6.0.3",
+    "rust-store-node-win32-arm64-msvc": "6.0.3",
+    "rust-store-node-win32-ia32-msvc": "6.0.3",
     "rust-store-node-linux-x64-gnu": "6.0.3",
+    "rust-store-node-linux-x64-musl": "6.0.3",
     "rust-store-node-linux-arm64-gnu": "6.0.3",
+    "rust-store-node-linux-arm64-musl": "6.0.3",
+    "rust-store-node-linux-arm-gnueabihf": "6.0.3",
+    "rust-store-node-linux-arm-musleabihf": "6.0.3",
+    "rust-store-node-linux-riscv64-gnu": "6.0.3",
+    "rust-store-node-linux-riscv64-musl": "6.0.3",
+    "rust-store-node-linux-s390x-gnu": "6.0.3",
+    "rust-store-node-freebsd-x64": "6.0.3",
     "rust-store-node-darwin-x64": "6.0.3",
-    "rust-store-node-darwin-arm64": "6.0.3"
+    "rust-store-node-darwin-arm64": "6.0.3",
+    "rust-store-node-darwin-universal": "6.0.3",
+    "rust-store-node-android-arm64": "6.0.3",
+    "rust-store-node-android-arm-eabi": "6.0.3"
   }
 }
