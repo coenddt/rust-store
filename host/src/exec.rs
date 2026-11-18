@@ -238,7 +238,10 @@ macro_rules! exec_backend {
             let mut docs: Vec<Value> = Vec::new();
             let mut changes: u64 = 0;
             for stmt in &translated.stmts {
-                let mut q = sqlx::query(&stmt.text);
+                // sqlx 0.9 起动态 SQL 须显式审计（SqlSafeStr）：stmt.text 由 core 引擎
+                // 规划期受控生成，占位符只替换命令参数树（substitute_ids），值一律走
+                // params 绑定、无用户文本插值进 SQL 文本——审计通过，用 AssertSqlSafe 放行。
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(stmt.text.clone()));
                 for p in &stmt.params {
                     q = $bind(q, p);
                 }
@@ -321,7 +324,8 @@ macro_rules! bind_impl {
     };
 }
 
-bind_impl!(bind_sqlite, sqlx::Sqlite, SqliteArguments<'q>);
+// sqlx 0.9：SqliteArguments 不再携带生命周期参数（由内部自行管理）
+bind_impl!(bind_sqlite, sqlx::Sqlite, SqliteArguments);
 bind_impl!(bind_mysql, sqlx::MySql, MySqlArguments);
 bind_impl!(bind_pg, sqlx::Postgres, PgArguments);
 
