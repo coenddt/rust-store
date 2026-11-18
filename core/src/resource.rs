@@ -34,13 +34,16 @@ pub fn ref_kind(reference: &str) -> &'static str {
 }
 
 /// URL 纯组合（无 IO）。cfg：
-///   {
-///     "baseUrl": "https://cdn.example.com",
-///     "pathTemplate": "/{contentPath}",          // 默认 "{key}"；可用 {key}/{sha1}/{contentPath}
-///     "query": { "x-oss-process": "image/resize,w_{w}" },  // 值内可含 {var}
-///     "vars": { "w": "200", "h": "100" },        // 供模板与 query 值替换
-///     "externalPassthrough": true                 // 默认 true；false 时遇外部 URL 显式 Err
-///   }
+///
+/// ```json
+/// {
+///   "baseUrl": "https://cdn.example.com",
+///   "pathTemplate": "/{contentPath}",          // 默认 "{key}"；可用 {key}/{sha1}/{contentPath}
+///   "query": { "x-oss-process": "image/resize,w_{w}" },  // 值内可含 {var}
+///   "vars": { "w": "200", "h": "100" },        // 供模板与 query 值替换
+///   "externalPassthrough": true                 // 默认 true；false 时遇外部 URL 显式 Err
+/// }
+/// ```
 ///
 /// 规则：
 ///   1. reference 为空 → Err；

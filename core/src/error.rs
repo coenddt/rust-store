@@ -11,10 +11,10 @@
 //!   `no_context` / `profile_blocked` / `other`——四端（宿主 + 四皮）据此映射对外语义，
 //!   与字符串前缀解耦。`Parse` / `NotFound` / `Validation` 三档按 R3 分步计划后续细化
 //!   （本步先落上列四档，见 `doc/execution/2026/10/...-02-...` §4.3）。
-//! - [`Display`] 输出**保留完整原始文案（含哨兵前缀）**：既有的「按前缀识别」
+//! - [`std::fmt::Display`] 输出**保留完整原始文案（含哨兵前缀）**：既有的「按前缀识别」
 //!   Host 逻辑（含 `ERR_PERMISSION:` 剥离）不受影响，宿主可渐进迁移。
 //!
-//! 分类依据只引用 [`crate::command`] 的哨兵常量本体，靠 [`tests`] 模块锁定
+//! 分类依据只引用 [`crate::command`] 的哨兵常量本体，靠 `tests` 模块锁定
 //! 「常量前缀 ↔ 变体 ↔ machine code」关系，文案可自由调整而不破坏分类。
 
 use crate::command::{ERR_NOT_FOUND, ERR_NO_CONTEXT, ERR_PERM_PREFIX, ERR_TEXT2QUERY};

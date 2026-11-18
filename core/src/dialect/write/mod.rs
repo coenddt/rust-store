@@ -7,7 +7,7 @@
 //! `UPDATE/INSERT` + `SELECT` 两条语句，由 Host 执行器顺序执行（执行器只做「绑定 + 执行」，
 //! 不做任何 SQL 拼装）。
 //!
-//! 文件组织：INSERT 在 [`insert`]，UPDATE / 回读在 [`update`]，upsert 在 [`upsert`]；
+//! 文件组织：INSERT 在 `insert`，UPDATE / 回读在 `update`，upsert 在 `upsert`；
 //! 派发入口与共享工具（Binder / 标识符引用 / 回读列）在本文件。
 
 use serde_json::{json, Value};

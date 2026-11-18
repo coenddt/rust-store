@@ -7,7 +7,7 @@
 //! `ctx: None` = 「系统内部调用，跳过权限检查」——与 JS 原版 `if (ctx)` 语义对齐，
 //! **默认 fail-open**（调用方忘传 ctx 不会报错而是放行）。对安全敏感的宿主应：
 //!
-//! 1. 开启 [`crate::schema::Registry::set_require_context(true)`]：此后 `ctx` 缺失
+//! 1. 开启 [`crate::schema::Registry::set_require_context`]（传 `true`）：此后 `ctx` 缺失
 //!    在所有 plan 入口显式报错（fail-secure opt-in，默认关闭以保持三端 parity）；
 //! 2. 内部调用（索引创建、归档回填等）显式传 [`Context::system`]，
 //!    与「忘传 ctx」在语义上彻底分离。

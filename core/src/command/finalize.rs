@@ -82,7 +82,7 @@ pub fn strip_query(postprocess: &Value, items: &mut [Value]) {
 ///   2. 批量执行 asyncFn 计算列（权限过滤）
 ///   3. 剥离 asyncFn 依赖注入的字段
 ///
-/// `postprocess` 即 [`QueryPlan::to_value`] 里的 `postprocess` 字段（`{ast, inject}` 形状）；
+/// `postprocess` 即 [`crate::command::QueryPlan::to_value`] 里的 `postprocess` 字段（`{ast, inject}` 形状）；
 /// 传入 `null` 视为无后处理（绑定层防御性兜底）。
 ///
 /// 这是「core 内直接执行 asyncFn」的入口（Rust Host / 测试用）；

@@ -38,14 +38,14 @@
 //! `new_ids` / `new_id` 参数，core 按序消费（core 无随机源）。
 //!
 //! 子模块划分：
-//!   - [`cmd`]：命令构造 + 数值工具
-//!   - [`query`]：读路径计划（分页 / 两阶段 / 排序还原）
-//!   - [`count`]：列表 + total 计划
+//!   - `cmd`：命令构造 + 数值工具
+//!   - `query`：读路径计划（分页 / 两阶段 / 排序还原）
+//!   - `count`：列表 + total 计划
 //!   - [`write`]：插入与简单查询计划 + 写权限探针
-//!   - [`mutate`]：update / updateMany / remove / upsert / insertMany 计划
-//!   - [`mutation`]：mutation 递归规划（父子文档步骤序列）
-//!   - [`finalize`]：结果回喂（后处理 / asyncFn 桥 / 剥离注入）
-//!   - [`claim`] / [`cas`]：并发原语计划（领取 / 比较并写，`atomic_commands` 事务序列）
+//!   - `mutate`：update / updateMany / remove / upsert / insertMany 计划
+//!   - `mutation`：mutation 递归规划（父子文档步骤序列）
+//!   - `finalize`：结果回喂（后处理 / asyncFn 桥 / 剥离注入）
+//!   - `claim` / `cas`：并发原语计划（领取 / 比较并写，`atomic_commands` 事务序列）
 
 mod cas;
 mod claim;

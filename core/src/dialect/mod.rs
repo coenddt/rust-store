@@ -97,7 +97,7 @@ pub enum JsonKind {
     Array,
 }
 
-/// 字段 → 列引用（见 [`field_column_ref`]）：区分标量列 / JSON 整列 / JSON 点号路径。
+/// 字段 → 列引用（见 `field_column_ref`）：区分标量列 / JSON 整列 / JSON 点号路径。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ColumnRef {
     /// 标量列：字段名（调用方按表别名限定 + 引号化）
@@ -174,7 +174,7 @@ impl Backend {
     /// 双重引号标识符
     ///
     /// **仅用于别名 / 已物理名**（`t`、`r0`、`__present`、`__rn`、`fk`、`v`… 等合成名）。
-    /// 逻辑数据标识符（字段 / 关系字段 / 计算列 key / 表名）一律走 [`Backend::pcol`]。
+    /// 逻辑数据标识符（字段 / 关系字段 / 计算列 key / 表名）一律走 `Backend::pcol`。
     pub fn quote_ident(&self, ident: &str) -> String {
         match self {
             Backend::Mysql => format!("`{}`", ident.replace('`', "``")),
@@ -205,7 +205,7 @@ impl Backend {
     /// 表名 → SQL：`database` / `schema` 可选限定（空串按 `None` 处理）。
     ///
     /// **PG 用 `schema` 限定**（`"schema"."table"`；database 由连接承载，**禁**跨库限定）；
-    /// **MySQL/SQLite 用 `database` 限定**（`"db"."table"`）。表名走 [`physical_of`]（物理名）。
+    /// **MySQL/SQLite 用 `database` 限定**（`"db"."table"`）。表名走 `physical_of`（物理名）。
     /// 见设计 §3.2 / §6.4。
     pub fn qualified_table(
         &self,
@@ -268,7 +268,7 @@ impl Backend {
     /// 三者统一为「提取后标量（数值/字符串）」，供比较与 `ORDER BY` 使用；
     /// `col` 须为已按后端引号化的**列标识符**，`path` 为点号各段（不含列名）。
     ///
-    /// **注入防护（N1）**：每段先过 [`validate_json_path_seg`] 白名单校验，段含
+    /// **注入防护（N1）**：每段先过 `validate_json_path_seg` 白名单校验，段含
     /// `'` / `\` / `"` / `,` / 控制字符等 → 显式 `Err`（前缀 `ERR_GQL_PARSE:`），
     /// 绝不静默丢弃/替换；输出层再按后端字面量口径转义（纵深防御）。
     pub fn json_extract_scalar(&self, col: &str, path: &[&str]) -> Result<String, String> {

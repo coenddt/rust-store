@@ -193,7 +193,7 @@ fn compare_numbers(a: &Value, b: &Value) -> Ordering {
 
 /// 数字取值（普通 JSON number / 扩展 `$numberLong` / `$numberDecimal` 统一为 f64）；非数字 → `None`。
 ///
-/// 与 [`numeric_value`] 的差别：本函数对非数字返回 `None`（供聚合累积器判定「是否忽略该值」），
+/// 与 `numeric_value` 的差别：本函数对非数字返回 `None`（供聚合累积器判定「是否忽略该值」），
 /// 后者返回 `0.0`（供比较排序，任何值都可参与）。
 pub fn as_number(v: &Value) -> Option<f64> {
     match v {

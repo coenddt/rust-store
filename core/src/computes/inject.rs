@@ -77,7 +77,7 @@ impl InjectInfo {
         )]))
     }
 
-    /// 从 [`to_value`] 产出的 JSON 重建（供 finalize_query 从 plan.postprocess 还原）
+    /// 从 [`Self::to_value`] 产出的 JSON 重建（供 finalize_query 从 plan.postprocess 还原）
     pub fn from_value(v: &Value) -> InjectInfo {
         let mut relations = Vec::new();
         let mut fields = Vec::new();

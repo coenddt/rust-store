@@ -7,11 +7,11 @@
 //!   - 模块级 `_defaultsCache` 改为每次调用现算（无跨请求共享状态）。
 //!
 //! 子模块划分：
-//!   - [`registry`]：fn / asyncFn 回调桥
-//!   - [`cache`]：schema 维度缓存（默认值 / 计算列声明）
-//!   - [`defaults`]：字段默认值填充 + 同步计算列
-//!   - [`inject`]：asyncFn depends 注入 / 剔除
-//!   - [`run`]：processNode 主流程与 asyncFn 批量执行
+//!   - `registry`：fn / asyncFn 回调桥
+//!   - `cache`：schema 维度缓存（默认值 / 计算列声明）
+//!   - `defaults`：字段默认值填充 + 同步计算列
+//!   - `inject`：asyncFn depends 注入 / 剔除
+//!   - `run`：processNode 主流程与 asyncFn 批量执行
 
 mod cache;
 mod defaults;

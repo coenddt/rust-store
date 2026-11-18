@@ -33,7 +33,7 @@ pub fn matches(doc: &Value, filter: &Value) -> Result<bool, String> {
 
 /// 带变量上下文的过滤求值：`vars` 供 `$lookup` 子管道 `$match.$expr` 里的 `$$var` 引用。
 ///
-/// 语义与 [`matches`] 完全一致，仅额外注入 `$$let` 变量（core 的关系 `$lookup` 子管道
+/// 语义与 [`matches()`] 完全一致，仅额外注入 `$$let` 变量（core 的关系 `$lookup` 子管道
 /// 以 `{$expr: {$eq: ["$fk", "$$rel_x"]}}` 形态做外键匹配，故本层必须支持 `$expr`）。
 pub fn matches_with_vars(
     doc: &Value,

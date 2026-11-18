@@ -75,7 +75,7 @@ struct EdgeSpec {
 /// 生成联邦计划（纯逻辑）
 ///
 /// `ds_config`：`{ "sources": { name: kind } }`（Host `init` 时的 kind 配置；
-/// `null` = 单源 Mongo）。下推判定依赖它区分 SQL / Mongo（见 [`select::compatible`]）。
+/// `null` = 单源 Mongo）。下推判定依赖它区分 SQL / Mongo（见 `select::compatible`）。
 ///
 /// 单源（无跨源关系）时同样可用：`sources` 只有根单元、`join.edges` 为空，
 /// Host 走与单库一致的执行路径。

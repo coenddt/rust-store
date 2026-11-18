@@ -16,8 +16,8 @@
 //! 经 `impl ToNapiValue for Error` 序列化成一个 `{code}` 对象返回给 JS，而非抛出。
 //!
 //! 文件组织：本文件只放「类定义 + 注册/回调注册等骨架方法」，其余方法按职责
-//! 分块在 [`methods`]（同 struct 多个 `#[napi] impl` 块）；通用转换见 [`convert`]，
-//! 回调适配见 [`fns`]。
+//! 分块在 `methods`（同 struct 多个 `#[napi] impl` 块）；通用转换见 `convert`，
+//! 回调适配见 `fns`。
 
 use std::cell::RefCell;
 use std::collections::HashMap;

@@ -1,6 +1,6 @@
 //! `accessKeys` 运行时判决（读路径行条件 + 写路径子集校验的公共解析）。
 //!
-//! 声明解析见 [`crate::schema::access_keys`]；本模块只消费已校验的
+//! 声明解析见 [`crate::schema::parse_access_keys`]；本模块只消费已校验的
 //! [`crate::schema::AccessKeyDef`] 与 [`crate::permission::Context`] 清单。
 //!
 //! 语义：

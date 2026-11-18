@@ -12,7 +12,7 @@ use crate::types::str_list;
 
 /// 事件名（insert / update / remove / schedule；其余键注册期 Err）。
 /// `schedule` 仅注册期接受 —— 写链永不 expand("schedule")，由宿主定时任务插件
-/// 经 [`crate::command::triggers::expand_schedule_triggers`] 枚举执行。
+/// 经 [`crate::command::expand_schedule_triggers`] 枚举执行。
 pub const EVENTS: [&str; 4] = ["insert", "update", "remove", "schedule"];
 
 /// 命令式触发支持的 op 白名单（首批不含 upsert）

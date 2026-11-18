@@ -264,7 +264,7 @@ impl Store {
     /// schema 定义（只读导出）：字段类型 + 嵌套 object 的 `fields` 原始定义。
     ///
     /// 判决唯一在 core：组装逻辑在 [`rust_store_core::schema::Registry::schema_definition`]，
-    /// 本方法仅薄透传（`fields` 按 `field_order` 声明序输出，键同 [`schema_fields`]）。
+    /// 本方法仅薄透传（`fields` 按 `field_order` 声明序输出，键同 [`Self::schema_fields`]）。
     pub fn schema_definition(&self, schema_name: &str) -> Result<Value, String> {
         exec::with_registry(&self.registry, |reg| reg.schema_definition(schema_name))
     }

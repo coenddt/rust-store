@@ -8,14 +8,14 @@
 //! 值用 `@key` 引用 params 对象。
 //!
 //! 子模块划分（按职责，非按行数平均切）：
-//!   - [`token`]：词法分析
-//!   - [`ast`]：AST 数据定义与 JSON 互转
+//!   - `token`：词法分析
+//!   - `ast`：AST 数据定义与 JSON 互转
 //!   - [`parse`]：语法分析
-//!   - [`lookup`]：$lookup / $addFields 阶段构建
-//!   - [`group`]：根级 $group / $having 成组聚合（§9.2(1)）
-//!   - [`build`]：整条 pipeline 的编排
-//!   - [`projection`]：$project 投影构建
-//!   - [`util`]：跨模块共享的小工具
+//!   - `lookup`：$lookup / $addFields 阶段构建
+//!   - `group`：根级 $group / $having 成组聚合（§9.2(1)）
+//!   - `build`：整条 pipeline 的编排
+//!   - `projection`：$project 投影构建
+//!   - `util`：跨模块共享的小工具
 
 mod ast;
 mod build;

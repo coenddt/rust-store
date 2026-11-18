@@ -1,7 +1,7 @@
 //! Mongo filter → WHERE 子句（参数化）
 //!
 //! 文件组织：本文件负责上下文与结构遍历（`build_filter` / `Ctx` / 逻辑组 / 字段条件），
-//! 单字段**操作符翻译**在 [`op`]。
+//! 单字段**操作符翻译**在 `op`。
 
 use serde_json::{Map, Value};
 

@@ -498,12 +498,12 @@ impl Registry {
     /// 带定位的批量注册（D13：唯一性校验落「装载批次集合」）。
     ///
     /// 算法（**先构造后落库，任一步 Err ⇒ 零副作用**）：
-    /// 1. 判据单点 [`classify_batch`]（分组 / 主唯一 ≥2 ⇒ `Err` / 批内四元组冲突），与
+    /// 1. 判据单点 `classify_batch`（分组 / 主唯一 ≥2 ⇒ `Err` / 批内四元组冲突），与
     ///    `schema::load::plan_load` 同源。
     /// 2. `can_register` 门禁（判决先于 `build_schema`）。
     /// 3. 逐组：有主 ⇒ `build_schema` 为 **主**；0 主 ⇒ 追加既有同名 entry 的从链路，无既有 ⇒ `Err`。
     /// 4. 全批 + 既有 `(source, database, schema, collection)` 跨名冲突 ⇒ `Err`
-    ///    （判据函数 [`detect_location_conflict`]，替代旧 `check_location_unique`）。
+    ///    （判据函数 `detect_location_conflict`，替代旧 `check_location_unique`）。
     /// 5. 提交：`links = [primary.loc] ++ replicas`；命中既有 entry ⇒ `version + 1`
     ///    （`order` 位置不变）、替换结构与链路；新名 ⇒ `version = 1`、`order.push`。
     ///    `Schema.source/database/schema` 由 `primary.loc` 注入（`source == "default"` ⇒ `None`）。
@@ -678,7 +678,7 @@ impl Registry {
     /// 把 `config.links` 的角色/优先级附着到各 entry 的链路集；声明但缺失的链路按声明序补建。
     ///
     /// 算法（**先校验后落库，任一 `Err` ⇒ 零副作用**，与 [`Self::register_batch`] 同规）：
-    /// 1. 逐项取 [`Self::get_entry`]（未注册 ⇒ `Err`，禁猜——该名可能由其它批次注册）。
+    /// 1. 逐项取 `Self::get_entry`（未注册 ⇒ `Err`，禁猜——该名可能由其它批次注册）。
     /// 2. 每条声明按 [`Location::same_place`] 在 `entry.links` 中匹配来源（只比三元组）：
     ///    命中 ⇒ 写回 `role`/`priority`；未命中 ⇒ 按**声明序**追加 `Location`。
     /// 3. 归档随附表 `<Name>Deleted`（若已注册且未在 `links` 中独立声明）继承主的重算链路。
@@ -751,7 +751,7 @@ impl Registry {
     ///
     /// `links[0]` 即读路径的选中落点（替代 `primary_location` 在读路径的角色；
     /// `primary_location` 保留供写路径与兼容入口）。可达过滤判据单点在
-    /// [`federation::plan::select::filter_reachable`](crate::federation::plan::select::filter_reachable)，
+    /// `federation::plan::select::filter_reachable`（`pub(super)`，仅 federation 内部可见），
     /// 本函数**不重复**该判据。
     pub fn resolve_read_links(
         &self,
@@ -936,7 +936,7 @@ impl Registry {
 
     /// 设置跨连接写策略（默认 [`WriteLinkPolicy::Reject`]）。
     ///
-    /// 判决唯一在 core（[`crate::command::write_links::resolve_write_links`]）；
+    /// 判决唯一在 core（[`crate::command::resolve_write_links`]）；
     /// 宿主仅需在初始化期把它透传到 registry。
     pub fn set_write_link_policy(&mut self, policy: WriteLinkPolicy) {
         self.policy.write_link_policy = policy;

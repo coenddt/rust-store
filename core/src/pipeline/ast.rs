@@ -32,7 +32,7 @@ impl RelAst {
         ]))
     }
 
-    /// 从 [`to_value`] 产出的 JSON 重建（供 finalize_query 从 plan.postprocess 还原 AST）
+    /// 从 [`Self::to_value`] 产出的 JSON 重建（供 finalize_query 从 plan.postprocess 还原 AST）
     pub fn from_value(v: &Value) -> Result<RelAst, String> {
         let obj = v
             .as_object()
@@ -95,7 +95,7 @@ impl Ast {
         ]))
     }
 
-    /// 从 [`to_value`] 产出的 JSON 重建（供 finalize_query 从 plan.postprocess 还原 AST）
+    /// 从 [`Self::to_value`] 产出的 JSON 重建（供 finalize_query 从 plan.postprocess 还原 AST）
     pub fn from_value(v: &Value) -> Result<Ast, String> {
         let obj = v.as_object().ok_or_else(|| "Ast 必须是对象".to_string())?;
         let model = obj
