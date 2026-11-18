@@ -1,6 +1,6 @@
 {
   "name": "rust-store-node",
-  "version": "6.0.4",
+  "version": "6.0.5",
   "description": "Node.js binding (napi-rs) for the rust-store multi-backend data engine: GQL parsing, permissions, computed columns and SQL dialect translation for MongoDB, MySQL, SQLite and PostgreSQL",
   "main": "index.js",
   "types": "index.d.ts",
@@ -24,23 +24,20 @@
     "node": ">=18"
   },
   "napi": {
-    "name": "rust-store-node",
-    "triples": {
-      "defaults": false,
-      "additional": [
-        "x86_64-pc-windows-msvc",
-        "x86_64-unknown-linux-gnu",
-        "aarch64-unknown-linux-gnu",
-        "x86_64-apple-darwin",
-        "aarch64-apple-darwin"
-      ]
-    }
+    "binaryName": "rust-store-node",
+    "targets": [
+      "x86_64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin"
+    ]
   },
   "scripts": {
     "build": "napi build --platform --release && node scripts/patch-napi-loader.mjs",
     "build:debug": "napi build --platform && node scripts/patch-napi-loader.mjs",
     "artifacts": "napi artifacts",
-    "prepublishOnly": "napi prepublish -t npm --skip-gh-release",
+    "prepublishOnly": "napi pre-publish -t npm",
     "test": "node --test test/parity.test.js test/dialect.smoke.test.js test/t2q.skill.test.js test/perm.bindings.test.js test/registry.bindings.test.js test/write_computes.bindings.test.js test/async_fn_refs.bindings.test.js"
   },
   "keywords": [
@@ -73,27 +70,27 @@
   },
   "homepage": "https://coenddt.github.io/rust-store/",
   "devDependencies": {
-    "@napi-rs/cli": "^2.18.4",
+    "@napi-rs/cli": "^3.10.12",
     "sql.js": "^1.8.0"
   },
   "optionalDependencies": {
-    "rust-store-node-win32-x64-msvc": "6.0.4",
-    "rust-store-node-win32-arm64-msvc": "6.0.3",
-    "rust-store-node-win32-ia32-msvc": "6.0.3",
-    "rust-store-node-linux-x64-gnu": "6.0.4",
-    "rust-store-node-linux-x64-musl": "6.0.3",
-    "rust-store-node-linux-arm64-gnu": "6.0.4",
-    "rust-store-node-linux-arm64-musl": "6.0.3",
+    "rust-store-node-android-arm-eabi": "6.0.3",
+    "rust-store-node-android-arm64": "6.0.3",
+    "rust-store-node-darwin-arm64": "6.0.5",
+    "rust-store-node-darwin-universal": "6.0.3",
+    "rust-store-node-darwin-x64": "6.0.5",
+    "rust-store-node-freebsd-x64": "6.0.3",
     "rust-store-node-linux-arm-gnueabihf": "6.0.3",
     "rust-store-node-linux-arm-musleabihf": "6.0.3",
+    "rust-store-node-linux-arm64-gnu": "6.0.5",
+    "rust-store-node-linux-arm64-musl": "6.0.3",
     "rust-store-node-linux-riscv64-gnu": "6.0.3",
     "rust-store-node-linux-riscv64-musl": "6.0.3",
     "rust-store-node-linux-s390x-gnu": "6.0.3",
-    "rust-store-node-freebsd-x64": "6.0.3",
-    "rust-store-node-darwin-x64": "6.0.4",
-    "rust-store-node-darwin-arm64": "6.0.4",
-    "rust-store-node-darwin-universal": "6.0.3",
-    "rust-store-node-android-arm64": "6.0.3",
-    "rust-store-node-android-arm-eabi": "6.0.3"
+    "rust-store-node-linux-x64-gnu": "6.0.5",
+    "rust-store-node-linux-x64-musl": "6.0.3",
+    "rust-store-node-win32-arm64-msvc": "6.0.3",
+    "rust-store-node-win32-ia32-msvc": "6.0.3",
+    "rust-store-node-win32-x64-msvc": "6.0.5"
   }
 }

@@ -1003,7 +1003,7 @@ dependencies = [
 
 [[package]]
 name = "rust-store-core"
-version = "6.0.4"
+version = "6.0.5"
 dependencies = [
  "regex",
  "serde_json",
@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "rust-store-node"
-version = "6.0.4"
+version = "6.0.5"
 dependencies = [
  "napi",
  "napi-build",
@@ -1031,7 +1031,7 @@ dependencies = [
 
 [[package]]
 name = "rust-store-py"
-version = "6.0.4"
+version = "6.0.5"
 dependencies = [
  "pyo3",
  "rust-store-core",

@@ -1,9 +1,6 @@
 {
   "name": "rust-store-node-darwin-arm64",
-  "version": "6.0.4",
-  "os": [
-    "darwin"
-  ],
+  "version": "6.0.5",
   "cpu": [
     "arm64"
   ],
@@ -31,7 +28,7 @@
     "ai-agent",
     "rust"
   ],
-  "author": "leo <coen_ddt@qq.com>",
+  "author": "丁滔 <coen_ddt@qq.com>",
   "homepage": "https://coenddt.github.io/rust-store/",
   "license": "MIT",
   "engines": {
@@ -43,5 +40,8 @@
   },
   "bugs": {
     "url": "https://github.com/coenddt/rust-store/issues"
-  }
+  },
+  "os": [
+    "darwin"
+  ]
 }

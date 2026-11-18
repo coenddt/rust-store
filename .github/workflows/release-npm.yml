@@ -90,8 +90,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: core-node/artifacts
+      # @napi-rs/cli 3 起 create-npm-dir（单数、-t 模板目录）更名为 create-npm-dirs，
+      # 目标目录由 --npm-dir 指定，默认即 core-node/npm（本仓既有布局），故无需传参。
       - name: Create npm dirs
-        run: npx napi create-npm-dir -t .
+        run: npx napi create-npm-dirs
       - name: Stage platform binaries
         run: npx napi artifacts
       - name: Pack & inspect (must not contain target/ node_modules/ logs)
@@ -109,11 +111,13 @@ jobs:
           echo "version=$VERSION tag=$TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
       - name: Publish (platform sub-packages + main)
-        # 平台子包可能已在中断的重跑中发布过：`napi prepublish` 遇到已存在版本会 403，
+        # 平台子包可能已在中断的重跑中发布过：`napi pre-publish` 遇到已存在版本会 403，
         # 此处容忍该情形（版本与 optionalDependencies 的同步先于发布执行，不受影响）；
         # 主包用 `--ignore-scripts` 发布，避免 prepublishOnly 再次重复发布平台子包。
+        # @napi-rs/cli 3：prepublish 规范名为 pre-publish，且不再有 --skip-gh-release
+        # （创建 GitHub release 改为显式 --gh-release，默认不创建）。
         run: |
-          npx napi prepublish -t npm --skip-gh-release || echo "::warning::部分平台子包已存在，跳过重复发布"
+          npx napi pre-publish -t npm || echo "::warning::部分平台子包已存在，跳过重复发布"
           npm publish --provenance --access public --ignore-scripts --tag "${{ steps.dist_tag.outputs.tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
